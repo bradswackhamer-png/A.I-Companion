@@ -68,6 +68,8 @@ public class BotPersistence {
 
     public static class SavedBotData {
         public String name = "";
+        public String nickname = "";
+        public List<String> aliases = new ArrayList<>();
         public String role = "All-Around Survival Companion";
         public double x;
         public double y;
@@ -76,6 +78,10 @@ public class BotPersistence {
         public float pitch;
         public float health = 20.0f;
         public int foodLevel = 20;
+        public Integer anchorX = null;
+        public Integer anchorY = null;
+        public Integer anchorZ = null;
+        public double anchorRadius = 25.0;
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
         public List<BotAction> activeActions = new ArrayList<>();
@@ -123,6 +129,8 @@ public class BotPersistence {
             for (AiBotPlayer bot : BotManager.getActiveBots()) {
                 SavedBotData data = new SavedBotData();
                 data.name = bot.getBotName();
+                data.nickname = bot.getActiveNickname() != null ? bot.getActiveNickname() : "";
+                data.aliases = bot.getAliases();
                 data.role = bot.getBotRole();
                 data.x = bot.getX();
                 data.y = bot.getY();
@@ -131,6 +139,12 @@ public class BotPersistence {
                 data.pitch = bot.getXRot();
                 data.health = bot.getHealth();
                 data.foodLevel = bot.getFoodData().getFoodLevel();
+                if (bot.getGuardAnchorPos() != null) {
+                    data.anchorX = bot.getGuardAnchorPos().getX();
+                    data.anchorY = bot.getGuardAnchorPos().getY();
+                    data.anchorZ = bot.getGuardAnchorPos().getZ();
+                    data.anchorRadius = bot.getGuardAnchorRadius();
+                }
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.activeActions = bot.getRemainingActionsSnapshot();
 
@@ -178,8 +192,17 @@ public class BotPersistence {
                 for (SavedBotData data : store.bots) {
                     if (data.name == null || data.name.isBlank()) continue;
                     AiBotPlayer bot = BotManager.spawnBotFromSave(overworld, data);
+                    bot.setAliases(data.aliases, data.nickname);
+                    if (data.anchorX != null && data.anchorY != null && data.anchorZ != null) {
+                        bot.setGuardAnchor(new BlockPos(data.anchorX, data.anchorY, data.anchorZ), data.anchorRadius);
+                    }
                     if (data.memory != null) {
                         GeminiService.setMemory(bot.getBotName(), data.memory);
+                        for (String memLine : data.memory) {
+                            if (AiBotPlayer.containsWholeWord(memLine, bot.getBotName())) {
+                                bot.extractAndLearnNicknameFromPrompt(memLine);
+                            }
+                        }
                     }
                     if (data.activeActions != null && !data.activeActions.isEmpty()) {
                         bot.setActionPlan(data.activeActions);

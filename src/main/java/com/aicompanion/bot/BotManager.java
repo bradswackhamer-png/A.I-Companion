@@ -37,7 +37,15 @@ public class BotManager {
 
     public static synchronized @Nullable AiBotPlayer getBot(String name) {
         if (name == null) return null;
-        return ACTIVE_BOTS.get(name.toLowerCase(Locale.ROOT).trim());
+        String key = name.toLowerCase(Locale.ROOT).trim();
+        AiBotPlayer direct = ACTIVE_BOTS.get(key);
+        if (direct != null) return direct;
+        for (AiBotPlayer bot : ACTIVE_BOTS.values()) {
+            if (bot.matchesIdentifier(key)) {
+                return bot;
+            }
+        }
+        return null;
     }
 
     public static synchronized AiBotPlayer spawnBot(ServerLevel level, String name, String role, double x, double y, double z, float yaw, float pitch) {
@@ -162,7 +170,9 @@ public class BotManager {
 
     public static synchronized boolean removeBot(String name, boolean saveChanges) {
         if (name == null) return false;
-        String key = name.toLowerCase(Locale.ROOT).trim();
+        AiBotPlayer target = getBot(name);
+        if (target == null) return false;
+        String key = target.getBotName().toLowerCase(Locale.ROOT).trim();
         AiBotPlayer bot = ACTIVE_BOTS.remove(key);
         if (bot == null) return false;
 
@@ -234,8 +244,7 @@ public class BotManager {
             targets.addAll(bots);
         } else {
             for (AiBotPlayer bot : bots) {
-                String botLower = bot.getBotName().toLowerCase(Locale.ROOT);
-                if (lower.contains(botLower)) {
+                if (bot.containsBotReference(rawMessage)) {
                     targets.add(bot);
                 }
             }
@@ -277,12 +286,17 @@ public class BotManager {
             return;
         }
         String speakerName = speaker != null ? speaker.getPlainTextName() : "Admin";
+        boolean learnedNickname = bot.extractAndLearnNicknameFromPrompt(requestText);
+        boolean learnedAnchor = bot.extractAndLearnAnchorFromPrompt(requestText);
         GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+        if (learnedNickname || learnedAnchor) {
+            BotPersistence.saveAll(server);
+        }
 
         String telemetryPrompt = GeminiService.captureTelemetry(bot, speaker, requestText);
 
         if (speaker != null) {
-            speaker.sendSystemMessage(Component.literal("[" + bot.getBotName() + " is thinking...]")
+            speaker.sendSystemMessage(Component.literal("[" + bot.getChatTag() + " is thinking...]")
                     .withStyle(ChatFormatting.GRAY, ChatFormatting.ITALIC), true);
         }
 

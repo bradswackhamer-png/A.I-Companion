@@ -1,7 +1,9 @@
 package com.aicompanion.bot;
 
 import com.mojang.logging.LogUtils;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.ModContainer;
@@ -11,6 +13,7 @@ import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.RegisterCommandsEvent;
 import net.neoforged.neoforge.event.ServerChatEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
+import net.neoforged.neoforge.event.level.LevelEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
 import org.slf4j.Logger;
@@ -54,5 +57,12 @@ public class AiCompanionMod {
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
         BotManager.despawnForShutdownWithoutWipingSave(event.getServer());
+    }
+
+    @SubscribeEvent
+    public void onLevelSave(LevelEvent.Save event) {
+        if (event.getLevel() instanceof ServerLevel serverLevel && serverLevel.dimension() == Level.OVERWORLD) {
+            BotPersistence.saveAll(serverLevel.getServer());
+        }
     }
 }

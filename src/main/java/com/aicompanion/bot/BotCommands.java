@@ -132,7 +132,7 @@ public class BotCommands {
                 .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
         for (AiBotPlayer bot : bots) {
             String line = String.format("- %s [%s] | HP: %.0f/%.0f | Food: %d/20 | Pos: (%d, %d, %d) | Task: %s",
-                    bot.getBotName(), bot.getBotRole(), bot.getHealth(), bot.getMaxHealth(),
+                    bot.getChatTag(), bot.getBotRole(), bot.getHealth(), bot.getMaxHealth(),
                     bot.getFoodData().getFoodLevel(), bot.getBlockX(), bot.getBlockY(), bot.getBlockZ(),
                     bot.getCurrentTaskSummary());
             ctx.getSource().sendSuccess(() -> Component.literal(line).withStyle(ChatFormatting.AQUA), false);
@@ -155,7 +155,7 @@ public class BotCommands {
             }
         }
         String invStr = inv.length() == 0 ? "Empty" : inv.toString();
-        ctx.getSource().sendSuccess(() -> Component.literal("=== " + bot.getBotName() + " Status ===\n")
+        ctx.getSource().sendSuccess(() -> Component.literal("=== " + bot.getChatTag() + " Status ===\n")
                 .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
                 .append(Component.literal("Role: " + bot.getBotRole() + "\n").withStyle(ChatFormatting.WHITE))
                 .append(Component.literal(String.format("HP: %.1f/%.1f | Hunger: %d/20 | Pos: (%d, %d, %d)\n",

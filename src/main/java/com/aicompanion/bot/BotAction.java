@@ -53,6 +53,7 @@ public class BotAction {
             case "PLACE", "BUILD" -> "Build/Place " + getPrimaryTarget();
             case "CHEST_STORE" -> "Store items in chest";
             case "CHEST_TAKE" -> "Take " + count + "x " + getPrimaryTarget() + " from chest";
+            case "FARM" -> "Farm " + (getPrimaryTarget().isEmpty() ? "mature crops" : getPrimaryTarget());
             case "EAT" -> "Eat food";
             case "STOP" -> "Stop";
             default -> t + " " + getPrimaryTarget();

@@ -7,6 +7,7 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
+import java.util.Locale;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Consumer;
@@ -108,6 +109,10 @@ import org.jspecify.annotations.Nullable;
 public class AiBotPlayer extends ServerPlayer {
     private final String botName;
     private final String botRole;
+    private final List<String> aliases = new ArrayList<>();
+    private @Nullable String activeNickname = null;
+    private @Nullable BlockPos guardAnchorPos = null;
+    private double guardAnchorRadius = 25.0;
     private final Deque<BotAction> actionQueue = new ArrayDeque<>();
     private @Nullable BotAction currentAction = null;
 
@@ -137,6 +142,139 @@ public class AiBotPlayer extends ServerPlayer {
         return this.botRole;
     }
 
+    public synchronized void addAlias(String alias) {
+        if (alias == null || alias.isBlank()) return;
+        String cleaned = alias.trim();
+        String lower = cleaned.toLowerCase();
+        if (lower.equals(this.botName.toLowerCase())) return;
+        for (String existing : this.aliases) {
+            if (existing.equalsIgnoreCase(cleaned)) {
+                this.activeNickname = existing;
+                return;
+            }
+        }
+        this.aliases.add(cleaned);
+        this.activeNickname = cleaned;
+    }
+
+    public synchronized List<String> getAliases() {
+        return new ArrayList<>(this.aliases);
+    }
+
+    public synchronized void setAliases(List<String> loadedAliases, @Nullable String loadedNickname) {
+        this.aliases.clear();
+        if (loadedAliases != null) {
+            for (String a : loadedAliases) {
+                if (a != null && !a.isBlank() && !a.equalsIgnoreCase(this.botName)) {
+                    this.aliases.add(a.trim());
+                }
+            }
+        }
+        if (loadedNickname != null && !loadedNickname.isBlank()) {
+            this.activeNickname = loadedNickname.trim();
+            addAlias(this.activeNickname);
+        } else if (!this.aliases.isEmpty()) {
+            this.activeNickname = this.aliases.get(this.aliases.size() - 1);
+        }
+    }
+
+    public synchronized @Nullable String getActiveNickname() {
+        return this.activeNickname;
+    }
+
+    public synchronized String getChatTag() {
+        if (this.activeNickname != null && !this.activeNickname.isBlank() && !this.activeNickname.equalsIgnoreCase(this.botName)) {
+            return this.activeNickname + " (" + this.botName + ")";
+        }
+        return this.botName;
+    }
+
+    public synchronized boolean matchesIdentifier(String query) {
+        if (query == null || query.isBlank()) return false;
+        String q = query.trim();
+        if (this.botName.equalsIgnoreCase(q)) return true;
+        if (this.activeNickname != null && this.activeNickname.equalsIgnoreCase(q)) return true;
+        for (String alias : this.aliases) {
+            if (alias.equalsIgnoreCase(q)) return true;
+        }
+        return false;
+    }
+
+    public synchronized boolean containsBotReference(String message) {
+        if (message == null || message.isBlank()) return false;
+        if (containsWholeWord(message, this.botName)) return true;
+        if (this.activeNickname != null && containsWholeWord(message, this.activeNickname)) return true;
+        for (String alias : this.aliases) {
+            if (containsWholeWord(message, alias)) return true;
+        }
+        return false;
+    }
+
+    public static boolean containsWholeWord(String text, String word) {
+        if (text == null || word == null || word.isBlank()) return false;
+        java.util.regex.Pattern p = java.util.regex.Pattern.compile(
+                "(?<![a-zA-Z0-9_])" + java.util.regex.Pattern.quote(word.trim()) + "(?![a-zA-Z0-9_])",
+                java.util.regex.Pattern.CASE_INSENSITIVE);
+        return p.matcher(text).find();
+    }
+
+    public synchronized boolean extractAndLearnNicknameFromPrompt(String text) {
+        if (text == null || text.isBlank()) return false;
+        String[] patterns = new String[]{
+                "(?:call\\s+you|name\\s+you|rename\\s+you(?:\\s+to)?|rename\\s+yourself(?:\\s+to)?|your\\s+name\\s+is|you\\s+are\\s+now)\\s+([a-zA-Z0-9_-]{2,20})",
+                "(?:respond\\s+to|answer\\s+to)\\s+([a-zA-Z0-9_-]{2,20})"
+        };
+        Set<String> stopWords = Set.of("from", "now", "on", "me", "here", "there", "please", "the", "a", "an", "to", "that", "this");
+        boolean learned = false;
+        for (String regex : patterns) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+            while (m.find()) {
+                String candidate = m.group(1).trim();
+                if (!stopWords.contains(candidate.toLowerCase()) && !candidate.equalsIgnoreCase(this.botName)) {
+                    addAlias(candidate);
+                    learned = true;
+                }
+            }
+        }
+        return learned;
+    }
+
+    public synchronized void setGuardAnchor(@Nullable BlockPos pos, double radius) {
+        this.guardAnchorPos = pos;
+        this.guardAnchorRadius = Math.max(5.0, radius);
+    }
+
+    public synchronized @Nullable BlockPos getGuardAnchorPos() {
+        return this.guardAnchorPos;
+    }
+
+    public synchronized double getGuardAnchorRadius() {
+        return this.guardAnchorRadius;
+    }
+
+    public synchronized boolean extractAndLearnAnchorFromPrompt(String text) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean mentionsAnchor = lower.contains("stay here") || lower.contains("stay within")
+                || lower.contains("patrol within") || lower.contains("this is home")
+                || lower.contains("guard this area") || lower.contains("roam the compound")
+                || lower.contains("this bell") || lower.contains("fence boundr") || lower.contains("stay in")
+                || lower.contains("inside the fence") || lower.contains("dont stray");
+
+        if (mentionsAnchor) {
+            double radius = 25.0;
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("(\\d+)\\s*(?:blocks?|tiles?|m|meters?)").matcher(lower);
+            if (m.find()) {
+                try {
+                    radius = Double.parseDouble(m.group(1));
+                } catch (Exception ignored) {}
+            }
+            setGuardAnchor(this.blockPosition(), radius);
+            return true;
+        }
+        return false;
+    }
+
     public void applyRoleStarterKit() {
         String r = this.botRole.toLowerCase();
         if (r.contains("guard") || r.contains("bodyguard") || r.contains("warrior") || r.contains("combat")) {
@@ -145,6 +283,11 @@ public class AiBotPlayer extends ServerPlayer {
             this.getInventory().add(new ItemStack(Items.IRON_HELMET, 1));
             this.autoEquipArmor();
             this.equipBestWeapon();
+        } else if (r.contains("farmer") || r.contains("farm")) {
+            this.getInventory().add(new ItemStack(Items.IRON_HOE, 1));
+            this.getInventory().add(new ItemStack(Items.WHEAT_SEEDS, 32));
+            this.getInventory().add(new ItemStack(Items.BONE_MEAL, 16));
+            this.getInventory().add(new ItemStack(Items.BREAD, 8));
         } else if (r.contains("miner") || r.contains("mining")) {
             this.getInventory().add(new ItemStack(Items.STONE_PICKAXE, 1));
             this.getInventory().add(new ItemStack(Items.TORCH, 32));
@@ -233,11 +376,11 @@ public class AiBotPlayer extends ServerPlayer {
 
     public void sayInChat(String message) {
         if (message == null || message.isBlank()) return;
-        Component formatted = Component.literal("[" + this.botName + "] ")
+        Component formatted = Component.literal("[" + this.getChatTag() + "] ")
                 .withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
                 .append(Component.literal(message).withStyle(ChatFormatting.WHITE));
         this.level().getServer().getPlayerList().broadcastSystemMessage(formatted, false);
-        GeminiService.recordMemory(this.botName, this.botName + ": " + message);
+        GeminiService.recordMemory(this.botName, this.getChatTag() + ": " + message);
     }
 
     @Override
@@ -304,28 +447,63 @@ public class AiBotPlayer extends ServerPlayer {
     private void tickPassiveRoleBehavior() {
         String r = this.botRole.toLowerCase();
 
-        // 1. Guard / Bodyguard: Automatically patrol around the nearest human player and intercept monsters within 24m
+        // 1. Guard / Bodyguard: Automatically patrol compound / anchor or follow player, intercepting nearby monsters (never jumping fences!)
         if (r.contains("guard") || r.contains("bodyguard") || r.contains("warrior")) {
-            Player nearestHuman = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 48.0, p -> p != this && !(p instanceof AiBotPlayer));
-            BlockPos guardCenter = nearestHuman != null ? nearestHuman.blockPosition() : this.blockPosition();
-            Monster threat = findNearestMonsterNear(guardCenter, 24.0);
-            if (threat != null) {
-                engageTarget(threat);
+            BlockPos guardCenter = this.guardAnchorPos != null ? this.guardAnchorPos : this.blockPosition();
+            double maxDist = this.guardAnchorPos != null ? this.guardAnchorRadius : 24.0;
+
+            // Return inside if drifted outside anchor boundary
+            if (this.guardAnchorPos != null && this.distanceToSqr(Vec3.atCenterOf(this.guardAnchorPos)) > (maxDist * maxDist)) {
+                moveTowards(Vec3.atCenterOf(this.guardAnchorPos), true);
                 return;
             }
-            if (nearestHuman != null) {
-                double distSq = this.distanceToSqr(nearestHuman);
-                if (distSq > 16.0) {
-                    moveTowards(nearestHuman.position(), distSq > 36.0);
+
+            Monster threat = findNearestMonsterNear(guardCenter, maxDist);
+            if (threat != null) {
+                // Ensure monster is on our side of the fence and inside our guard perimeter
+                boolean threatInside = this.guardAnchorPos == null || threat.distanceToSqr(Vec3.atCenterOf(this.guardAnchorPos)) <= (maxDist * maxDist);
+                if (threatInside && !isLineBlockedByFence(this.getEyePosition(), threat.getEyePosition())) {
+                    engageTarget(threat);
+                    return;
+                }
+            }
+
+            if (this.guardAnchorPos != null) {
+                // Anchored to compound/bell: patrol peacefully within the compound
+                double distToAnchorSq = this.distanceToSqr(Vec3.atCenterOf(this.guardAnchorPos));
+                if (distToAnchorSq > 16.0) {
+                    moveTowards(Vec3.atCenterOf(this.guardAnchorPos), false);
                 } else {
                     stopMovement();
-                    if (this.tickCount % 10 == 0) lookAtPos(nearestHuman.getEyePosition());
+                    if (this.tickCount % 60 == 0) {
+                        float randomYaw = (this.tickCount * 17) % 360;
+                        this.setYRot(randomYaw);
+                        this.setYHeadRot(randomYaw);
+                    }
                 }
                 return;
+            } else {
+                Player nearestHuman = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 48.0, p -> p != this && !(p instanceof AiBotPlayer));
+                if (nearestHuman != null) {
+                    double distSq = this.distanceToSqr(nearestHuman);
+                    if (distSq > 16.0) {
+                        moveTowards(nearestHuman.position(), distSq > 36.0);
+                    } else {
+                        stopMovement();
+                        if (this.tickCount % 10 == 0) lookAtPos(nearestHuman.getEyePosition());
+                    }
+                    return;
+                }
             }
         }
 
-        // 2. Courier / Helper: Follow nearest human player and vacuum dropped items within 12m
+        // 2. Farmer: Automatically tend crops, harvest mature only, replant immediately, plant empty farmland, and store in chest
+        if (r.contains("farmer") || r.contains("farm")) {
+            tickPassiveFarmer();
+            return;
+        }
+
+        // 3. Courier / Helper: Follow nearest human player and vacuum dropped items within 12m
         if (r.contains("courier") || r.contains("helper") || r.contains("collector")) {
             ItemEntity drop = findNearestDrop(12.0);
             if (drop != null) {
@@ -339,7 +517,7 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        // 3. Miner: Auto-place torch if standing in darkness
+        // 4. Miner: Auto-place torch if standing in darkness
         if (r.contains("miner") && this.tickCount % 40 == 0) {
             if (this.level().getMaxLocalRawBrightness(this.blockPosition()) < 7) {
                 placeSpecificBlockFromInventory("torch", this.blockPosition());
@@ -366,6 +544,7 @@ public class AiBotPlayer extends ServerPlayer {
             case "GOTO" -> tickGotoAction(action);
             case "GUARD" -> tickGuardAction(action);
             case "MINE" -> tickMineAction(action);
+            case "FARM" -> tickFarmAction(action);
             case "CRAFT" -> executeCraftAction(action);
             case "GIVE" -> tickGiveAction(action);
             case "ATTACK" -> tickAttackAction(action);
@@ -565,6 +744,14 @@ public class AiBotPlayer extends ServerPlayer {
                 BlockState below = this.level().getBlockState(brokenPos.below());
                 if (below.is(Blocks.DIRT) || below.is(Blocks.GRASS_BLOCK) || below.is(Blocks.PODZOL)) {
                     placeSpecificBlockFromInventory("sapling", brokenPos);
+                }
+            }
+            // Crop auto-replant: replant seed immediately on farmland
+            if (state.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop) {
+                vacuumNearbyDrops();
+                BlockState below = this.level().getBlockState(brokenPos.below());
+                if (below.is(Blocks.FARMLAND)) {
+                    tryReplantCropAt(crop, brokenPos);
                 }
             }
             this.targetBlockPos = null;
@@ -949,6 +1136,18 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
+        // Multi-block seed / crop planting onto farmland
+        if (target.contains("seed") || target.contains("crop") || target.contains("wheat") || target.contains("carrot") || target.contains("potato") || target.contains("beetroot")) {
+            int count = action.count > 0 ? action.count : 32;
+            int planted = plantSeedsOnNearbyFarmland(count);
+            if (planted > 0) {
+                sayInChat("Planted " + planted + "x seeds into the farmland!");
+            } else {
+                sayInChat("Couldn't find any empty farmland nearby (or I need seeds in my inventory).");
+            }
+            return true;
+        }
+
         // Single block placement (torch, crafting_table, chest, furnace, etc.)
         BlockPos placePos = origin.relative(this.getDirection(), 1);
         if (!this.level().getBlockState(placePos).isAir()) {
@@ -1055,8 +1254,15 @@ public class AiBotPlayer extends ServerPlayer {
                 if (s.isEmpty()) continue;
                 String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
                 // Keep main tools/weapons unless storing a specific item
-                if (("all".equals(query) || query.isEmpty()) && (id.contains("pickaxe") || id.contains("sword") || id.contains("axe"))) {
+                if (("all".equals(query) || query.isEmpty()) && (id.contains("pickaxe") || id.contains("sword") || id.contains("axe") || id.contains("hoe"))) {
                     continue;
+                }
+                // Keep seeds for farmer role
+                if (("all".equals(query) || query.isEmpty()) && id.contains("seed") && this.botRole.toLowerCase().contains("farm")) {
+                    int seedCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("seed"));
+                    if (seedCount <= 32) {
+                        continue;
+                    }
                 }
                 if ("all".equals(query) || query.isEmpty() || id.contains(query)) {
                     int countBefore = s.getCount();
@@ -1071,24 +1277,32 @@ public class AiBotPlayer extends ServerPlayer {
             sayInChat("Stored " + moved + " items into the chest.");
         } else {
             int remaining = Math.max(1, action.count);
-            for (int i = 0; i < container.getContainerSize(); i++) {
-                ItemStack s = container.getItem(i);
-                if (s.isEmpty()) continue;
-                String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
-                if ("all".equals(query) || id.contains(query)) {
-                    int take = Math.min(remaining, s.getCount());
-                    ItemStack taken = container.removeItem(i, take);
-                    if (this.getInventory().add(taken)) {
-                        moved += take;
-                        remaining -= take;
-                        if (remaining <= 0) break;
-                    }
-                }
-            }
-            container.setChanged();
+            moved = takeItemsFromContainer(container, query, remaining);
             sayInChat("Took " + moved + "x " + query + " from the chest.");
         }
         return true;
+    }
+
+    public int takeItemsFromContainer(Container container, String query, int maxCount) {
+        String q = query.toLowerCase().replace("minecraft:", "").trim();
+        int moved = 0;
+        int remaining = maxCount;
+        for (int i = 0; i < container.getContainerSize(); i++) {
+            ItemStack s = container.getItem(i);
+            if (s.isEmpty()) continue;
+            String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
+            if ("all".equals(q) || id.contains(q)) {
+                int take = Math.min(remaining, s.getCount());
+                ItemStack taken = container.removeItem(i, take);
+                if (this.getInventory().add(taken)) {
+                    moved += take;
+                    remaining -= take;
+                    if (remaining <= 0) break;
+                }
+            }
+        }
+        container.setChanged();
+        return moved;
     }
 
     private ItemStack insertIntoContainer(Container container, ItemStack stack) {
@@ -1109,7 +1323,291 @@ public class AiBotPlayer extends ServerPlayer {
         return stack;
     }
 
+    // === FARMING & CROP AUTOMATION ENGINE ===
+
+    private boolean tryReplantCropAt(net.minecraft.world.level.block.CropBlock crop, BlockPos pos) {
+        Item needed = Items.WHEAT_SEEDS;
+        if (crop == Blocks.CARROTS) needed = Items.CARROT;
+        else if (crop == Blocks.POTATOES) needed = Items.POTATO;
+        else if (crop == Blocks.BEETROOTS) needed = Items.BEETROOT_SEEDS;
+
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack stack = this.getInventory().getItem(i);
+            if (!stack.isEmpty() && stack.is(needed)) {
+                stack.shrink(1);
+                this.level().setBlockAndUpdate(pos, crop.getStateForAge(0));
+                broadcastSwing();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean tryPlantSeedOnFarmland(BlockPos farmlandPos) {
+        BlockPos cropPos = farmlandPos.above();
+        if (!this.level().getBlockState(cropPos).isAir()) return false;
+        if (!this.level().getBlockState(farmlandPos).is(Blocks.FARMLAND)) return false;
+
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack stack = this.getInventory().getItem(i);
+            if (stack.isEmpty()) continue;
+            net.minecraft.world.level.block.CropBlock crop = null;
+            if (stack.is(Items.WHEAT_SEEDS)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.WHEAT;
+            else if (stack.is(Items.CARROT)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.CARROTS;
+            else if (stack.is(Items.POTATO)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.POTATOES;
+            else if (stack.is(Items.BEETROOT_SEEDS)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.BEETROOTS;
+
+            if (crop != null) {
+                stack.shrink(1);
+                this.level().setBlockAndUpdate(cropPos, crop.getStateForAge(0));
+                broadcastSwing();
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int plantSeedsOnNearbyFarmland(int maxCount) {
+        BlockPos origin = this.blockPosition();
+        int planted = 0;
+        List<BlockPos> bareFarmland = new ArrayList<>();
+
+        for (int dx = -16; dx <= 16; dx++) {
+            for (int dy = -4; dy <= 4; dy++) {
+                for (int dz = -16; dz <= 16; dz++) {
+                    BlockPos p = origin.offset(dx, dy, dz);
+                    if (this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
+                        bareFarmland.add(p.immutable());
+                    }
+                }
+            }
+        }
+        bareFarmland.sort(Comparator.comparingDouble(origin::distSqr));
+
+        for (BlockPos farmPos : bareFarmland) {
+            if (planted >= maxCount) break;
+            if (tryPlantSeedOnFarmland(farmPos)) {
+                planted++;
+            }
+        }
+        return planted;
+    }
+
+    private @Nullable BlockPos findNearestMatureCrop(int radius) {
+        BlockPos origin = this.blockPosition();
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    BlockPos p = origin.offset(dx, dy, dz);
+                    BlockState s = this.level().getBlockState(p);
+                    if (s.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop && crop.isMaxAge(s)) {
+                        double d = origin.distSqr(p);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            best = p.immutable();
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private @Nullable BlockPos findNearestBareFarmland(int radius) {
+        BlockPos origin = this.blockPosition();
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    BlockPos p = origin.offset(dx, dy, dz);
+                    if (this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
+                        double d = origin.distSqr(p);
+                        if (d < bestDist) {
+                            bestDist = d;
+                            best = p.immutable();
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private boolean hasAnySeeds() {
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (!s.isEmpty()) {
+                String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString();
+                if (id.contains("seed") || s.is(Items.CARROT) || s.is(Items.POTATO)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean tickFarmAction(BotAction action) {
+        int goal = action.count > 0 ? action.count : 20;
+        if (this.actionProgressCount >= goal) {
+            stopMovement();
+            BlockPos chestPos = findNearestContainerBlock(16);
+            if (chestPos != null) {
+                tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+            }
+            sayInChat("Farm duty complete! Harvested " + this.actionProgressCount + "x crops and replanted seeds.");
+            return true;
+        }
+
+        BlockPos matureCrop = findNearestMatureCrop(20);
+        if (matureCrop != null) {
+            double distSq = this.position().distanceToSqr(Vec3.atCenterOf(matureCrop));
+            if (distSq > 9.0) {
+                moveTowards(Vec3.atCenterOf(matureCrop), false);
+                return false;
+            }
+            stopMovement();
+            lookAtPos(Vec3.atCenterOf(matureCrop));
+            BlockState cropState = this.level().getBlockState(matureCrop);
+            if (cropState.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop && crop.isMaxAge(cropState)) {
+                this.level().destroyBlock(matureCrop, true, this);
+                vacuumNearbyDrops();
+                tryReplantCropAt(crop, matureCrop);
+                this.actionProgressCount++;
+            }
+            return false;
+        }
+
+        BlockPos bareFarmland = findNearestBareFarmland(20);
+        if (bareFarmland != null) {
+            if (hasAnySeeds()) {
+                double distSq = this.position().distanceToSqr(Vec3.atCenterOf(bareFarmland));
+                if (distSq > 9.0) {
+                    moveTowards(Vec3.atCenterOf(bareFarmland), false);
+                    return false;
+                }
+                stopMovement();
+                lookAtPos(Vec3.atCenterOf(bareFarmland));
+                tryPlantSeedOnFarmland(bareFarmland);
+                return false;
+            } else {
+                BlockPos chestPos = findNearestContainerBlock(20);
+                if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
+                    int taken = takeItemsFromContainer(c, "seed", 32);
+                    if (taken > 0) {
+                        sayInChat("Grabbed " + taken + "x seeds from chest to continue planting.");
+                        return false;
+                    }
+                }
+            }
+        }
+
+        stopMovement();
+        BlockPos chestPos = findNearestContainerBlock(16);
+        if (chestPos != null) {
+            tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+        }
+        if (this.actionProgressCount > 0) {
+            sayInChat("Harvested " + this.actionProgressCount + "x mature crops and replanted seeds. No more crops currently mature.");
+        } else {
+            sayInChat("All crops in the area are still growing. I'll watch over them!");
+        }
+        return true;
+    }
+
+    private void tickPassiveFarmer() {
+        if (this.tickCount % 20 != 0) return;
+
+        int cropCount = countMatching(s -> {
+            String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString();
+            return id.contains("wheat") || id.contains("carrot") || id.contains("potato") || id.contains("beetroot");
+        });
+        if (cropCount >= 16) {
+            BlockPos chestPos = findNearestContainerBlock(20);
+            if (chestPos != null && this.distanceToSqr(Vec3.atCenterOf(chestPos)) <= 16.0) {
+                tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+                return;
+            }
+        }
+
+        BlockPos matureCrop = findNearestMatureCrop(20);
+        if (matureCrop != null) {
+            double distSq = this.position().distanceToSqr(Vec3.atCenterOf(matureCrop));
+            if (distSq > 9.0) {
+                moveTowards(Vec3.atCenterOf(matureCrop), false);
+            } else {
+                stopMovement();
+                lookAtPos(Vec3.atCenterOf(matureCrop));
+                BlockState cropState = this.level().getBlockState(matureCrop);
+                if (cropState.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop && crop.isMaxAge(cropState)) {
+                    this.level().destroyBlock(matureCrop, true, this);
+                    vacuumNearbyDrops();
+                    tryReplantCropAt(crop, matureCrop);
+                }
+            }
+            return;
+        }
+
+        BlockPos bareFarmland = findNearestBareFarmland(20);
+        if (bareFarmland != null) {
+            if (hasAnySeeds()) {
+                double distSq = this.position().distanceToSqr(Vec3.atCenterOf(bareFarmland));
+                if (distSq > 9.0) {
+                    moveTowards(Vec3.atCenterOf(bareFarmland), false);
+                } else {
+                    stopMovement();
+                    lookAtPos(Vec3.atCenterOf(bareFarmland));
+                    tryPlantSeedOnFarmland(bareFarmland);
+                }
+                return;
+            } else {
+                BlockPos chestPos = findNearestContainerBlock(20);
+                if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
+                    takeItemsFromContainer(c, "seed", 32);
+                }
+            }
+            return;
+        }
+
+        stopMovement();
+    }
+
     // === MOVEMENT, NAVIGATION & UNSTUCK ENGINE ===
+
+    public boolean isFenceOrWall(BlockState state) {
+        if (state == null || state.isAir()) return false;
+        if (state.is(net.minecraft.tags.BlockTags.FENCES) || state.is(net.minecraft.tags.BlockTags.WALLS)) return true;
+        if (state.getBlock() instanceof net.minecraft.world.level.block.FenceBlock || state.getBlock() instanceof net.minecraft.world.level.block.WallBlock) return true;
+        if (state.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && !state.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) return true;
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase();
+        return path.contains("fence") || (path.contains("wall") && !path.contains("sign") && !path.contains("torch"));
+    }
+
+    public boolean isLineBlockedByFence(Vec3 from, Vec3 to) {
+        double dist = from.distanceTo(to);
+        if (dist < 1.0) return false;
+        int steps = (int) Math.ceil(dist);
+        Vec3 diff = to.subtract(from).normalize();
+        for (int i = 1; i < steps; i++) {
+            BlockPos p = BlockPos.containing(from.add(diff.scale(i)));
+            if (isFenceOrWall(this.level().getBlockState(p))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private final java.util.Set<BlockPos> learnedHazardPits = new java.util.HashSet<>();
+
+    private boolean isDeepPitAt(BlockPos footCandidate) {
+        if (!this.level().getBlockState(footCandidate).isAir()) return false;
+        return this.level().getBlockState(footCandidate.below()).isAir()
+                && this.level().getBlockState(footCandidate.below(2)).isAir();
+    }
 
     private void moveTowards(Vec3 target, boolean sprint) {
         lookAtPos(new Vec3(target.x, target.y + this.getEyeHeight(), target.z));
@@ -1117,31 +1615,127 @@ public class AiBotPlayer extends ServerPlayer {
         this.zza = sprint ? 1.0f : 0.8f;
         this.xxa = 0.0f;
 
-        // Open wooden doors in front of bot
-        BlockPos frontPos = this.blockPosition().relative(this.getDirection());
+        net.minecraft.core.Direction dir = this.getDirection();
+        BlockPos frontPos = this.blockPosition().relative(dir);
         BlockState frontState = this.level().getBlockState(frontPos);
+
+        // Open wooden doors & fence gates in front of bot
         if (frontState.getBlock() instanceof DoorBlock door && !frontState.getValue(DoorBlock.OPEN)) {
             door.setOpen(this, this.level(), frontState, frontPos, true);
+        } else if (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && !frontState.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
+            if (this.guardAnchorPos == null) {
+                this.level().setBlockAndUpdate(frontPos, frontState.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, true));
+            }
         }
 
-        // Jump over ledges or swim in water/lava
-        boolean shouldJump = this.horizontalCollision || this.isInWater() || this.isInLava();
-        if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir()) {
+        // Pit & Hazard Avoidance: Check if there is a 2+ block drop ahead (and target is not down in that pit)
+        if (target.y >= this.getY() - 1.0 && (isDeepPitAt(frontPos) || this.learnedHazardPits.contains(frontPos))) {
+            this.learnedHazardPits.add(frontPos.immutable());
+            BlockPos twoAhead = frontPos.relative(dir);
+            boolean canJumpGap = this.level().getBlockState(twoAhead).isAir()
+                    && !this.level().getBlockState(twoAhead.below()).isAir();
+            if (canJumpGap) {
+                // 1-block gap: sprint-jump across it
+                this.setSprinting(true);
+                this.zza = 1.0f;
+                this.setJumping(true);
+                if (this.onGround()) {
+                    this.jumpFromGround();
+                }
+                return;
+            } else if (!placeBuildingBlockAt(frontPos.below())) {
+                // Wide pit and no blocks to bridge: steer sideways around the pit instead of falling in
+                BlockPos leftPos = this.blockPosition().relative(dir.getCounterClockWise());
+                boolean leftSafe = !isDeepPitAt(leftPos);
+                this.zza = 0.2f;
+                this.xxa = leftSafe ? 0.9f : -0.9f;
+            }
+        }
+
+        // Fence and Wall Barrier Recognition: Never endlessly jump against fences or walls!
+        BlockPos headFront = frontPos.above();
+        BlockState headState = this.level().getBlockState(headFront);
+        boolean isFenceBarrier = isFenceOrWall(frontState) || isFenceOrWall(headState);
+
+        // Jump over 1-block ledges or swim in water/lava
+        boolean stepUpPossible = !frontState.isAir() && headState.isAir() && this.level().getBlockState(headFront.above()).isAir() && !isFenceBarrier;
+        boolean shouldJump = (this.horizontalCollision || stepUpPossible || this.isInWater() || this.isInLava()) && !isFenceBarrier;
+        if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isFenceBarrier) {
             shouldJump = true;
         }
         this.setJumping(shouldJump);
+        if (shouldJump && this.onGround()) {
+            this.jumpFromGround();
+        }
 
-        // Unstuck detection
-        if (this.position().distanceToSqr(this.lastCheckedPos) < 0.02) {
+        if (isFenceBarrier) {
+            this.setJumping(false);
+            if (this.guardAnchorPos != null) {
+                // Anchored inside compound: turn around and steer toward anchor center
+                lookAtPos(Vec3.atCenterOf(this.guardAnchorPos));
+                this.zza = 0.5f;
+                this.xxa = 0.0f;
+                this.stuckTicks = 0;
+                return;
+            } else {
+                // Steer sideways along the fence
+                this.xxa = ((this.tickCount / 20) % 2 == 0) ? 0.8f : -0.8f;
+                this.zza = 0.2f;
+                this.stuckTicks = 0;
+            }
+        }
+
+        // Unstuck & Pit Self-Rescue Engine
+        if (this.position().distanceToSqr(this.lastCheckedPos) < 0.025) {
             this.stuckTicks++;
-            if (this.stuckTicks > 35) {
-                // Break obstructing head block if stuck
-                BlockPos headFront = frontPos.above();
-                BlockState headState = this.level().getBlockState(headFront);
-                if (!headState.isAir() && headState.getDestroySpeed(this.level(), headFront) >= 0 && headState.getDestroySpeed(this.level(), headFront) < 10.0f) {
-                    this.level().destroyBlock(headFront, true, this);
-                } else if (!frontState.isAir() && frontState.getDestroySpeed(this.level(), frontPos) >= 0 && frontState.getDestroySpeed(this.level(), frontPos) < 10.0f) {
-                    this.level().destroyBlock(frontPos, true, this);
+            if (isFenceBarrier) {
+                this.stuckTicks = 0;
+                return;
+            }
+            if (this.stuckTicks > 12 && this.stuckTicks <= 24) {
+                // Try strafing left/right and jumping first
+                this.xxa = ((this.tickCount / 10) % 2 == 0) ? 0.85f : -0.85f;
+                if (this.onGround()) {
+                    this.jumpFromGround();
+                }
+            } else if (this.stuckTicks > 24) {
+                this.learnedHazardPits.add(this.blockPosition().immutable());
+                boolean needClimbUp = target.y > this.getY() + 0.8
+                        || (!frontState.isAir() && !headState.isAir());
+
+                if (needClimbUp) {
+                    // 1. Clear ceiling above bot's head so it can jump/pillar
+                    BlockPos aboveHead = this.blockPosition().above(2);
+                    BlockState aboveHeadState = this.level().getBlockState(aboveHead);
+                    if (!aboveHeadState.isAir() && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0) {
+                        this.level().destroyBlock(aboveHead, true, this);
+                    }
+
+                    // 2. Carve an upward staircase in front (leave frontPos intact as a step if solid, clear headFront & headFront.above())
+                    BlockPos headFront2 = headFront.above();
+                    BlockState headState2 = this.level().getBlockState(headFront2);
+                    if (!headState.isAir() && headState.getDestroySpeed(this.level(), headFront) >= 0 && headState.getDestroySpeed(this.level(), headFront) < 15.0f) {
+                        this.level().destroyBlock(headFront, true, this);
+                    }
+                    if (!headState2.isAir() && headState2.getDestroySpeed(this.level(), headFront2) >= 0 && headState2.getDestroySpeed(this.level(), headFront2) < 15.0f) {
+                        this.level().destroyBlock(headFront2, true, this);
+                    }
+                    vacuumNearbyDrops();
+
+                    // 3. Pillar up out of deep pit so the bot is never trapped
+                    BlockPos underPos = this.blockPosition();
+                    this.setPos(this.getX(), this.getY() + 1.05, this.getZ());
+                    if (!placeBuildingBlockAt(underPos)) {
+                        this.level().setBlockAndUpdate(underPos, Blocks.DIRT.defaultBlockState());
+                    }
+                } else {
+                    // Blocked horizontally on flat ground: break obstacle at head/foot level (never break fences)
+                    if (!headState.isAir() && !isFenceOrWall(headState) && headState.getDestroySpeed(this.level(), headFront) >= 0 && headState.getDestroySpeed(this.level(), headFront) < 15.0f) {
+                        this.level().destroyBlock(headFront, true, this);
+                    } else if (!frontState.isAir() && !isFenceOrWall(frontState) && frontState.getDestroySpeed(this.level(), frontPos) >= 0 && frontState.getDestroySpeed(this.level(), frontPos) < 15.0f) {
+                        this.level().destroyBlock(frontPos, true, this);
+                    }
+                    vacuumNearbyDrops();
                 }
                 this.stuckTicks = 0;
             }
@@ -1412,6 +2006,13 @@ public class AiBotPlayer extends ServerPlayer {
         String blockId = BuiltInRegistries.BLOCK.getKey(state.getBlock()).toString().toLowerCase();
         String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase();
 
+        // SPECIAL: For crops (wheat, carrots, potatoes, beetroots), NEVER match immature crops!
+        if (state.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop) {
+            if (q.contains("wheat") || q.contains("crop") || q.contains("carrot") || q.contains("potato") || q.contains("beetroot")) {
+                return crop.isMaxAge(state);
+            }
+        }
+
         if (blockId.equals(q) || path.equals(q) || path.contains(q)) {
             return true;
         }
@@ -1452,7 +2053,14 @@ public class AiBotPlayer extends ServerPlayer {
 
     private @Nullable Monster findNearestMonsterNear(BlockPos center, double radius) {
         AABB box = new AABB(center).inflate(radius);
-        List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, LivingEntity::isAlive);
+        List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
+            if (!m.isAlive()) return false;
+            // Ignore monsters separated by fences/walls
+            if (isLineBlockedByFence(this.getEyePosition(), m.getEyePosition())) {
+                return false;
+            }
+            return true;
+        });
         monsters.sort(Comparator.comparingDouble(this::distanceToSqr));
         return monsters.isEmpty() ? null : monsters.get(0);
     }
@@ -1461,6 +2069,9 @@ public class AiBotPlayer extends ServerPlayer {
         AABB box = this.getBoundingBox().inflate(radius);
         List<LivingEntity> list = this.level().getEntitiesOfClass(LivingEntity.class, box, e -> {
             if (e == this || e instanceof Player || !e.isAlive()) return false;
+            if (this.guardAnchorPos != null && isLineBlockedByFence(this.getEyePosition(), e.getEyePosition())) {
+                return false;
+            }
             if (query.isEmpty() || "hostile".equals(query) || "monsters".equals(query) || "mobs".equals(query)) {
                 return e instanceof Monster;
             }

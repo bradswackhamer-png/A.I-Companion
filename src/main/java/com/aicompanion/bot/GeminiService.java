@@ -84,8 +84,9 @@ public class GeminiService {
             9. "PLACE" -> Place a block or build a structure near your position. Set "target" to "shelter" (builds a protective 5x5 survival shelter), "wall", "platform", "pillar", "torch", "crafting_table", "chest", or "furnace".
             10. "CHEST_STORE" -> Deposit gathered resources into the nearest chest. Set "target" to "all" or a specific item name.
             11. "CHEST_TAKE" -> Take items from the nearest chest. Set "target" to the item name and "count" to the amount.
-            12. "EAT" -> Eat food from your inventory immediately.
-            13. "STOP" -> Stop all current tasks and stand still.
+            12. "FARM" -> Systematically tend nearby farmland within 20 blocks: harvest ONLY 100% fully grown mature crops, immediately replant matching seeds into the farmland, and store excess crops into a nearby chest while keeping a supply of seeds in inventory. Set "target" to "wheat", "carrots", "potatoes", "beetroots", or "all", and "count" to the number of crops to harvest (or 20 for full field).
+            13. "EAT" -> Eat food from your inventory immediately.
+            14. "STOP" -> Stop all current tasks and stand still.
 
             CRITICAL INTELLIGENCE RULES:
             - Multi-step planning: If a player asks for something you don't currently have (e.g., "bring me a stone pickaxe" or "get me 10 iron ore"), check your inventory first!
@@ -132,6 +133,9 @@ public class GeminiService {
 
         sb.append("=== YOUR BOT STATUS ===\n");
         sb.append("Name: ").append(bot.getBotName()).append(" (Role: ").append(bot.getBotRole()).append(")\n");
+        if (!bot.getAliases().isEmpty()) {
+            sb.append("Active Nickname / Aliases you also respond to: ").append(String.join(", ", bot.getAliases())).append("\n");
+        }
         sb.append(String.format("Position: (%d, %d, %d) in %s\n",
                 botPos.getX(), botPos.getY(), botPos.getZ(), level.dimension().identifier()));
         sb.append(String.format("Health: %.1f / %.1f | Hunger: %d / 20\n",
@@ -431,6 +435,13 @@ public class GeminiService {
         } else if (lower.contains("shelter") || lower.contains("house") || lower.contains("hut")) {
             actions.add(new BotAction("PLACE", "shelter", "", 1));
             res.reply = "Building a protective shelter right here!";
+        } else if (lower.contains("farm") || lower.contains("harvest") || lower.contains("replant") || lower.contains("plant")) {
+            String crop = "wheat";
+            if (lower.contains("carrot")) crop = "carrots";
+            else if (lower.contains("potato")) crop = "potatoes";
+            else if (lower.contains("beetroot")) crop = "beetroots";
+            actions.add(new BotAction("FARM", crop, "", count > 1 ? count : 20));
+            res.reply = "On it! Harvesting mature " + crop + ", replanting seeds, and tending the farm.";
         } else if (lower.contains("mine") || lower.contains("chop") || lower.contains("gather") || lower.contains("dig") || lower.contains("collect") || lower.contains("get")) {
             String target = "log";
             if (lower.contains("iron")) target = "iron_ore";
