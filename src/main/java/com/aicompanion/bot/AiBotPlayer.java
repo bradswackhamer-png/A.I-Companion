@@ -1511,15 +1511,26 @@ public class AiBotPlayer extends ServerPlayer {
                 ItemStack s = this.getInventory().getItem(i);
                 if (s.isEmpty()) continue;
                 String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
-                // Keep main tools/weapons unless storing a specific item
-                if (("all".equals(query) || query.isEmpty()) && (id.contains("pickaxe") || id.contains("sword") || id.contains("axe") || id.contains("hoe"))) {
+                // Keep main tools/weapons/armor/shields unless storing a specific item
+                if (("all".equals(query) || query.isEmpty()) && (id.contains("pickaxe") || id.contains("sword") || id.contains("axe") || id.contains("hoe") || id.contains("shovel") || id.contains("shield") || id.contains("helmet") || id.contains("chestplate") || id.contains("leggings") || id.contains("boots"))) {
                     continue;
+                }
+                // Keep food rations (e.g. bread, cooked meat, apples) for bot survival
+                if (("all".equals(query) || query.isEmpty()) && (id.contains("bread") || id.contains("apple") || id.contains("cooked"))) {
+                    int rationCount = countMatching(item -> {
+                        String k = BuiltInRegistries.ITEM.getKey(item.getItem()).toString().toLowerCase();
+                        return k.contains("bread") || k.contains("apple") || k.contains("cooked");
+                    });
+                    if (rationCount <= 16) continue;
                 }
                 // Keep seeds & planting supplies for farmer role
                 if (("all".equals(query) || query.isEmpty()) && this.botRole.toLowerCase().contains("farm")) {
                     if (id.contains("seed")) {
                         int seedCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("seed"));
                         if (seedCount <= 32) continue;
+                    }
+                    if (id.contains("bone_meal") || id.contains("bonemeal")) {
+                        continue;
                     }
                     if (id.contains("carrot")) {
                         int cCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("carrot"));
@@ -1539,8 +1550,9 @@ public class AiBotPlayer extends ServerPlayer {
                 }
                 boolean matchesStore = "all".equals(query) || query.isEmpty() || id.contains(query);
                 if ("drops".equals(query)) {
-                    matchesStore = id.contains("beef") || id.contains("pork") || id.contains("mutton")
-                            || id.contains("chicken") || id.contains("leather") || id.contains("wool") || id.contains("feather");
+                    matchesStore = (id.contains("beef") || id.contains("pork") || id.contains("mutton")
+                            || id.contains("chicken") || id.contains("leather") || id.contains("wool") || id.contains("feather"))
+                            && !id.contains("cooked");
                 }
                 if (matchesStore) {
                     int countBefore = s.getCount();
@@ -1552,7 +1564,9 @@ public class AiBotPlayer extends ServerPlayer {
                     }
                 }
             }
-            sayInChat("Stored " + moved + " items into the chest.");
+            if (moved > 0) {
+                sayInChat("Stored " + moved + " items into the chest.");
+            }
         } else {
             int remaining = Math.max(1, action.count);
             moved = takeItemsFromContainer(container, query, remaining);
@@ -1870,9 +1884,11 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         stopMovement();
-        BlockPos chestPos = findNearestContainerBlock(16);
-        if (chestPos != null) {
-            tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+        if (getFarmerDepositableCropCount() > 0) {
+            BlockPos chestPos = findNearestContainerBlock(16);
+            if (chestPos != null) {
+                tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+            }
         }
         if (this.actionProgressCount > 0) {
             sayInChat("Harvested " + this.actionProgressCount + "x mature crops and replanted seeds. No more crops currently mature.");
@@ -1896,14 +1912,37 @@ public class AiBotPlayer extends ServerPlayer {
         return false;
     }
 
+    private int getFarmerDepositableCropCount() {
+        int depositable = 0;
+        int carrotCount = 0;
+        int potatoCount = 0;
+        int seedCount = 0;
+
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (s.isEmpty()) continue;
+            if (s.is(Items.WHEAT) || s.is(Items.BEETROOT) || s.is(Items.MELON_SLICE) || s.is(Items.PUMPKIN)) {
+                depositable += s.getCount();
+            } else if (s.is(Items.CARROT)) {
+                carrotCount += s.getCount();
+            } else if (s.is(Items.POTATO)) {
+                potatoCount += s.getCount();
+            } else if (s.is(Items.WHEAT_SEEDS) || s.is(Items.BEETROOT_SEEDS) || s.is(Items.MELON_SEEDS) || s.is(Items.PUMPKIN_SEEDS)) {
+                seedCount += s.getCount();
+            }
+        }
+        depositable += Math.max(0, carrotCount - 16);
+        depositable += Math.max(0, potatoCount - 16);
+        depositable += Math.max(0, seedCount - 32);
+        return depositable;
+    }
+
     private void tickPassiveFarmer() {
         if (this.tickCount % 20 != 0) return;
 
-        int cropCount = countMatching(s -> {
-            String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString();
-            return id.contains("wheat") || id.contains("carrot") || id.contains("potato") || id.contains("beetroot");
-        });
-        if (cropCount >= 16) {
+        // 1. Store crops into nearby chest only when there is an actual surplus of harvested crops to deposit (>= 16)
+        int depositable = getFarmerDepositableCropCount();
+        if (depositable >= 16) {
             BlockPos chestPos = findNearestContainerBlock(20);
             if (chestPos != null) {
                 double distSq = this.distanceToSqr(Vec3.atCenterOf(chestPos));
@@ -1911,6 +1950,7 @@ public class AiBotPlayer extends ServerPlayer {
                     moveTowards(Vec3.atCenterOf(chestPos), false);
                     return;
                 } else {
+                    stopMovement();
                     tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
                     return;
                 }
@@ -1960,7 +2000,12 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        stopMovement();
+        // Return to farm center if drifted away
+        if (this.farmOriginPos != null && this.distanceToSqr(Vec3.atCenterOf(this.farmOriginPos)) > 25.0) {
+            moveTowards(Vec3.atCenterOf(this.farmOriginPos), false);
+        } else {
+            stopMovement();
+        }
     }
 
     // === ANIMAL HUSBANDRY & RANCHING ENGINE ===
