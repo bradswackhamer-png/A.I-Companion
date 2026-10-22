@@ -82,11 +82,14 @@ import net.minecraft.util.Mth;
 import net.minecraft.world.Container;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.damagesource.DamageSource;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.PositionMoveRotation;
 import net.minecraft.world.entity.Relative;
+import net.minecraft.world.entity.animal.Animal;
 import net.minecraft.world.entity.animal.equine.AbstractHorse;
 import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.entity.monster.Monster;
@@ -108,11 +111,31 @@ import org.jspecify.annotations.Nullable;
 
 public class AiBotPlayer extends ServerPlayer {
     private final String botName;
-    private final String botRole;
+    private String botRole;
     private final List<String> aliases = new ArrayList<>();
     private @Nullable String activeNickname = null;
     private @Nullable BlockPos guardAnchorPos = null;
     private double guardAnchorRadius = 25.0;
+
+    // Farm configuration
+    private @Nullable BlockPos farmOriginPos = null;
+    private int farmRadiusX = 10;
+    private int farmRadiusZ = 10;
+    private final List<String> farmAllowedCrops = new ArrayList<>();
+    private boolean farmAllowTill = true;
+
+    // Husbandry / Rancher configuration
+    private @Nullable BlockPos ranchOriginPos = null;
+    private double ranchRadius = 25.0;
+    private String ranchAnimal = "cow";
+    private String ranchFood = "wheat";
+    private int ranchMaxPop = 0;
+    private int ranchMinPop = 2;
+    private boolean ranchAutoBreed = true;
+    private boolean ranchAutoCull = false;
+    private boolean ranchAdultsOnly = true;
+    private long lastBreedMessageTime = 0;
+
     private final Deque<BotAction> actionQueue = new ArrayDeque<>();
     private @Nullable BotAction currentAction = null;
 
@@ -141,6 +164,54 @@ public class AiBotPlayer extends ServerPlayer {
     public String getBotRole() {
         return this.botRole;
     }
+
+    public synchronized void setBotRole(String role) {
+        if (role != null && !role.isBlank()) {
+            this.botRole = role.trim();
+        }
+    }
+
+    public synchronized void setFarmArea(@Nullable BlockPos pos, int radiusX, int radiusZ, @Nullable List<String> allowedCrops, boolean allowTill) {
+        this.farmOriginPos = pos;
+        this.farmRadiusX = Math.max(2, radiusX);
+        this.farmRadiusZ = Math.max(2, radiusZ);
+        this.farmAllowedCrops.clear();
+        if (allowedCrops != null) {
+            for (String c : allowedCrops) {
+                if (c != null && !c.isBlank()) this.farmAllowedCrops.add(c.trim().toLowerCase(Locale.ROOT));
+            }
+        }
+        this.farmAllowTill = allowTill;
+    }
+
+    public synchronized @Nullable BlockPos getFarmOriginPos() { return this.farmOriginPos; }
+    public synchronized int getFarmRadiusX() { return this.farmRadiusX; }
+    public synchronized int getFarmRadiusZ() { return this.farmRadiusZ; }
+    public synchronized List<String> getFarmAllowedCrops() { return new ArrayList<>(this.farmAllowedCrops); }
+    public synchronized boolean isFarmAllowTill() { return this.farmAllowTill; }
+
+    public synchronized void setRanchConfig(@Nullable BlockPos origin, double radius, String animal, String food,
+                                            int maxPop, int minPop, boolean autoBreed, boolean autoCull, boolean adultsOnly) {
+        this.ranchOriginPos = origin;
+        this.ranchRadius = Math.max(5.0, radius);
+        this.ranchAnimal = (animal != null && !animal.isBlank()) ? animal.trim().toLowerCase(Locale.ROOT) : "cow";
+        this.ranchFood = (food != null && !food.isBlank()) ? food.trim().toLowerCase(Locale.ROOT) : "wheat";
+        this.ranchMaxPop = Math.max(0, maxPop);
+        this.ranchMinPop = Math.max(0, minPop);
+        this.ranchAutoBreed = autoBreed;
+        this.ranchAutoCull = autoCull;
+        this.ranchAdultsOnly = adultsOnly;
+    }
+
+    public synchronized @Nullable BlockPos getRanchOriginPos() { return this.ranchOriginPos; }
+    public synchronized double getRanchRadius() { return this.ranchRadius; }
+    public synchronized String getRanchAnimal() { return this.ranchAnimal; }
+    public synchronized String getRanchFood() { return this.ranchFood; }
+    public synchronized int getRanchMaxPop() { return this.ranchMaxPop; }
+    public synchronized int getRanchMinPop() { return this.ranchMinPop; }
+    public synchronized boolean isRanchAutoBreed() { return this.ranchAutoBreed; }
+    public synchronized boolean isRanchAutoCull() { return this.ranchAutoCull; }
+    public synchronized boolean isRanchAdultsOnly() { return this.ranchAdultsOnly; }
 
     public synchronized void addAlias(String alias) {
         if (alias == null || alias.isBlank()) return;
@@ -275,6 +346,174 @@ public class AiBotPlayer extends ServerPlayer {
         return false;
     }
 
+    public synchronized boolean extractAndLearnFarmConfigFromPrompt(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean mentionsFarm = lower.contains("farm") || lower.contains("harvest") || lower.contains("crop")
+                || lower.contains("plant") || lower.contains("replant") || lower.contains("till");
+        if (!mentionsFarm) return false;
+
+        // Check area dimensions: e.g. "10x10", "20x20", "15 by 15", "10 x 10"
+        int rx = 5;
+        int rz = 5;
+        java.util.regex.Matcher areaMatcher = java.util.regex.Pattern.compile("(\\d+)\\s*(?:x|by)\\s*(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+        if (areaMatcher.find()) {
+            try {
+                int w = Integer.parseInt(areaMatcher.group(1));
+                int l = Integer.parseInt(areaMatcher.group(2));
+                rx = Math.max(2, (w + 1) / 2);
+                rz = Math.max(2, (l + 1) / 2);
+            } catch (Exception ignored) {}
+        } else {
+            java.util.regex.Matcher radMatcher = java.util.regex.Pattern.compile("(\\d+)\\s*(?:blocks?|tiles?|area|radius)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+            if (radMatcher.find()) {
+                try {
+                    int r = Integer.parseInt(radMatcher.group(1));
+                    rx = Math.max(2, (r + 1) / 2);
+                    rz = rx;
+                } catch (Exception ignored) {}
+            }
+        }
+
+        // Origin: "from this spot", "from here", "this spot", "here"
+        BlockPos origin = this.farmOriginPos;
+        if (lower.contains("this spot") || lower.contains("from here") || lower.contains("at here") || lower.contains("right here") || origin == null) {
+            origin = speaker != null ? speaker.blockPosition() : this.blockPosition();
+        }
+
+        // Allowed crops
+        List<String> crops = new ArrayList<>();
+        if (lower.contains("wheat") || lower.contains("wheet")) crops.add("wheat");
+        if (lower.contains("carrot")) crops.add("carrot");
+        if (lower.contains("potato") || lower.contains("potatoes")) crops.add("potato");
+        if (lower.contains("beetroot") || lower.contains("beet")) crops.add("beetroot");
+
+        boolean allowTill = !lower.contains("dont till") && !lower.contains("no till");
+
+        setFarmArea(origin, rx, rz, crops, allowTill);
+        this.botRole = "farmer";
+
+        String cropDesc = crops.isEmpty() ? "all crops" : String.join(" & ", crops);
+        sayInChat("Farm duty set! Working " + (rx * 2) + "x" + (rz * 2) + " area from ("
+                + origin.getX() + ", " + origin.getY() + ", " + origin.getZ()
+                + ") for " + cropDesc + ". I'll only harvest 100% mature crops, replant, till dirt, and store in chest.");
+        return true;
+    }
+
+    public synchronized boolean extractAndLearnHusbandryConfigFromPrompt(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean mentionsHusbandry = lower.contains("breed") || lower.contains("husbandry") || lower.contains("ranch")
+                || lower.contains("mate") || lower.contains("cull") || lower.contains("feed") || lower.contains("kill adult");
+        if (!mentionsHusbandry) return false;
+
+        // Animal type
+        String animal = "cow";
+        if (lower.contains("cow")) animal = "cow";
+        else if (lower.contains("sheep")) animal = "sheep";
+        else if (lower.contains("pig")) animal = "pig";
+        else if (lower.contains("chicken")) animal = "chicken";
+        else if (lower.contains("horse")) animal = "horse";
+
+        // Food
+        String food = "wheat";
+        if (lower.contains("wheat") || lower.contains("wheet")) food = "wheat";
+        else if (lower.contains("carrot")) food = "carrot";
+        else if (lower.contains("potato")) food = "potato";
+        else if (lower.contains("seed")) food = "seeds";
+        else if (lower.contains("beetroot")) food = "beetroot";
+        else {
+            if ("pig".equals(animal)) food = "carrot";
+            else if ("chicken".equals(animal)) food = "seeds";
+        }
+
+        // Max pop (culling threshold): "over 10", "more than 10", "exceeds 10", "cap 10"
+        int maxPop = this.ranchMaxPop;
+        boolean autoCull = this.ranchAutoCull;
+        java.util.regex.Matcher maxMatcher = java.util.regex.Pattern.compile(
+                "(?:when\\s+(?:amount|count|number|pop|population)\\s+is\\s+over|over|more\\s+than|exceeds?|limit|cap|max(?:imum)?)\\s+(\\d+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+        if (maxMatcher.find()) {
+            try {
+                maxPop = Integer.parseInt(maxMatcher.group(1));
+                autoCull = true;
+            } catch (Exception ignored) {}
+        } else if (lower.contains("cull") || lower.contains("kill")) {
+            autoCull = true;
+        }
+
+        // Min pop: "never less then 5", "never less than 5", "never under 5", "keep at least 5", "min 5"
+        int minPop = this.ranchMinPop;
+        java.util.regex.Matcher minMatcher = java.util.regex.Pattern.compile(
+                "(?:never\\s+(?:have\\s+)?less\\s+th(?:e|a)n|never\\s+under|keep\\s+at\\s+least|at\\s+least|minimum|min)\\s+(\\d+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+        if (minMatcher.find()) {
+            try {
+                minPop = Integer.parseInt(minMatcher.group(1));
+            } catch (Exception ignored) {}
+        }
+
+        boolean adultsOnly = !lower.contains("kill babies") && !lower.contains("kill baby");
+
+        BlockPos origin = this.ranchOriginPos;
+        if (lower.contains("this spot") || lower.contains("from here") || lower.contains("here") || origin == null) {
+            origin = speaker != null ? speaker.blockPosition() : this.blockPosition();
+        }
+
+        setRanchConfig(origin, 25.0, animal, food, maxPop, minPop, true, autoCull, adultsOnly);
+        this.botRole = "husbandry";
+
+        StringBuilder reply = new StringBuilder();
+        reply.append("Husbandry duty assigned! Breeding ").append(animal).append("s with ").append(food);
+        if (autoCull && maxPop > 0) {
+            reply.append(", culling adult ").append(animal).append("s when population exceeds ").append(maxPop)
+                 .append(" (preserving at least ").append(minPop).append(" adults, never killing babies)");
+        }
+        reply.append(". Gathering drops and storing into chest!");
+        sayInChat(reply.toString());
+        return true;
+    }
+
+    public boolean isInsideFarmArea(BlockPos p) {
+        if (this.farmOriginPos == null) {
+            return this.distanceToSqr(Vec3.atCenterOf(p)) <= 400.0;
+        }
+        int dx = Math.abs(p.getX() - this.farmOriginPos.getX());
+        int dy = Math.abs(p.getY() - this.farmOriginPos.getY());
+        int dz = Math.abs(p.getZ() - this.farmOriginPos.getZ());
+        return dx <= this.farmRadiusX && dz <= this.farmRadiusZ && dy <= 3;
+    }
+
+    public boolean isCropAllowed(net.minecraft.world.level.block.CropBlock crop) {
+        if (this.farmAllowedCrops.isEmpty()) return true;
+        String name = BuiltInRegistries.BLOCK.getKey(crop).getPath().toLowerCase();
+        for (String allowed : this.farmAllowedCrops) {
+            if (name.contains(allowed)) return true;
+        }
+        return false;
+    }
+
+    public boolean isSeedAllowed(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase();
+        if (this.farmAllowedCrops.isEmpty()) {
+            return id.contains("seed") || id.contains("carrot") || id.contains("potato");
+        }
+        for (String allowed : this.farmAllowedCrops) {
+            if (allowed.contains("wheat") && (id.contains("wheat") || id.contains("seed"))) return true;
+            if (allowed.contains("carrot") && id.contains("carrot")) return true;
+            if (allowed.contains("potato") && id.contains("potato")) return true;
+            if (allowed.contains("beetroot") && (id.contains("beetroot") || id.contains("seed"))) return true;
+            if (id.contains(allowed)) return true;
+        }
+        return false;
+    }
+
+    public boolean isInsideRanchArea(Vec3 pos) {
+        Vec3 center = this.ranchOriginPos != null ? Vec3.atCenterOf(this.ranchOriginPos) : this.position();
+        return pos.distanceToSqr(center) <= (this.ranchRadius * this.ranchRadius);
+    }
+
     public void applyRoleStarterKit() {
         String r = this.botRole.toLowerCase();
         if (r.contains("guard") || r.contains("bodyguard") || r.contains("warrior") || r.contains("combat")) {
@@ -286,8 +525,17 @@ public class AiBotPlayer extends ServerPlayer {
         } else if (r.contains("farmer") || r.contains("farm")) {
             this.getInventory().add(new ItemStack(Items.IRON_HOE, 1));
             this.getInventory().add(new ItemStack(Items.WHEAT_SEEDS, 32));
+            this.getInventory().add(new ItemStack(Items.CARROT, 16));
+            this.getInventory().add(new ItemStack(Items.POTATO, 16));
             this.getInventory().add(new ItemStack(Items.BONE_MEAL, 16));
             this.getInventory().add(new ItemStack(Items.BREAD, 8));
+        } else if (r.contains("husbandry") || r.contains("ranch") || r.contains("breed")) {
+            this.getInventory().add(new ItemStack(Items.IRON_SWORD, 1));
+            this.getInventory().add(new ItemStack(Items.WHEAT, 32));
+            this.getInventory().add(new ItemStack(Items.CARROT, 16));
+            this.getInventory().add(new ItemStack(Items.WHEAT_SEEDS, 32));
+            this.getInventory().add(new ItemStack(Items.BREAD, 8));
+            this.equipBestWeapon();
         } else if (r.contains("miner") || r.contains("mining")) {
             this.getInventory().add(new ItemStack(Items.STONE_PICKAXE, 1));
             this.getInventory().add(new ItemStack(Items.TORCH, 32));
@@ -497,9 +745,15 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        // 2. Farmer: Automatically tend crops, harvest mature only, replant immediately, plant empty farmland, and store in chest
+        // 2. Farmer: Automatically tend crops, harvest mature only, replant immediately, plant empty farmland, till dirt, and store in chest
         if (r.contains("farmer") || r.contains("farm")) {
             tickPassiveFarmer();
+            return;
+        }
+
+        // 3. Husbandry / Rancher: Breed livestock, cull excess adults when count > maxPop (preserving minPop), store drops in chest
+        if (r.contains("husbandry") || r.contains("ranch") || r.contains("breed") || r.contains("cattle")) {
+            tickPassiveRancher();
             return;
         }
 
@@ -545,6 +799,10 @@ public class AiBotPlayer extends ServerPlayer {
             case "GUARD" -> tickGuardAction(action);
             case "MINE" -> tickMineAction(action);
             case "FARM" -> tickFarmAction(action);
+            case "TILL" -> tickTillAction(action);
+            case "BREED" -> tickBreedAction(action);
+            case "CULL" -> tickCullAction(action);
+            case "HUSBANDRY" -> tickHusbandryAction(action);
             case "CRAFT" -> executeCraftAction(action);
             case "GIVE" -> tickGiveAction(action);
             case "ATTACK" -> tickAttackAction(action);
@@ -1257,14 +1515,34 @@ public class AiBotPlayer extends ServerPlayer {
                 if (("all".equals(query) || query.isEmpty()) && (id.contains("pickaxe") || id.contains("sword") || id.contains("axe") || id.contains("hoe"))) {
                     continue;
                 }
-                // Keep seeds for farmer role
-                if (("all".equals(query) || query.isEmpty()) && id.contains("seed") && this.botRole.toLowerCase().contains("farm")) {
-                    int seedCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("seed"));
-                    if (seedCount <= 32) {
-                        continue;
+                // Keep seeds & planting supplies for farmer role
+                if (("all".equals(query) || query.isEmpty()) && this.botRole.toLowerCase().contains("farm")) {
+                    if (id.contains("seed")) {
+                        int seedCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("seed"));
+                        if (seedCount <= 32) continue;
+                    }
+                    if (id.contains("carrot")) {
+                        int cCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("carrot"));
+                        if (cCount <= 16) continue;
+                    }
+                    if (id.contains("potato")) {
+                        int pCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("potato"));
+                        if (pCount <= 16) continue;
                     }
                 }
-                if ("all".equals(query) || query.isEmpty() || id.contains(query)) {
+                // Keep breeding food for husbandry/rancher role
+                if (("all".equals(query) || query.isEmpty()) && (this.botRole.toLowerCase().contains("ranch") || this.botRole.toLowerCase().contains("husbandry"))) {
+                    if (id.contains(this.ranchFood) || id.contains("wheat") || id.contains("carrot") || id.contains("seed")) {
+                        int foodCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains(this.ranchFood));
+                        if (foodCount <= 32) continue;
+                    }
+                }
+                boolean matchesStore = "all".equals(query) || query.isEmpty() || id.contains(query);
+                if ("drops".equals(query)) {
+                    matchesStore = id.contains("beef") || id.contains("pork") || id.contains("mutton")
+                            || id.contains("chicken") || id.contains("leather") || id.contains("wool") || id.contains("feather");
+                }
+                if (matchesStore) {
                     int countBefore = s.getCount();
                     ItemStack remainder = insertIntoContainer(container, s.copy());
                     int inserted = countBefore - remainder.getCount();
@@ -1333,7 +1611,7 @@ public class AiBotPlayer extends ServerPlayer {
 
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack stack = this.getInventory().getItem(i);
-            if (!stack.isEmpty() && stack.is(needed)) {
+            if (!stack.isEmpty() && stack.is(needed) && isCropAllowed(crop)) {
                 stack.shrink(1);
                 this.level().setBlockAndUpdate(pos, crop.getStateForAge(0));
                 broadcastSwing();
@@ -1343,21 +1621,21 @@ public class AiBotPlayer extends ServerPlayer {
         return false;
     }
 
-    private boolean tryPlantSeedOnFarmland(BlockPos farmlandPos) {
+    public boolean tryPlantSeedOnFarmland(BlockPos farmlandPos) {
         BlockPos cropPos = farmlandPos.above();
         if (!this.level().getBlockState(cropPos).isAir()) return false;
         if (!this.level().getBlockState(farmlandPos).is(Blocks.FARMLAND)) return false;
 
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack stack = this.getInventory().getItem(i);
-            if (stack.isEmpty()) continue;
+            if (stack.isEmpty() || !isSeedAllowed(stack)) continue;
             net.minecraft.world.level.block.CropBlock crop = null;
             if (stack.is(Items.WHEAT_SEEDS)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.WHEAT;
             else if (stack.is(Items.CARROT)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.CARROTS;
             else if (stack.is(Items.POTATO)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.POTATOES;
             else if (stack.is(Items.BEETROOT_SEEDS)) crop = (net.minecraft.world.level.block.CropBlock) Blocks.BEETROOTS;
 
-            if (crop != null) {
+            if (crop != null && isCropAllowed(crop)) {
                 stack.shrink(1);
                 this.level().setBlockAndUpdate(cropPos, crop.getStateForAge(0));
                 broadcastSwing();
@@ -1368,21 +1646,23 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private int plantSeedsOnNearbyFarmland(int maxCount) {
-        BlockPos origin = this.blockPosition();
+        BlockPos origin = this.farmOriginPos != null ? this.farmOriginPos : this.blockPosition();
         int planted = 0;
         List<BlockPos> bareFarmland = new ArrayList<>();
+        int rx = this.farmOriginPos != null ? this.farmRadiusX : 16;
+        int rz = this.farmOriginPos != null ? this.farmRadiusZ : 16;
 
-        for (int dx = -16; dx <= 16; dx++) {
-            for (int dy = -4; dy <= 4; dy++) {
-                for (int dz = -16; dz <= 16; dz++) {
+        for (int dx = -rx; dx <= rx; dx++) {
+            for (int dy = -3; dy <= 3; dy++) {
+                for (int dz = -rz; dz <= rz; dz++) {
                     BlockPos p = origin.offset(dx, dy, dz);
-                    if (this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
+                    if (isInsideFarmArea(p) && this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
                         bareFarmland.add(p.immutable());
                     }
                 }
             }
         }
-        bareFarmland.sort(Comparator.comparingDouble(origin::distSqr));
+        bareFarmland.sort(Comparator.comparingDouble(p -> this.distanceToSqr(Vec3.atCenterOf(p))));
 
         for (BlockPos farmPos : bareFarmland) {
             if (planted >= maxCount) break;
@@ -1394,20 +1674,25 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable BlockPos findNearestMatureCrop(int radius) {
-        BlockPos origin = this.blockPosition();
+        BlockPos center = this.farmOriginPos != null ? this.farmOriginPos : this.blockPosition();
+        int rx = this.farmOriginPos != null ? this.farmRadiusX : radius;
+        int rz = this.farmOriginPos != null ? this.farmRadiusZ : radius;
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
 
-        for (int dx = -radius; dx <= radius; dx++) {
+        for (int dx = -rx; dx <= rx; dx++) {
             for (int dy = -3; dy <= 3; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    BlockPos p = origin.offset(dx, dy, dz);
+                for (int dz = -rz; dz <= rz; dz++) {
+                    BlockPos p = center.offset(dx, dy, dz);
+                    if (!isInsideFarmArea(p)) continue;
                     BlockState s = this.level().getBlockState(p);
                     if (s.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop && crop.isMaxAge(s)) {
-                        double d = origin.distSqr(p);
-                        if (d < bestDist) {
-                            bestDist = d;
-                            best = p.immutable();
+                        if (isCropAllowed(crop)) {
+                            double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                            if (d < bestDist) {
+                                bestDist = d;
+                                best = p.immutable();
+                            }
                         }
                     }
                 }
@@ -1417,16 +1702,19 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable BlockPos findNearestBareFarmland(int radius) {
-        BlockPos origin = this.blockPosition();
+        BlockPos center = this.farmOriginPos != null ? this.farmOriginPos : this.blockPosition();
+        int rx = this.farmOriginPos != null ? this.farmRadiusX : radius;
+        int rz = this.farmOriginPos != null ? this.farmRadiusZ : radius;
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
 
-        for (int dx = -radius; dx <= radius; dx++) {
+        for (int dx = -rx; dx <= rx; dx++) {
             for (int dy = -3; dy <= 3; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    BlockPos p = origin.offset(dx, dy, dz);
+                for (int dz = -rz; dz <= rz; dz++) {
+                    BlockPos p = center.offset(dx, dy, dz);
+                    if (!isInsideFarmArea(p)) continue;
                     if (this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
-                        double d = origin.distSqr(p);
+                        double d = this.distanceToSqr(Vec3.atCenterOf(p));
                         if (d < bestDist) {
                             bestDist = d;
                             best = p.immutable();
@@ -1438,14 +1726,85 @@ public class AiBotPlayer extends ServerPlayer {
         return best;
     }
 
+    private @Nullable BlockPos findNearestTillableDirtInFarmBox() {
+        if (this.farmOriginPos == null) return null;
+        BlockPos origin = this.farmOriginPos;
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (int dx = -this.farmRadiusX; dx <= this.farmRadiusX; dx++) {
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dz = -this.farmRadiusZ; dz <= this.farmRadiusZ; dz++) {
+                    BlockPos p = origin.offset(dx, dy, dz);
+                    BlockState state = this.level().getBlockState(p);
+                    if ((state.is(Blocks.DIRT) || state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.COARSE_DIRT))
+                            && this.level().getBlockState(p.above()).isAir()) {
+                        double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                        if (d < bestDist) {
+                            bestDist = d;
+                            best = p.immutable();
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    private boolean tryTillDirtInFarmBox() {
+        if (this.farmOriginPos == null || !this.farmAllowTill) return false;
+
+        ItemStack hoeStack = ItemStack.EMPTY;
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (!s.isEmpty() && BuiltInRegistries.ITEM.getKey(s.getItem()).getPath().contains("hoe")) {
+                hoeStack = s;
+                break;
+            }
+        }
+
+        if (hoeStack.isEmpty()) {
+            BlockPos chestPos = findNearestContainerBlock(20);
+            if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
+                int taken = takeItemsFromContainer(c, "hoe", 1);
+                if (taken > 0) {
+                    sayInChat("Grabbed a hoe from the chest to till farm land.");
+                }
+            }
+            return false;
+        }
+
+        BlockPos tillTarget = findNearestTillableDirtInFarmBox();
+        if (tillTarget == null) return false;
+
+        double distSq = this.distanceToSqr(Vec3.atCenterOf(tillTarget));
+        if (distSq > 9.0) {
+            moveTowards(Vec3.atCenterOf(tillTarget), false);
+            return true;
+        }
+
+        stopMovement();
+        lookAtPos(Vec3.atCenterOf(tillTarget));
+        this.level().setBlockAndUpdate(tillTarget, Blocks.FARMLAND.defaultBlockState());
+        this.level().playSound(null, tillTarget, SoundEvents.HOE_TILL.value(), SoundSource.BLOCKS, 1.0f, 1.0f);
+        broadcastSwing();
+
+        if (hoeStack.isDamageableItem()) {
+            hoeStack.setDamageValue(hoeStack.getDamageValue() + 1);
+            if (hoeStack.getDamageValue() >= hoeStack.getMaxDamage()) {
+                hoeStack.shrink(1);
+            }
+        }
+
+        tryPlantSeedOnFarmland(tillTarget);
+        return true;
+    }
+
     private boolean hasAnySeeds() {
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack s = this.getInventory().getItem(i);
-            if (!s.isEmpty()) {
-                String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString();
-                if (id.contains("seed") || s.is(Items.CARROT) || s.is(Items.POTATO)) {
-                    return true;
-                }
+            if (!s.isEmpty() && isSeedAllowed(s)) {
+                return true;
             }
         }
         return false;
@@ -1463,7 +1822,7 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
-        BlockPos matureCrop = findNearestMatureCrop(20);
+        BlockPos matureCrop = findNearestMatureCrop(this.farmRadiusX);
         if (matureCrop != null) {
             double distSq = this.position().distanceToSqr(Vec3.atCenterOf(matureCrop));
             if (distSq > 9.0) {
@@ -1482,7 +1841,7 @@ public class AiBotPlayer extends ServerPlayer {
             return false;
         }
 
-        BlockPos bareFarmland = findNearestBareFarmland(20);
+        BlockPos bareFarmland = findNearestBareFarmland(this.farmRadiusX);
         if (bareFarmland != null) {
             if (hasAnySeeds()) {
                 double distSq = this.position().distanceToSqr(Vec3.atCenterOf(bareFarmland));
@@ -1506,6 +1865,10 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        if (this.farmAllowTill && tryTillDirtInFarmBox()) {
+            return false;
+        }
+
         stopMovement();
         BlockPos chestPos = findNearestContainerBlock(16);
         if (chestPos != null) {
@@ -1519,6 +1882,20 @@ public class AiBotPlayer extends ServerPlayer {
         return true;
     }
 
+    private boolean tickTillAction(BotAction action) {
+        int goal = action.count > 0 ? action.count : 20;
+        if (this.actionProgressCount >= goal) {
+            sayInChat("Finished tilling " + this.actionProgressCount + " farmland blocks!");
+            return true;
+        }
+        if (!tryTillDirtInFarmBox()) {
+            sayInChat("No more dirt to till in my farm zone.");
+            return true;
+        }
+        this.actionProgressCount++;
+        return false;
+    }
+
     private void tickPassiveFarmer() {
         if (this.tickCount % 20 != 0) return;
 
@@ -1528,13 +1905,19 @@ public class AiBotPlayer extends ServerPlayer {
         });
         if (cropCount >= 16) {
             BlockPos chestPos = findNearestContainerBlock(20);
-            if (chestPos != null && this.distanceToSqr(Vec3.atCenterOf(chestPos)) <= 16.0) {
-                tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
-                return;
+            if (chestPos != null) {
+                double distSq = this.distanceToSqr(Vec3.atCenterOf(chestPos));
+                if (distSq > 9.0) {
+                    moveTowards(Vec3.atCenterOf(chestPos), false);
+                    return;
+                } else {
+                    tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+                    return;
+                }
             }
         }
 
-        BlockPos matureCrop = findNearestMatureCrop(20);
+        BlockPos matureCrop = findNearestMatureCrop(this.farmRadiusX);
         if (matureCrop != null) {
             double distSq = this.position().distanceToSqr(Vec3.atCenterOf(matureCrop));
             if (distSq > 9.0) {
@@ -1552,7 +1935,7 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        BlockPos bareFarmland = findNearestBareFarmland(20);
+        BlockPos bareFarmland = findNearestBareFarmland(this.farmRadiusX);
         if (bareFarmland != null) {
             if (hasAnySeeds()) {
                 double distSq = this.position().distanceToSqr(Vec3.atCenterOf(bareFarmland));
@@ -1573,7 +1956,255 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
+        if (this.farmAllowTill && tryTillDirtInFarmBox()) {
+            return;
+        }
+
         stopMovement();
+    }
+
+    // === ANIMAL HUSBANDRY & RANCHING ENGINE ===
+
+    public List<Animal> getAllLivingAnimalsOfSpecies(String species) {
+        Vec3 center = this.ranchOriginPos != null ? Vec3.atCenterOf(this.ranchOriginPos) : this.position();
+        AABB box = new AABB(center.x - this.ranchRadius, center.y - 10, center.z - this.ranchRadius,
+                center.x + this.ranchRadius, center.y + 10, center.z + this.ranchRadius);
+        String q = (species == null || species.isBlank() || "all".equalsIgnoreCase(species) || "animal".equalsIgnoreCase(species))
+                ? "" : species.toLowerCase(Locale.ROOT);
+
+        return this.level().getEntitiesOfClass(Animal.class, box, a -> {
+            if (!a.isAlive()) return false;
+            if (!isInsideRanchArea(a.position())) return false;
+            if (q.isEmpty()) return true;
+            String typeKey = BuiltInRegistries.ENTITY_TYPE.getKey(a.getType()).getPath().toLowerCase();
+            return typeKey.contains(q);
+        });
+    }
+
+    public ItemStack findBreedingFoodInInventory(Animal animal, String preferredFood) {
+        String pref = (preferredFood == null || preferredFood.isBlank()) ? "" : preferredFood.toLowerCase(Locale.ROOT);
+        ItemStack backup = ItemStack.EMPTY;
+
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (s.isEmpty()) continue;
+            if (animal.isFood(s)) {
+                String id = BuiltInRegistries.ITEM.getKey(s.getItem()).getPath().toLowerCase();
+                if (!pref.isEmpty() && id.contains(pref)) {
+                    return s;
+                }
+                if (backup.isEmpty()) {
+                    backup = s;
+                }
+            }
+        }
+        return backup;
+    }
+
+    public int takeBreedingFoodFromContainer(Container container, String preferredFood) {
+        String q = (preferredFood != null && !preferredFood.isBlank()) ? preferredFood.toLowerCase(Locale.ROOT) : "wheat";
+        int taken = takeItemsFromContainer(container, q, 32);
+        if (taken == 0 && !"wheat".equals(q)) {
+            taken = takeItemsFromContainer(container, "wheat", 32);
+        }
+        if (taken == 0) {
+            taken = takeItemsFromContainer(container, "carrot", 32);
+        }
+        if (taken == 0) {
+            taken = takeItemsFromContainer(container, "seed", 32);
+        }
+        return taken;
+    }
+
+    private int countAnimalDrops() {
+        return countMatching(s -> {
+            String id = BuiltInRegistries.ITEM.getKey(s.getItem()).getPath().toLowerCase();
+            return id.contains("beef") || id.contains("pork") || id.contains("mutton")
+                    || id.contains("chicken") || id.contains("leather") || id.contains("wool") || id.contains("feather");
+        });
+    }
+
+    private boolean tickBreedAction(BotAction action) {
+        String species = action.getPrimaryTarget().isEmpty() ? this.ranchAnimal : action.getPrimaryTarget();
+        String food = (action.item != null && !action.item.isBlank()) ? action.item : this.ranchFood;
+        List<Animal> animals = getAllLivingAnimalsOfSpecies(species);
+        List<Animal> breedable = animals.stream()
+                .filter(a -> !a.isBaby() && a.getAge() == 0 && a.canFallInLove() && !a.isInLove())
+                .sorted(Comparator.comparingDouble(this::distanceToSqr))
+                .toList();
+
+        if (breedable.isEmpty() || this.actionProgressCount >= action.count) {
+            stopMovement();
+            sayInChat("Breeding complete for " + species + "s! Fed " + this.actionProgressCount + " animals.");
+            return true;
+        }
+
+        Animal target = breedable.get(0);
+        ItemStack foodStack = findBreedingFoodInInventory(target, food);
+        if (foodStack.isEmpty()) {
+            BlockPos chestPos = findNearestContainerBlock(20);
+            if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
+                int taken = takeBreedingFoodFromContainer(c, food);
+                if (taken > 0) {
+                    sayInChat("Grabbed " + taken + "x " + food + " from chest to breed " + species + "s.");
+                    return false;
+                }
+            }
+            sayInChat("Out of breeding food (" + food + ") for " + species + "s.");
+            return true;
+        }
+
+        double distSq = this.distanceToSqr(target);
+        if (distSq > 9.0) {
+            moveTowards(target.position(), false);
+        } else {
+            stopMovement();
+            lookAtPos(target.position());
+            foodStack.shrink(1);
+            target.setInLove(this);
+            broadcastSwing();
+            this.actionProgressCount++;
+            sayInChat("Fed a " + species + " to breed (" + this.actionProgressCount + "/" + action.count + ")!");
+        }
+        return false;
+    }
+
+    private boolean tickCullAction(BotAction action) {
+        String species = action.getPrimaryTarget().isEmpty() ? this.ranchAnimal : action.getPrimaryTarget();
+        int cap = action.count > 0 ? action.count : (this.ranchMaxPop > 0 ? this.ranchMaxPop : 10);
+        List<Animal> animals = getAllLivingAnimalsOfSpecies(species);
+        int total = animals.size();
+        List<Animal> adults = animals.stream().filter(a -> !a.isBaby()).toList();
+
+        if (total <= cap || total <= this.ranchMinPop || adults.size() <= this.ranchMinPop) {
+            stopMovement();
+            sayInChat("Herd population check complete: " + total + "x " + species + "s present (threshold: " + cap + ", minimum: " + this.ranchMinPop + "). No culling needed.");
+            return true;
+        }
+
+        Animal victim = adults.stream().min(Comparator.comparingDouble(this::distanceToSqr)).orElse(null);
+        if (victim == null || !victim.isAlive()) {
+            return true;
+        }
+
+        equipBestWeapon();
+        double distSq = this.distanceToSqr(victim);
+        if (distSq > 6.25) {
+            moveTowards(victim.position(), false);
+        } else {
+            stopMovement();
+            lookAtPos(victim.position());
+            this.attack(victim);
+            broadcastSwing();
+            if (!victim.isAlive()) {
+                vacuumNearbyDrops();
+                this.actionProgressCount++;
+                sayInChat("Culled 1x adult " + species + " (remaining herd: " + (total - 1) + ").");
+            }
+        }
+        return false;
+    }
+
+    private boolean tickHusbandryAction(BotAction action) {
+        tickPassiveRancher();
+        this.actionProgressCount++;
+        if (this.actionProgressCount >= (action.count > 0 ? action.count : 5)) {
+            return true;
+        }
+        return false;
+    }
+
+    private void tickPassiveRancher() {
+        if (this.tickCount % 20 != 0) return;
+
+        // 1. Store animal drops into chest if count >= 8
+        if (countAnimalDrops() >= 8) {
+            BlockPos chestPos = findNearestContainerBlock(20);
+            if (chestPos != null) {
+                double distSq = this.distanceToSqr(Vec3.atCenterOf(chestPos));
+                if (distSq > 9.0) {
+                    moveTowards(Vec3.atCenterOf(chestPos), false);
+                    return;
+                } else {
+                    tickChestAction(new BotAction("CHEST_STORE", "drops", "", 64), true);
+                    return;
+                }
+            }
+        }
+
+        List<Animal> animals = getAllLivingAnimalsOfSpecies(this.ranchAnimal);
+        int totalCount = animals.size();
+        List<Animal> adults = animals.stream().filter(a -> !a.isBaby()).toList();
+
+        // 2. Culling check: strictly totalCount > maxPop AND totalCount > minPop AND adults.size() > minPop AND only kill adults
+        if (this.ranchAutoCull && this.ranchMaxPop > 0 && totalCount > this.ranchMaxPop && totalCount > this.ranchMinPop && adults.size() > this.ranchMinPop) {
+            Animal victim = adults.stream().min(Comparator.comparingDouble(this::distanceToSqr)).orElse(null);
+            if (victim != null && victim.isAlive()) {
+                equipBestWeapon();
+                double distSq = this.distanceToSqr(victim);
+                if (distSq > 6.25) {
+                    moveTowards(victim.position(), false);
+                } else {
+                    stopMovement();
+                    lookAtPos(victim.position());
+                    this.attack(victim);
+                    broadcastSwing();
+                    if (!victim.isAlive()) {
+                        vacuumNearbyDrops();
+                        sayInChat("Culled 1x adult " + this.ranchAnimal + " to manage herd size (" + (totalCount - 1) + " remaining, min " + this.ranchMinPop + ").");
+                    }
+                }
+                return;
+            }
+        }
+
+        // 3. Breeding check
+        if (this.ranchAutoBreed) {
+            List<Animal> breedable = animals.stream()
+                    .filter(a -> !a.isBaby() && a.getAge() == 0 && a.canFallInLove() && !a.isInLove())
+                    .sorted(Comparator.comparingDouble(this::distanceToSqr))
+                    .toList();
+
+            if (!breedable.isEmpty()) {
+                Animal target = breedable.get(0);
+                ItemStack foodStack = findBreedingFoodInInventory(target, this.ranchFood);
+
+                if (foodStack.isEmpty()) {
+                    BlockPos chestPos = findNearestContainerBlock(20);
+                    if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
+                        int taken = takeBreedingFoodFromContainer(c, this.ranchFood);
+                        if (taken > 0) {
+                            sayInChat("Grabbed " + taken + "x " + this.ranchFood + " from chest to breed " + this.ranchAnimal + "s.");
+                        }
+                    }
+                    return;
+                }
+
+                double distSq = this.distanceToSqr(target);
+                if (distSq > 9.0) {
+                    moveTowards(target.position(), false);
+                } else {
+                    stopMovement();
+                    lookAtPos(target.position());
+                    foodStack.shrink(1);
+                    target.setInLove(this);
+                    broadcastSwing();
+                    long now = System.currentTimeMillis();
+                    if (now - lastBreedMessageTime > 8000) {
+                        lastBreedMessageTime = now;
+                        sayInChat("Fed a " + this.ranchAnimal + " with " + this.ranchFood + " to breed!");
+                    }
+                }
+                return;
+            }
+        }
+
+        // 4. Return to ranch origin if drifted far away
+        if (this.ranchOriginPos != null && this.distanceToSqr(Vec3.atCenterOf(this.ranchOriginPos)) > 144.0) {
+            moveTowards(Vec3.atCenterOf(this.ranchOriginPos), false);
+        } else {
+            stopMovement();
+        }
     }
 
     // === MOVEMENT, NAVIGATION & UNSTUCK ENGINE ===

@@ -288,8 +288,10 @@ public class BotManager {
         String speakerName = speaker != null ? speaker.getPlainTextName() : "Admin";
         boolean learnedNickname = bot.extractAndLearnNicknameFromPrompt(requestText);
         boolean learnedAnchor = bot.extractAndLearnAnchorFromPrompt(requestText);
+        boolean learnedFarm = bot.extractAndLearnFarmConfigFromPrompt(requestText, speaker);
+        boolean learnedHusbandry = bot.extractAndLearnHusbandryConfigFromPrompt(requestText, speaker);
         GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-        if (learnedNickname || learnedAnchor) {
+        if (learnedNickname || learnedAnchor || learnedFarm || learnedHusbandry) {
             BotPersistence.saveAll(server);
         }
 

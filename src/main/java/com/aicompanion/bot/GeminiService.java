@@ -84,9 +84,13 @@ public class GeminiService {
             9. "PLACE" -> Place a block or build a structure near your position. Set "target" to "shelter" (builds a protective 5x5 survival shelter), "wall", "platform", "pillar", "torch", "crafting_table", "chest", or "furnace".
             10. "CHEST_STORE" -> Deposit gathered resources into the nearest chest. Set "target" to "all" or a specific item name.
             11. "CHEST_TAKE" -> Take items from the nearest chest. Set "target" to the item name and "count" to the amount.
-            12. "FARM" -> Systematically tend nearby farmland within 20 blocks: harvest ONLY 100% fully grown mature crops, immediately replant matching seeds into the farmland, and store excess crops into a nearby chest while keeping a supply of seeds in inventory. Set "target" to "wheat", "carrots", "potatoes", "beetroots", or "all", and "count" to the number of crops to harvest (or 20 for full field).
-            13. "EAT" -> Eat food from your inventory immediately.
-            14. "STOP" -> Stop all current tasks and stand still.
+            12. "FARM" -> Systematically tend your assigned farm area: harvest ONLY 100% fully grown mature crops, immediately replant matching seeds into farmland, plant empty farmland, till untilled dirt with a hoe, and store excess crops into a nearby chest while always keeping a supply of seeds in inventory. Set "target" to "all", "wheat", "carrots", "potatoes", or "beetroots", and "count" to the number of crops (e.g. 20).
+            13. "TILL" -> Till dirt/grass in your assigned farm zone using a hoe.
+            14. "BREED" -> Feed livestock that are ready to mate. Set "target" to animal ("cows", "sheep", "pigs", "chickens"), "item" to breeding food ("wheat", "carrots", "seeds").
+            15. "CULL" -> Cull excess adult animals when herd size exceeds threshold. Set "target" to animal ("cows"), "count" to max herd size. Strictly never kills babies and preserves minimum herd size.
+            16. "HUSBANDRY" -> Complete livestock management: breed animals when ready, cull excess adults if herd size exceeds limit, and deposit meat/leather/wool into nearby chest. Set "target" to animal ("cows"), "item" to food ("wheat"), "count" to max herd size.
+            17. "EAT" -> Eat food from your inventory immediately.
+            18. "STOP" -> Stop all current tasks and stand still.
 
             CRITICAL INTELLIGENCE RULES:
             - Multi-step planning: If a player asks for something you don't currently have (e.g., "bring me a stone pickaxe" or "get me 10 iron ore"), check your inventory first!
@@ -141,6 +145,19 @@ public class GeminiService {
         sb.append(String.format("Health: %.1f / %.1f | Hunger: %d / 20\n",
                 bot.getHealth(), bot.getMaxHealth(), bot.getFoodData().getFoodLevel()));
         sb.append("Current Task: ").append(bot.getCurrentTaskSummary()).append("\n");
+
+        if (bot.getFarmOriginPos() != null) {
+            sb.append(String.format("Assigned Farm Zone: Origin=(%d, %d, %d), Size=%dx%d, Allowed Crops=%s, Till Dirt=%b\n",
+                    bot.getFarmOriginPos().getX(), bot.getFarmOriginPos().getY(), bot.getFarmOriginPos().getZ(),
+                    bot.getFarmRadiusX() * 2, bot.getFarmRadiusZ() * 2,
+                    bot.getFarmAllowedCrops().isEmpty() ? "ALL" : String.join(", ", bot.getFarmAllowedCrops()),
+                    bot.isFarmAllowTill()));
+        }
+        if (bot.getRanchOriginPos() != null || bot.getBotRole().toLowerCase().contains("husbandry") || bot.getBotRole().toLowerCase().contains("ranch")) {
+            sb.append(String.format("Assigned Husbandry Duty: Animal=%s, Breeding Food=%s, Max Cap=%d, Min Preserved=%d, AutoCull=%b, AdultsOnly=%b\n",
+                    bot.getRanchAnimal(), bot.getRanchFood(), bot.getRanchMaxPop(), bot.getRanchMinPop(),
+                    bot.isRanchAutoCull(), bot.isRanchAdultsOnly()));
+        }
 
         // Equipped items
         sb.append("Equipped: MainHand=").append(formatStack(bot.getMainHandItem()))
@@ -435,13 +452,27 @@ public class GeminiService {
         } else if (lower.contains("shelter") || lower.contains("house") || lower.contains("hut")) {
             actions.add(new BotAction("PLACE", "shelter", "", 1));
             res.reply = "Building a protective shelter right here!";
+        } else if (lower.contains("breed") || lower.contains("husbandry") || lower.contains("ranch") || lower.contains("mate")) {
+            String animal = "cow";
+            if (lower.contains("sheep")) animal = "sheep";
+            else if (lower.contains("pig")) animal = "pig";
+            else if (lower.contains("chicken")) animal = "chicken";
+            String food = "wheat";
+            if (lower.contains("carrot")) food = "carrot";
+            else if (lower.contains("potato")) food = "potato";
+            else if (lower.contains("seed")) food = "seeds";
+            actions.add(new BotAction("HUSBANDRY", animal, food, count > 1 ? count : 10));
+            res.reply = "On it! Breeding " + animal + "s with " + food + ", managing population, and storing drops in chest.";
         } else if (lower.contains("farm") || lower.contains("harvest") || lower.contains("replant") || lower.contains("plant")) {
             String crop = "wheat";
             if (lower.contains("carrot")) crop = "carrots";
             else if (lower.contains("potato")) crop = "potatoes";
             else if (lower.contains("beetroot")) crop = "beetroots";
             actions.add(new BotAction("FARM", crop, "", count > 1 ? count : 20));
-            res.reply = "On it! Harvesting mature " + crop + ", replanting seeds, and tending the farm.";
+            res.reply = "On it! Harvesting mature " + crop + " only, replanting, tending farmland, and storing in chest.";
+        } else if (lower.contains("till")) {
+            actions.add(new BotAction("TILL", "farmland", "hoe", count > 1 ? count : 20));
+            res.reply = "Tilling dirt into farmland with my hoe!";
         } else if (lower.contains("mine") || lower.contains("chop") || lower.contains("gather") || lower.contains("dig") || lower.contains("collect") || lower.contains("get")) {
             String target = "log";
             if (lower.contains("iron")) target = "iron_ore";

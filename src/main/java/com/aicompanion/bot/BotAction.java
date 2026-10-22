@@ -54,6 +54,10 @@ public class BotAction {
             case "CHEST_STORE" -> "Store items in chest";
             case "CHEST_TAKE" -> "Take " + count + "x " + getPrimaryTarget() + " from chest";
             case "FARM" -> "Farm " + (getPrimaryTarget().isEmpty() ? "mature crops" : getPrimaryTarget());
+            case "TILL" -> "Till farm area";
+            case "BREED" -> "Breed " + (getPrimaryTarget().isEmpty() ? "livestock" : getPrimaryTarget());
+            case "CULL" -> "Cull excess adult " + (getPrimaryTarget().isEmpty() ? "animals" : getPrimaryTarget()) + " (> " + count + ")";
+            case "HUSBANDRY" -> "Tend livestock (" + (getPrimaryTarget().isEmpty() ? "animals" : getPrimaryTarget()) + ")";
             case "EAT" -> "Eat food";
             case "STOP" -> "Stop";
             default -> t + " " + getPrimaryTarget();

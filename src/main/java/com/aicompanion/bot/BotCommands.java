@@ -25,7 +25,7 @@ public class BotCommands {
     };
 
     private static final SuggestionProvider<CommandSourceStack> ROLE_SUGGESTIONS = (ctx, builder) ->
-            SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier"), builder);
+            SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher"), builder);
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(buildCommandTree("bot"));
@@ -155,12 +155,25 @@ public class BotCommands {
             }
         }
         String invStr = inv.length() == 0 ? "Empty" : inv.toString();
+        StringBuilder extra = new StringBuilder();
+        if (bot.getFarmOriginPos() != null) {
+            extra.append(String.format("Farm Zone: (%d, %d, %d) %dx%d | Crops: %s\n",
+                    bot.getFarmOriginPos().getX(), bot.getFarmOriginPos().getY(), bot.getFarmOriginPos().getZ(),
+                    bot.getFarmRadiusX() * 2, bot.getFarmRadiusZ() * 2,
+                    bot.getFarmAllowedCrops().isEmpty() ? "all" : String.join(", ", bot.getFarmAllowedCrops())));
+        }
+        if (bot.getRanchOriginPos() != null || bot.getBotRole().toLowerCase().contains("husbandry") || bot.getBotRole().toLowerCase().contains("ranch")) {
+            extra.append(String.format("Livestock: %s (Food: %s, Cap: %d, Min: %d, CullAdults: %b)\n",
+                    bot.getRanchAnimal(), bot.getRanchFood(), bot.getRanchMaxPop(), bot.getRanchMinPop(), bot.isRanchAutoCull()));
+        }
+
         ctx.getSource().sendSuccess(() -> Component.literal("=== " + bot.getChatTag() + " Status ===\n")
                 .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
                 .append(Component.literal("Role: " + bot.getBotRole() + "\n").withStyle(ChatFormatting.WHITE))
                 .append(Component.literal(String.format("HP: %.1f/%.1f | Hunger: %d/20 | Pos: (%d, %d, %d)\n",
                         bot.getHealth(), bot.getMaxHealth(), bot.getFoodData().getFoodLevel(),
                         bot.getBlockX(), bot.getBlockY(), bot.getBlockZ())).withStyle(ChatFormatting.GREEN))
+                .append(Component.literal(extra.toString()).withStyle(ChatFormatting.YELLOW))
                 .append(Component.literal("Task: " + bot.getCurrentTaskSummary() + "\n").withStyle(ChatFormatting.AQUA))
                 .append(Component.literal("Inventory: " + invStr).withStyle(ChatFormatting.GRAY)), false);
         return 1;

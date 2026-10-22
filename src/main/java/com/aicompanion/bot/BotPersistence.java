@@ -82,6 +82,29 @@ public class BotPersistence {
         public Integer anchorY = null;
         public Integer anchorZ = null;
         public double anchorRadius = 25.0;
+
+        // Farmer configuration
+        public Integer farmOriginX = null;
+        public Integer farmOriginY = null;
+        public Integer farmOriginZ = null;
+        public int farmRadiusX = 10;
+        public int farmRadiusZ = 10;
+        public List<String> farmAllowedCrops = new ArrayList<>();
+        public boolean farmAllowTill = true;
+
+        // Rancher / Husbandry configuration
+        public Integer ranchOriginX = null;
+        public Integer ranchOriginY = null;
+        public Integer ranchOriginZ = null;
+        public double ranchRadius = 20.0;
+        public String ranchAnimal = "cow";
+        public String ranchFood = "wheat";
+        public int ranchMaxPop = 0;
+        public int ranchMinPop = 2;
+        public boolean ranchAutoBreed = true;
+        public boolean ranchAutoCull = false;
+        public boolean ranchAdultsOnly = true;
+
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
         public List<BotAction> activeActions = new ArrayList<>();
@@ -145,6 +168,29 @@ public class BotPersistence {
                     data.anchorZ = bot.getGuardAnchorPos().getZ();
                     data.anchorRadius = bot.getGuardAnchorRadius();
                 }
+                if (bot.getFarmOriginPos() != null) {
+                    data.farmOriginX = bot.getFarmOriginPos().getX();
+                    data.farmOriginY = bot.getFarmOriginPos().getY();
+                    data.farmOriginZ = bot.getFarmOriginPos().getZ();
+                }
+                data.farmRadiusX = bot.getFarmRadiusX();
+                data.farmRadiusZ = bot.getFarmRadiusZ();
+                data.farmAllowedCrops = bot.getFarmAllowedCrops();
+                data.farmAllowTill = bot.isFarmAllowTill();
+
+                if (bot.getRanchOriginPos() != null) {
+                    data.ranchOriginX = bot.getRanchOriginPos().getX();
+                    data.ranchOriginY = bot.getRanchOriginPos().getY();
+                    data.ranchOriginZ = bot.getRanchOriginPos().getZ();
+                }
+                data.ranchRadius = bot.getRanchRadius();
+                data.ranchAnimal = bot.getRanchAnimal();
+                data.ranchFood = bot.getRanchFood();
+                data.ranchMaxPop = bot.getRanchMaxPop();
+                data.ranchMinPop = bot.getRanchMinPop();
+                data.ranchAutoBreed = bot.isRanchAutoBreed();
+                data.ranchAutoCull = bot.isRanchAutoCull();
+                data.ranchAdultsOnly = bot.isRanchAdultsOnly();
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.activeActions = bot.getRemainingActionsSnapshot();
 
@@ -195,6 +241,16 @@ public class BotPersistence {
                     bot.setAliases(data.aliases, data.nickname);
                     if (data.anchorX != null && data.anchorY != null && data.anchorZ != null) {
                         bot.setGuardAnchor(new BlockPos(data.anchorX, data.anchorY, data.anchorZ), data.anchorRadius);
+                    }
+                    if (data.farmOriginX != null && data.farmOriginY != null && data.farmOriginZ != null) {
+                        bot.setFarmArea(new BlockPos(data.farmOriginX, data.farmOriginY, data.farmOriginZ),
+                                data.farmRadiusX, data.farmRadiusZ, data.farmAllowedCrops, data.farmAllowTill);
+                    }
+                    if (data.ranchOriginX != null && data.ranchOriginY != null && data.ranchOriginZ != null) {
+                        bot.setRanchConfig(new BlockPos(data.ranchOriginX, data.ranchOriginY, data.ranchOriginZ),
+                                data.ranchRadius, data.ranchAnimal, data.ranchFood,
+                                data.ranchMaxPop, data.ranchMinPop, data.ranchAutoBreed,
+                                data.ranchAutoCull, data.ranchAdultsOnly);
                     }
                     if (data.memory != null) {
                         GeminiService.setMemory(bot.getBotName(), data.memory);
