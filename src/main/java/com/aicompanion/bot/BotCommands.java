@@ -68,6 +68,7 @@ public class BotCommands {
                                                 StringArgumentType.getString(ctx, "name"),
                                                 StringArgumentType.getString(ctx, "request"))))))
                 .then(Commands.literal("apikey")
+                        .executes(BotCommands::showApiKeyHelp)
                         .then(Commands.argument("key", StringArgumentType.greedyString())
                                 .executes(ctx -> setApiKey(ctx, StringArgumentType.getString(ctx, "key")))))
                 .then(Commands.literal("model")
@@ -244,6 +245,27 @@ public class BotCommands {
         BotConfig.setModel(modelName);
         ctx.getSource().sendSuccess(() -> Component.literal("Gemini model updated to: " + BotConfig.getModel())
                 .withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int showApiKeyHelp(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        String pName = player != null ? player.getPlainTextName() : "Server";
+        boolean hasKey = !BotConfig.getCandidateApiKeys(pName).isEmpty();
+
+        ctx.getSource().sendSuccess(() -> Component.literal("=== AI Companion: API Key Setup ===\n")
+                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
+                .append(Component.literal("AI Engine Status: ").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal(hasKey ? "Connected to Cloud Gemini (Full AI Personality)\n" : "Offline Tactical Mode (Zero Setup Needed)\n")
+                        .withStyle(hasKey ? ChatFormatting.GREEN : ChatFormatting.YELLOW))
+                .append(Component.literal("\nGet a 100% FREE Gemini API Key in 30 seconds (no credit card needed):\n").withStyle(ChatFormatting.WHITE))
+                .append(Component.literal("1. Visit: ").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("https://aistudio.google.com/app/apikey\n").withStyle(ChatFormatting.AQUA, ChatFormatting.UNDERLINE))
+                .append(Component.literal("2. Sign in with Google and click 'Create API Key'.\n").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("3. In chat, run: ").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("/bot apikey <your_key_here>\n\n").withStyle(ChatFormatting.GREEN))
+                .append(Component.literal("Note: Even with NO key, companions will still farm, breed, mine, guard, craft, and build offline!")
+                        .withStyle(ChatFormatting.DARK_AQUA, ChatFormatting.ITALIC)), false);
         return 1;
     }
 }

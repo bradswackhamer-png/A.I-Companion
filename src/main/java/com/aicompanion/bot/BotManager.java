@@ -73,7 +73,11 @@ public class BotManager {
         ACTIVE_BOTS.put(key, bot);
         BotPersistence.saveAll(level.getServer());
 
-        bot.sayInChat("Hey! I'm online and ready to help (" + bot.getBotRole() + "). Mention my name in chat or use /bot ask " + name + " <request>!");
+        if (BotConfig.getCandidateApiKeys(null).isEmpty()) {
+            bot.sayInChat("Hey! I'm online (" + bot.getBotRole() + ") in Offline Tactical Mode. Give me orders in chat, or type /bot apikey for full Gemini conversational AI!");
+        } else {
+            bot.sayInChat("Hey! I'm online and ready to help (" + bot.getBotRole() + "). Mention my name in chat or use /bot ask " + name + " <request>!");
+        }
         return bot;
     }
 

@@ -13,8 +13,8 @@ public class BotConfig {
     private static final ModConfigSpec.Builder BUILDER = new ModConfigSpec.Builder();
 
     public static final ModConfigSpec.ConfigValue<String> GEMINI_API_KEY = BUILDER
-            .comment("Default Server Google Gemini API Key (get a free key at https://aistudio.google.com/apikey).")
-            .define("geminiApiKey", "AQ.Ab8RN6KlXf2LI67Eq3EJ9byX6D5RvBcrG5retBol3aHWvmlFLw");
+            .comment("Default Server Google Gemini API Key (get a free key at https://aistudio.google.com/app/apikey).")
+            .define("geminiApiKey", "");
 
     public static final ModConfigSpec.ConfigValue<List<? extends String>> PLAYER_KEY_ENTRIES = BUILDER
             .comment("Per-player Gemini API keys in format 'PlayerName=API_KEY'. Players can set theirs in-game with /bot apikey <key>.")

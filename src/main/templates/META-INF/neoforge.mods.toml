@@ -4,10 +4,10 @@ license="${mod_license}"
 modId="${mod_id}"
 version="${mod_version}"
 displayName="${mod_name}"
-authors="Antigravity AI"
+authors="bradswackhamer-png"
 description='''
-Gemini-powered AI Companion Bots for Minecraft 26.3 (NeoForge).
-Spawn intelligent AI players that walk, mine, craft, build, fight, and take natural-language requests in multiplayer chat.
+Intelligent AI Companion Bots for Minecraft 26.3 (NeoForge).
+Powered by Google Gemini and Offline Tactical Heuristics. Spawn fully autonomous companions that farm crops, breed livestock, mine ores, chop wood, craft tools, build shelters, defend compounds, and converse in natural-language multiplayer chat!
 '''
 
 [[dependencies.${mod_id}]]
