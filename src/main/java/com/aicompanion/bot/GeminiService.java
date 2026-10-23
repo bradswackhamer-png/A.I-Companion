@@ -1,5 +1,7 @@
 package com.aicompanion.bot;
 
+import com.aicompanion.bot.compat.TractorCompat;
+import com.aicompanion.bot.compat.TrainCompat;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -91,6 +93,8 @@ public class GeminiService {
             16. "HUSBANDRY" -> Complete livestock management: breed animals when ready, cull excess adults if herd size exceeds limit, and deposit meat/leather/wool into nearby chest. Set "target" to animal ("cows"), "item" to food ("wheat"), "count" to max herd size.
             17. "EAT" -> Eat food from your inventory immediately.
             18. "STOP" -> Stop all current tasks and stand still.
+            19. "CONDUCT_TRAIN" -> Board a train locomotive, blow the horn, refuel with coal, and drive along the rails to a destination station/waypoint to haul freight. Set "target" to the destination station name (e.g. "Town", "Mine"), "item" to freight item (e.g. "iron_ore", "wheat", "coal", "all"), and "count" to quantity.
+            20. "DRIVE_TRACTOR" -> Board the nearby JaneMoose tractor, activate plowing/harvesting/planting attachments, and drive across the farm zone.
 
             CRITICAL INTELLIGENCE RULES:
             - Multi-step planning: If a player asks for something you don't currently have (e.g., "bring me a stone pickaxe" or "get me 10 iron ore"), check your inventory first!
@@ -157,6 +161,21 @@ public class GeminiService {
             sb.append(String.format("Assigned Husbandry Duty: Animal=%s, Breeding Food=%s, Max Cap=%d, Min Preserved=%d, AutoCull=%b, AdultsOnly=%b\n",
                     bot.getRanchAnimal(), bot.getRanchFood(), bot.getRanchMaxPop(), bot.getRanchMinPop(),
                     bot.isRanchAutoCull(), bot.isRanchAdultsOnly()));
+        }
+        if (bot.getBotRole().toLowerCase().contains("conductor") || !bot.getConductorDestinationStation().isBlank()) {
+            sb.append(String.format("Assigned Conductor Route: Destination='%s', Return='%s', Freight='%s' (x%d), Returning=%b\n",
+                    bot.getConductorDestinationStation(), bot.getConductorReturnStation(),
+                    bot.getConductorFreightItem(), bot.getConductorFreightCount(), bot.isConductorReturning()));
+        }
+        if (TractorCompat.isAvailable()) {
+            net.minecraft.world.entity.Entity nearbyTractor = TractorCompat.findNearbyTractor(level, bot.position(), 24.0);
+            sb.append(String.format("JaneMoose Tractor Mod: Available (Riding Tractor=%b, Nearby Tractor Detected=%b)\n",
+                    TractorCompat.isRidingTractor(bot), nearbyTractor != null));
+        }
+        if (TrainCompat.isAvailable()) {
+            net.minecraft.world.entity.Entity nearbyLoco = TrainCompat.findNearbyLocomotive(level, bot.position(), 24.0);
+            sb.append(String.format("MiningTools Train Mod: Available (Riding Locomotive=%b, Nearby Locomotive Detected=%b)\n",
+                    TrainCompat.isRidingLocomotive(bot), nearbyLoco != null));
         }
 
         // Equipped items

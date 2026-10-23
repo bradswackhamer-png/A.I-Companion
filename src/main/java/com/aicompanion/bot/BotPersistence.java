@@ -109,6 +109,14 @@ public class BotPersistence {
         public boolean ranchAutoCull = false;
         public boolean ranchAdultsOnly = true;
 
+        // Conductor / Train & Tractor configuration
+        public String conductorDest = "";
+        public String conductorReturn = "";
+        public String conductorFreight = "";
+        public int conductorCount = 0;
+        public boolean conductorReturning = false;
+        public boolean tractorMode = false;
+
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
         public List<BotAction> activeActions = new ArrayList<>();
@@ -201,6 +209,12 @@ public class BotPersistence {
                 data.ranchAutoBreed = bot.isRanchAutoBreed();
                 data.ranchAutoCull = bot.isRanchAutoCull();
                 data.ranchAdultsOnly = bot.isRanchAdultsOnly();
+                data.conductorDest = bot.getConductorDestinationStation();
+                data.conductorReturn = bot.getConductorReturnStation();
+                data.conductorFreight = bot.getConductorFreightItem();
+                data.conductorCount = bot.getConductorFreightCount();
+                data.conductorReturning = bot.isConductorReturning();
+                data.tractorMode = bot.isTractorMode();
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.activeActions = bot.getRemainingActionsSnapshot();
 
@@ -273,6 +287,8 @@ public class BotPersistence {
                                 data.ranchMaxPop, data.ranchMinPop, data.ranchAutoBreed,
                                 data.ranchAutoCull, data.ranchAdultsOnly);
                     }
+                    bot.setConductorConfig(data.conductorDest, data.conductorReturn, data.conductorFreight, data.conductorCount, data.conductorReturning);
+                    bot.setTractorMode(data.tractorMode);
                     if (data.memory != null) {
                         GeminiService.setMemory(bot.getBotName(), data.memory);
                         for (String memLine : data.memory) {

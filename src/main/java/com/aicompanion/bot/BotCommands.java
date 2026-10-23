@@ -25,7 +25,7 @@ public class BotCommands {
     };
 
     private static final SuggestionProvider<CommandSourceStack> ROLE_SUGGESTIONS = (ctx, builder) ->
-            SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher"), builder);
+            SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher", "conductor"), builder);
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(buildCommandTree("bot"));

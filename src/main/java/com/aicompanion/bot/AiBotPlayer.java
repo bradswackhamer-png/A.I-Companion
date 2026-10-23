@@ -1,5 +1,7 @@
 package com.aicompanion.bot;
 
+import com.aicompanion.bot.compat.TractorCompat;
+import com.aicompanion.bot.compat.TrainCompat;
 import com.mojang.authlib.GameProfile;
 import io.netty.channel.ChannelFutureListener;
 import java.util.ArrayDeque;
@@ -136,6 +138,19 @@ public class AiBotPlayer extends ServerPlayer {
     private boolean ranchAdultsOnly = true;
     private long lastBreedMessageTime = 0;
 
+    // Conductor / Train configuration
+    private String conductorDestStation = "";
+    private String conductorReturnStation = "";
+    private String conductorFreightItem = "";
+    private int conductorFreightCount = 0;
+    private boolean conductorIsReturning = false;
+    private int conductorState = 0;
+    private long conductorLastWhistleTime = 0;
+    private int conductorArrivedTicks = 0;
+
+    // Tractor configuration
+    private boolean tractorMode = false;
+
     private final Deque<BotAction> actionQueue = new ArrayDeque<>();
     private @Nullable BotAction currentAction = null;
 
@@ -212,6 +227,26 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized boolean isRanchAutoBreed() { return this.ranchAutoBreed; }
     public synchronized boolean isRanchAutoCull() { return this.ranchAutoCull; }
     public synchronized boolean isRanchAdultsOnly() { return this.ranchAdultsOnly; }
+
+    public synchronized void setConductorConfig(String dest, String returnStation, String freightItem, int count, boolean isReturning) {
+        this.conductorDestStation = dest != null ? dest.trim() : "";
+        this.conductorReturnStation = returnStation != null ? returnStation.trim() : "";
+        this.conductorFreightItem = freightItem != null ? freightItem.trim() : "";
+        this.conductorFreightCount = Math.max(0, count);
+        this.conductorIsReturning = isReturning;
+        this.conductorState = 0;
+        this.conductorArrivedTicks = 0;
+    }
+
+    public synchronized String getConductorDestinationStation() { return this.conductorDestStation; }
+    public synchronized String getConductorReturnStation() { return this.conductorReturnStation; }
+    public synchronized String getConductorFreightItem() { return this.conductorFreightItem; }
+    public synchronized int getConductorFreightCount() { return this.conductorFreightCount; }
+    public synchronized boolean isConductorReturning() { return this.conductorIsReturning; }
+    public synchronized void setConductorReturning(boolean returning) { this.conductorIsReturning = returning; }
+
+    public synchronized boolean isTractorMode() { return this.tractorMode; }
+    public synchronized void setTractorMode(boolean mode) { this.tractorMode = mode; }
 
     public synchronized void addAlias(String alias) {
         if (alias == null || alias.isBlank()) return;
@@ -392,12 +427,71 @@ public class AiBotPlayer extends ServerPlayer {
 
         setFarmArea(origin, rx, rz, crops, allowTill);
         this.botRole = "farmer";
+        if (lower.contains("tractor")) {
+            this.tractorMode = true;
+        }
 
         String cropDesc = crops.isEmpty() ? "all crops" : String.join(" & ", crops);
+        String tractorNote = this.tractorMode ? " (Tractor mode enabled!)" : "";
         sayInChat("Farm duty set! Working " + (rx * 2) + "x" + (rz * 2) + " area from ("
                 + origin.getX() + ", " + origin.getY() + ", " + origin.getZ()
-                + ") for " + cropDesc + ". I'll only harvest 100% mature crops, replant, till dirt, and store in chest.");
+                + ") for " + cropDesc + tractorNote + ". I'll harvest 100% mature crops, replant, till dirt, and store in chest.");
         return true;
+    }
+
+    public synchronized boolean extractAndLearnConductorConfigFromPrompt(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT);
+        boolean mentionsTrain = lower.contains("train") || lower.contains("locomotive") || lower.contains("conductor")
+                || lower.contains("freight") || lower.contains("cargo cart") || lower.contains("caboose");
+        if (!mentionsTrain) return false;
+
+        String dest = "";
+        String returnStation = "";
+        String freight = "";
+        int count = 64;
+
+        java.util.regex.Matcher destMatcher = java.util.regex.Pattern.compile(
+                "(?:drive|take|run|conduct|go)\\s+(?:the\\s+)?(?:train|locomotive)?\\s*(?:to|towards)\\s+([a-zA-Z0-9_-]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        if (destMatcher.find()) {
+            dest = destMatcher.group(1).trim();
+        }
+
+        java.util.regex.Matcher returnMatcher = java.util.regex.Pattern.compile(
+                "(?:return|bring\\s+back|take\\s+it\\s+back|come\\s+back)\\s+(?:to\\s+)?([a-zA-Z0-9_-]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        if (returnMatcher.find()) {
+            returnStation = returnMatcher.group(1).trim();
+        }
+
+        java.util.regex.Matcher freightMatcher = java.util.regex.Pattern.compile(
+                "(?:bring|pick\\s*up|load|haul|get|fetch|transport)\\s+(?:back\\s+)?(?:some\\s+)?(?:(\\d+)\\s+)?([a-zA-Z0-9_-]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+        if (freightMatcher.find()) {
+            String countStr = freightMatcher.group(1);
+            if (countStr != null) {
+                try { count = Integer.parseInt(countStr); } catch (Exception ignored) {}
+            }
+            freight = freightMatcher.group(2).trim();
+            if (freight.equalsIgnoreCase("freight") || freight.equalsIgnoreCase("cargo") || freight.equalsIgnoreCase("it")) {
+                freight = "all";
+            }
+        }
+
+        if (!dest.isBlank()) {
+            this.botRole = "conductor";
+            setConductorConfig(dest, returnStation, freight, count, false);
+            String returnDesc = returnStation.isBlank() ? "" : " and return to '" + returnStation + "'";
+            String freightDesc = freight.isBlank() ? "" : " to transport " + (freight.equals("all") ? "freight" : freight);
+            sayInChat("Conductor duty set! Heading to drive the train to '" + dest + "'" + freightDesc + returnDesc + ".");
+            return true;
+        } else if (lower.contains("conductor") || lower.contains("train driver")) {
+            this.botRole = "conductor";
+            sayInChat("All aboard! I'm now assigned as Conductor. Tell me where to drive the train (e.g. 'James, drive the train to Town and bring back iron')!");
+            return true;
+        }
+        return false;
     }
 
     public synchronized boolean extractAndLearnHusbandryConfigFromPrompt(String text, @Nullable ServerPlayer speaker) {
@@ -549,6 +643,13 @@ public class AiBotPlayer extends ServerPlayer {
         } else if (r.contains("courier") || r.contains("helper") || r.contains("collector")) {
             this.getInventory().add(new ItemStack(Items.CHEST, 2));
             this.getInventory().add(new ItemStack(Items.BREAD, 8));
+        } else if (r.contains("conductor") || r.contains("train") || r.contains("engineer")) {
+            this.getInventory().add(new ItemStack(Items.COAL, 32));
+            this.getInventory().add(new ItemStack(Items.CLOCK, 1));
+            this.getInventory().add(new ItemStack(Items.COMPASS, 1));
+            this.getInventory().add(new ItemStack(Items.IRON_HELMET, 1));
+            this.getInventory().add(new ItemStack(Items.BREAD, 16));
+            this.autoEquipArmor();
         }
     }
 
@@ -778,6 +879,12 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        // 5. Conductor: Drive locomotives, blow horn, haul freight to stations and return
+        if (r.contains("conductor") || r.contains("train") || r.contains("engineer") || !this.conductorDestStation.isBlank()) {
+            tickPassiveConductor();
+            return;
+        }
+
         this.stopMovement();
         if (this.tickCount % 10 == 0) {
             Player nearest = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 8.0, p -> p != this);
@@ -813,6 +920,21 @@ public class AiBotPlayer extends ServerPlayer {
             case "PLACE", "BUILD" -> executePlaceAction(action);
             case "CHEST_STORE" -> tickChestAction(action, true);
             case "CHEST_TAKE" -> tickChestAction(action, false);
+            case "CONDUCT_TRAIN", "DRIVE_TRAIN" -> {
+                String dest = action.getPrimaryTarget();
+                String freight = action.item != null ? action.item : "all";
+                int count = action.count > 0 ? action.count : 64;
+                setConductorConfig(dest, "", freight, count, false);
+                this.botRole = "conductor";
+                tickPassiveConductor();
+                yield this.conductorDestStation.isBlank();
+            }
+            case "DRIVE_TRACTOR", "TRACTOR_FARM" -> {
+                this.tractorMode = true;
+                this.botRole = "farmer";
+                tickPassiveFarmer();
+                yield !TractorCompat.isRidingTractor(this);
+            }
             case "EAT" -> {
                 forceEatFromInventory();
                 yield true;
@@ -1940,6 +2062,51 @@ public class AiBotPlayer extends ServerPlayer {
     private void tickPassiveFarmer() {
         if (this.tickCount % 20 != 0) return;
 
+        // JaneMoose Tractor Integration
+        if (TractorCompat.isAvailable()) {
+            Entity tractor = TractorCompat.getRiddenTractor(this);
+            if (tractor != null) {
+                TractorCompat.refuelTractorIfLow(this, tractor);
+                TractorCompat.ensureAttachmentOperational(tractor, this);
+
+                BlockPos targetBlock = findNearestMatureCrop(this.farmRadiusX);
+                if (targetBlock == null && this.farmAllowTill) {
+                    targetBlock = findNearestTillableDirtInFarmBox();
+                }
+                if (targetBlock == null) {
+                    targetBlock = findNearestBareFarmland(this.farmRadiusX);
+                }
+
+                if (targetBlock != null) {
+                    Vec3 targetVec = Vec3.atCenterOf(targetBlock);
+                    TractorCompat.steerTractor(this, tractor, targetVec, 0.85);
+                    return;
+                } else {
+                    TractorCompat.stopTractor(this, tractor);
+                    if (this.farmOriginPos != null && this.distanceToSqr(Vec3.atCenterOf(this.farmOriginPos)) > 16.0) {
+                        TractorCompat.steerTractor(this, tractor, Vec3.atCenterOf(this.farmOriginPos), 0.5);
+                    } else {
+                        TractorCompat.dismountTractor(this);
+                        sayInChat("Farm field completely tended with tractor! Tractor parked.");
+                    }
+                    return;
+                }
+            } else {
+                Entity nearbyTractor = TractorCompat.findNearbyTractor(this.level(), this.position(), 24.0);
+                if (nearbyTractor != null && (this.tractorMode || this.botRole.toLowerCase().contains("tractor"))) {
+                    double distSq = this.distanceToSqr(nearbyTractor);
+                    if (distSq > 6.0) {
+                        moveTowards(nearbyTractor.position(), false);
+                        return;
+                    } else {
+                        TractorCompat.mountTractor(this, nearbyTractor);
+                        sayInChat("Mounted the JaneMoose tractor! Beginning mechanized farm work.");
+                        return;
+                    }
+                }
+            }
+        }
+
         // 1. Store crops into nearby chest only when there is an actual surplus of harvested crops to deposit (>= 16)
         int depositable = getFarmerDepositableCropCount();
         if (depositable >= 16) {
@@ -2005,6 +2172,102 @@ public class AiBotPlayer extends ServerPlayer {
             moveTowards(Vec3.atCenterOf(this.farmOriginPos), false);
         } else {
             stopMovement();
+        }
+    }
+
+    private void tickPassiveConductor() {
+        if (!TrainCompat.isAvailable()) {
+            return;
+        }
+
+        // 1. Check if currently riding a locomotive
+        Entity loco = TrainCompat.getRiddenLocomotive(this);
+        if (loco == null) {
+            Entity nearbyLoco = TrainCompat.findNearbyLocomotive(this.level(), this.position(), 32.0);
+            if (nearbyLoco != null) {
+                double distSq = this.distanceToSqr(nearbyLoco);
+                if (distSq > 9.0) {
+                    moveTowards(nearbyLoco.position(), false);
+                } else {
+                    stopMovement();
+                    TrainCompat.mountLocomotive(this, nearbyLoco);
+                    sayInChat("Boarded the locomotive! Conductor ready on the rails.");
+                }
+            } else {
+                stopMovement();
+            }
+            return;
+        }
+
+        // 2. We are aboard the locomotive!
+        if (this.tickCount % 40 == 0) {
+            TrainCompat.refuelLocomotive(this, loco);
+        }
+
+        String targetStationName = this.conductorIsReturning ? this.conductorReturnStation : this.conductorDestStation;
+        if (targetStationName.isBlank()) {
+            return;
+        }
+
+        BotPersistence.SavedLocation station = BotPersistence.getLocation(targetStationName);
+        if (station == null) {
+            if (this.tickCount % 120 == 0) {
+                sayInChat("I don't have a saved station or waypoint named '" + targetStationName + "'. Stand at the station and say 'remember this spot as " + targetStationName + "' first!");
+            }
+            return;
+        }
+
+        Vec3 stationVec = new Vec3(station.x + 0.5, station.y + 0.5, station.z + 0.5);
+        double distToStationSq = loco.distanceToSqr(stationVec);
+
+        // Arrived at destination station (within 9 blocks)
+        if (distToStationSq <= 81.0) {
+            if (TrainCompat.isTrainRunning(loco)) {
+                TrainCompat.stopTrain(loco);
+                TrainCompat.blowHorn(loco, this);
+                sayInChat("Arrived at " + (this.conductorIsReturning ? "return station '" + targetStationName + "'" : "station '" + targetStationName + "'") + "! Train stopped.");
+                this.conductorArrivedTicks = 0;
+            }
+            this.conductorArrivedTicks++;
+
+            if (this.conductorArrivedTicks == 20) {
+                BlockPos chestPos = findNearestContainerBlock(12);
+                if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container chest) {
+                    List<Entity> carts = TrainCompat.getConnectedCarts(loco);
+                    if (!this.conductorIsReturning) {
+                        if (this.conductorReturnStation.isBlank()) {
+                            int unloaded = TrainCompat.transferFreightTrainToChest(carts, chest, this.conductorFreightItem, this.conductorFreightCount);
+                            sayInChat("Unloaded " + unloaded + "x freight into station chest at '" + targetStationName + "'. Delivery complete!");
+                            this.conductorDestStation = "";
+                        } else {
+                            int loaded = TrainCompat.transferFreightChestToTrain(chest, carts, this.conductorFreightItem, this.conductorFreightCount);
+                            sayInChat("Loaded " + loaded + "x " + (this.conductorFreightItem.isBlank() ? "freight" : this.conductorFreightItem) + " from station chest. Preparing return trip to '" + this.conductorReturnStation + "'!");
+                            this.conductorIsReturning = true;
+                            TrainCompat.toggleReversed(loco);
+                        }
+                    } else {
+                        int unloaded = TrainCompat.transferFreightTrainToChest(carts, chest, this.conductorFreightItem, this.conductorFreightCount);
+                        sayInChat("Returned home to '" + targetStationName + "'! Delivered " + unloaded + "x freight safely into the station chest. Route complete!");
+                        this.conductorDestStation = "";
+                        this.conductorReturnStation = "";
+                        this.conductorIsReturning = false;
+                    }
+                }
+            }
+            return;
+        }
+
+        // Underway towards destination
+        if (!TrainCompat.isTrainRunning(loco)) {
+            TrainCompat.blowHorn(loco, this);
+            TrainCompat.startTrain(loco, 3, TrainCompat.isReversed(loco));
+            sayInChat("All aboard! Train departing for '" + targetStationName + "'.");
+            this.conductorLastWhistleTime = this.tickCount;
+        } else {
+            if (this.tickCount - this.conductorLastWhistleTime > 160) {
+                TrainCompat.blowHorn(loco, this);
+                this.conductorLastWhistleTime = this.tickCount;
+            }
         }
     }
 
