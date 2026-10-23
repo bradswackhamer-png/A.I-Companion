@@ -30,6 +30,15 @@ import org.slf4j.Logger;
 public class BotManager {
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final Map<String, AiBotPlayer> ACTIVE_BOTS = new LinkedHashMap<>();
+    private static volatile boolean isServerStopping = false;
+
+    public static void setServerStopping(boolean stopping) {
+        isServerStopping = stopping;
+    }
+
+    public static boolean isServerStopping() {
+        return isServerStopping;
+    }
 
     public static synchronized Collection<AiBotPlayer> getActiveBots() {
         return new ArrayList<>(ACTIVE_BOTS.values());
@@ -202,19 +211,24 @@ public class BotManager {
     }
 
     public static synchronized void despawnForShutdownWithoutWipingSave(MinecraftServer server) {
+        isServerStopping = true;
         BotPersistence.saveAll(server);
-        List<String> names = new ArrayList<>(ACTIVE_BOTS.keySet());
-        for (String name : names) {
-            removeBot(name, false);
-        }
     }
 
     public static synchronized void onPlayerLoggedIn(ServerPlayer joiningPlayer) {
         if (joiningPlayer instanceof AiBotPlayer) return;
         if (ACTIVE_BOTS.isEmpty()) return;
+
         List<ServerPlayer> botsAsPlayers = new ArrayList<>(ACTIVE_BOTS.values());
         ClientboundPlayerInfoUpdatePacket packet = ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(botsAsPlayers);
         joiningPlayer.connection.send(packet);
+
+        for (AiBotPlayer bot : ACTIVE_BOTS.values()) {
+            if (bot.level() == joiningPlayer.level()) {
+                bot.level().getChunk(bot.blockPosition());
+                bot.level().getChunkSource().move(bot);
+            }
+        }
     }
 
     public static void handleChatMessage(ServerPlayer speaker, String rawMessage) {

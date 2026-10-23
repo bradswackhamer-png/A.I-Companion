@@ -15,13 +15,16 @@ import java.util.Locale;
 import java.util.Map;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.core.registries.Registries;
 import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.storage.LevelResource;
 import org.slf4j.Logger;
 
@@ -71,6 +74,7 @@ public class BotPersistence {
         public String nickname = "";
         public List<String> aliases = new ArrayList<>();
         public String role = "All-Around Survival Companion";
+        public String dimension = "minecraft:overworld";
         public double x;
         public double y;
         public double z;
@@ -146,6 +150,11 @@ public class BotPersistence {
 
     public static synchronized void saveAll(MinecraftServer server) {
         try {
+            if (BotManager.getActiveBots().isEmpty() && BotManager.isServerStopping()) {
+                LOGGER.info("Skipping BotPersistence.saveAll during shutdown because active bot list is empty.");
+                return;
+            }
+
             PersistentStore store = new PersistentStore();
             store.locations.putAll(SAVED_LOCATIONS);
 
@@ -155,6 +164,7 @@ public class BotPersistence {
                 data.nickname = bot.getActiveNickname() != null ? bot.getActiveNickname() : "";
                 data.aliases = bot.getAliases();
                 data.role = bot.getBotRole();
+                data.dimension = bot.level().dimension().identifier().toString();
                 data.x = bot.getX();
                 data.y = bot.getY();
                 data.z = bot.getZ();
@@ -234,10 +244,21 @@ public class BotPersistence {
             }
 
             if (store.bots != null) {
-                ServerLevel overworld = server.overworld();
                 for (SavedBotData data : store.bots) {
                     if (data.name == null || data.name.isBlank()) continue;
-                    AiBotPlayer bot = BotManager.spawnBotFromSave(overworld, data);
+                    ServerLevel targetLevel = server.overworld();
+                    if (data.dimension != null && !data.dimension.isBlank()) {
+                        try {
+                            Identifier dimId = Identifier.parse(data.dimension);
+                            ResourceKey<Level> dimKey = ResourceKey.create(Registries.DIMENSION, dimId);
+                            ServerLevel lvl = server.getLevel(dimKey);
+                            if (lvl != null) {
+                                targetLevel = lvl;
+                            }
+                        } catch (Exception ignored) {}
+                    }
+                    targetLevel.getChunk(BlockPos.containing(data.x, data.y, data.z));
+                    AiBotPlayer bot = BotManager.spawnBotFromSave(targetLevel, data);
                     bot.setAliases(data.aliases, data.nickname);
                     if (data.anchorX != null && data.anchorY != null && data.anchorZ != null) {
                         bot.setGuardAnchor(new BlockPos(data.anchorX, data.anchorY, data.anchorZ), data.anchorRadius);

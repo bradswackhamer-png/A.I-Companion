@@ -51,16 +51,21 @@ public class AiCompanionMod {
 
     @SubscribeEvent
     public void onServerStarted(ServerStartedEvent event) {
+        BotManager.setServerStopping(false);
         BotPersistence.loadAll(event.getServer());
     }
 
     @SubscribeEvent
     public void onServerStopping(ServerStoppingEvent event) {
-        BotManager.despawnForShutdownWithoutWipingSave(event.getServer());
+        BotManager.setServerStopping(true);
+        BotPersistence.saveAll(event.getServer());
     }
 
     @SubscribeEvent
     public void onLevelSave(LevelEvent.Save event) {
+        if (BotManager.isServerStopping()) {
+            return;
+        }
         if (event.getLevel() instanceof ServerLevel serverLevel && serverLevel.dimension() == Level.OVERWORLD) {
             BotPersistence.saveAll(serverLevel.getServer());
         }
