@@ -60,10 +60,14 @@ public class AreaManager {
     }
 
     public static synchronized boolean saveActiveSelection(ServerPlayer player, String name, String type) {
-        return saveActiveSelection(player, name, type, -1);
+        return saveActiveSelection(player, name, type, null, null);
     }
 
-    public static synchronized boolean saveActiveSelection(ServerPlayer player, String name, String type, int height) {
+    public static synchronized boolean saveActiveSelection(ServerPlayer player, String name, String type, int deltaY) {
+        return saveActiveSelection(player, name, type, Integer.valueOf(deltaY), null);
+    }
+
+    public static synchronized boolean saveActiveSelection(ServerPlayer player, String name, String type, Integer y1, Integer y2) {
         List<BlockPos> points = ACTIVE_SELECTIONS.get(player.getUUID());
         if (points == null || points.size() < 2) {
             player.sendSystemMessage(Component.literal("§c[Surveyor Wand] You need at least 2 corner points to form an area! Right-click blocks to place corners.")
@@ -101,31 +105,31 @@ public class AreaManager {
             }
         }
 
-        boolean cubed = false;
-        if (height > 0) {
-            maxY = minY + height - 1;
-            cubed = true;
-        } else if (points.size() == 2 && maxY > minY) {
-            cubed = true;
-        } else {
-            // Standard height buffer for open 2D zones
-            minY = Math.max(player.level().getMinY(), minY - 10);
-            maxY = Math.min(player.level().getMaxY(), maxY + 40);
-        }
-
         String dim = player.level().dimension().identifier().toString();
         SavedArea area = new SavedArea(name, type, dim, minY, maxY, flatPoints);
-        area.isCubed = cubed;
+
+        if (y1 != null && y2 != null) {
+            area.setCubedRange(y1, y2);
+        } else if (y1 != null) {
+            area.setCubedHeight(y1);
+        } else if (points.size() == 2 && maxY > minY) {
+            area.isCubed = true;
+        } else {
+            // Standard height buffer for open 2D zones
+            area.minY = Math.max(player.level().getMinY(), minY - 10);
+            area.maxY = Math.min(player.level().getMaxY(), maxY + 40);
+            area.isCubed = false;
+        }
 
         BotPersistence.saveArea(area);
         BotPersistence.saveAll(player.level().getServer());
 
         ACTIVE_SELECTIONS.remove(player.getUUID());
 
-        if (cubed) {
+        if (area.isCubed) {
             area.spawnCubeParticles(player.level(), ParticleTypes.ELECTRIC_SPARK);
-            player.sendSystemMessage(Component.literal("§a★ Cubed Area '§f" + area.name + "§a' (Height: §e" + area.getHeight()
-                    + "§a blocks, ~" + area.getVolume() + " m³ volume) saved to bot catalog!")
+            player.sendSystemMessage(Component.literal("§a★ Cubed Area '§f" + area.name + "§a' (Y: §e" + area.minY + " to " + area.maxY
+                    + "§a, Height: §e" + area.getHeight() + "§a blocks, ~" + area.getVolume() + " m³ volume) saved to bot catalog!")
                     .withStyle(ChatFormatting.GOLD));
         } else {
             area.spawnPerimeterParticles(player.level(), ParticleTypes.HAPPY_VILLAGER);

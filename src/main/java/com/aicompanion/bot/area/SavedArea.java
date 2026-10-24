@@ -190,10 +190,34 @@ public class SavedArea {
         return (int) (getAreaSqMeters() * getHeight());
     }
 
-    public void setCubedHeight(int height) {
+    public void setCubedHeight(int deltaY) {
         int baseY = getBaseY();
-        this.minY = baseY;
-        this.maxY = baseY + Math.max(1, height) - 1;
+        if (deltaY < 0) {
+            this.minY = baseY + deltaY;
+            this.maxY = baseY;
+        } else if (deltaY == 0) {
+            this.minY = baseY;
+            this.maxY = baseY;
+        } else {
+            this.minY = baseY;
+            this.maxY = baseY + deltaY - 1;
+        }
+        this.isCubed = true;
+    }
+
+    public void setCubedRange(int y1, int y2) {
+        int baseY = getBaseY();
+        int low = Math.min(y1, y2);
+        int high = Math.max(y1, y2);
+
+        // If the user entered relative offsets (e.g. -20 0 or 0 15) while standing far from Y=0
+        if ((baseY < low - 16 || baseY > high + 16) && low <= 0 && high >= 0 && low >= -128 && high <= 128) {
+            this.minY = baseY + low;
+            this.maxY = baseY + high;
+        } else {
+            this.minY = low;
+            this.maxY = high;
+        }
         this.isCubed = true;
     }
 

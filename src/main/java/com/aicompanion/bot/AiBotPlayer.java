@@ -3662,9 +3662,11 @@ public class AiBotPlayer extends ServerPlayer {
         HouseBlueprint.VoxelStep step = this.activeHouseQueue.remove(0);
         this.actionProgressCount++;
 
-        // Walk close to the target block if too far (> 5 blocks away)
-        if (this.distanceToSqr(Vec3.atCenterOf(step.pos())) > 25.0) {
-            moveTowards(Vec3.atCenterOf(step.pos()), false);
+        // Walk close horizontally to the target block if too far (> 5 blocks away horizontally)
+        double hdx = (step.pos().getX() + 0.5) - this.getX();
+        double hdz = (step.pos().getZ() + 0.5) - this.getZ();
+        if (hdx * hdx + hdz * hdz > 25.0) {
+            moveTowards(new Vec3(step.pos().getX() + 0.5, this.getY(), step.pos().getZ() + 0.5), false);
             this.activeHouseQueue.add(0, step);
             this.actionProgressCount--;
             return false;
@@ -3676,6 +3678,9 @@ public class AiBotPlayer extends ServerPlayer {
             if (!this.level().getBlockState(step.pos()).isAir()) {
                 this.level().destroyBlock(step.pos(), false, this);
                 broadcastSwing();
+                this.houseBuildCooldown = 2;
+            } else {
+                this.houseBuildCooldown = 0;
             }
         } else {
             this.level().setBlockAndUpdate(step.pos(), step.state());
@@ -3683,9 +3688,9 @@ public class AiBotPlayer extends ServerPlayer {
             this.level().playSound(null, step.pos(),
                     step.state().getSoundType().getPlaceSound(),
                     SoundSource.BLOCKS, 1.0f, 1.0f);
+            this.houseBuildCooldown = 2;
         }
 
-        this.houseBuildCooldown = 2;
         return false;
     }
 

@@ -119,17 +119,42 @@ public class BotCommands {
                         .then(Commands.literal("height")
                                 .then(Commands.argument("areaName", StringArgumentType.word())
                                         .suggests(AREA_SUGGESTIONS)
-                                        .then(Commands.argument("height", IntegerArgumentType.integer(1, 256))
+                                        .then(Commands.argument("minY", IntegerArgumentType.integer(-384, 384))
                                                 .executes(ctx -> setAreaHeightCmd(ctx,
                                                         StringArgumentType.getString(ctx, "areaName"),
-                                                        IntegerArgumentType.getInteger(ctx, "height"))))))
+                                                        IntegerArgumentType.getInteger(ctx, "minY"),
+                                                        null))
+                                                .then(Commands.argument("maxY", IntegerArgumentType.integer(-384, 384))
+                                                        .executes(ctx -> setAreaHeightCmd(ctx,
+                                                                StringArgumentType.getString(ctx, "areaName"),
+                                                                IntegerArgumentType.getInteger(ctx, "minY"),
+                                                                IntegerArgumentType.getInteger(ctx, "maxY")))))))
+                        .then(Commands.literal("heigh")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .suggests(AREA_SUGGESTIONS)
+                                        .then(Commands.argument("minY", IntegerArgumentType.integer(-384, 384))
+                                                .executes(ctx -> setAreaHeightCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "areaName"),
+                                                        IntegerArgumentType.getInteger(ctx, "minY"),
+                                                        null))
+                                                .then(Commands.argument("maxY", IntegerArgumentType.integer(-384, 384))
+                                                        .executes(ctx -> setAreaHeightCmd(ctx,
+                                                                StringArgumentType.getString(ctx, "areaName"),
+                                                                IntegerArgumentType.getInteger(ctx, "minY"),
+                                                                IntegerArgumentType.getInteger(ctx, "maxY")))))))
                         .then(Commands.literal("cube")
                                 .then(Commands.argument("areaName", StringArgumentType.word())
                                         .suggests(AREA_SUGGESTIONS)
-                                        .then(Commands.argument("height", IntegerArgumentType.integer(1, 256))
+                                        .then(Commands.argument("minY", IntegerArgumentType.integer(-384, 384))
                                                 .executes(ctx -> setAreaHeightCmd(ctx,
                                                         StringArgumentType.getString(ctx, "areaName"),
-                                                        IntegerArgumentType.getInteger(ctx, "height"))))))
+                                                        IntegerArgumentType.getInteger(ctx, "minY"),
+                                                        null))
+                                                .then(Commands.argument("maxY", IntegerArgumentType.integer(-384, 384))
+                                                        .executes(ctx -> setAreaHeightCmd(ctx,
+                                                                StringArgumentType.getString(ctx, "areaName"),
+                                                                IntegerArgumentType.getInteger(ctx, "minY"),
+                                                                IntegerArgumentType.getInteger(ctx, "maxY")))))))
                         .then(Commands.literal("assign")
                                 .then(Commands.argument("botName", StringArgumentType.word())
                                         .suggests(BOT_NAME_SUGGESTIONS)
@@ -300,25 +325,29 @@ public class BotCommands {
         return 1;
     }
 
-    private static int setAreaHeightCmd(CommandContext<CommandSourceStack> ctx, String areaName, int height) {
+    private static int setAreaHeightCmd(CommandContext<CommandSourceStack> ctx, String areaName, int y1, Integer y2) {
         CommandSourceStack source = ctx.getSource();
         ServerPlayer player = source.getPlayer();
         var area = BotPersistence.getArea(areaName);
         if (area == null) {
             if (player != null && !com.aicompanion.bot.area.AreaManager.getSelectedPoints(player.getUUID()).isEmpty()) {
-                boolean ok = com.aicompanion.bot.area.AreaManager.saveActiveSelection(player, areaName, "COMPOUND", height);
+                boolean ok = com.aicompanion.bot.area.AreaManager.saveActiveSelection(player, areaName, "COMPOUND", y1, y2);
                 return ok ? 1 : 0;
             }
             source.sendFailure(Component.literal("Area '" + areaName + "' not found. Right-click corners with the Surveyor Wand to select an area first, or specify an existing area name."));
             return 0;
         }
 
-        area.setCubedHeight(height);
+        if (y2 != null) {
+            area.setCubedRange(y1, y2);
+        } else {
+            area.setCubedHeight(y1);
+        }
         BotPersistence.saveArea(area);
         BotPersistence.saveAll(source.getServer());
         area.spawnCubeParticles(source.getLevel(), net.minecraft.core.particles.ParticleTypes.ELECTRIC_SPARK);
 
-        source.sendSuccess(() -> Component.literal("§a★ Area '§f" + area.name + "§a' converted to 3D Cuboid! Height: §e" + height + "§a blocks (Y: " + area.minY + " to " + area.maxY + ", Volume: ~" + area.getVolume() + " m³)")
+        source.sendSuccess(() -> Component.literal("§a★ Area '§f" + area.name + "§a' converted to 3D Cuboid! Y-Range: §e" + area.minY + " to " + area.maxY + " §a(Height: §e" + area.getHeight() + "§a blocks, Volume: ~" + area.getVolume() + " m³)")
                 .withStyle(ChatFormatting.GOLD), true);
         return 1;
     }
@@ -328,7 +357,7 @@ public class BotCommands {
         ServerPlayer player = source.getPlayer();
         var area = BotPersistence.getArea(areaName);
         if (area == null) {
-            source.sendFailure(Component.literal("Area '" + areaName + "' not found. Define it with your Surveyor Wand and set its height with /bot area height " + areaName + " <height>."));
+            source.sendFailure(Component.literal("Area '" + areaName + "' not found. Define it with your Surveyor Wand and set its height with /bot area height " + areaName + " <minY> <maxY>."));
             return 0;
         }
 
@@ -341,8 +370,8 @@ public class BotCommands {
         String author = player != null ? player.getName().getString() : "Server";
 
         CustomBlueprint bp = CustomBlueprint.capture(source.getLevel(), area, blueprintName, facing, author);
-        if (bp.totalBlocks == 0) {
-            source.sendFailure(Component.literal("No blocks found inside area '" + areaName + "'. Make sure the area encloses blocks and has a valid height!"));
+        if (bp.totalBlocks == 0 && bp.groundOffsetY >= 0) {
+            source.sendFailure(Component.literal("No blocks found inside area '" + areaName + "'. Make sure the area encloses blocks and has a valid Y range!"));
             return 0;
         }
 

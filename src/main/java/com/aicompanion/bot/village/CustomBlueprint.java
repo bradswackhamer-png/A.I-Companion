@@ -27,6 +27,7 @@ public class CustomBlueprint {
     public int sizeX;
     public int sizeY;
     public int sizeZ;
+    public int groundOffsetY = 0; // Negative when blueprint is a subterranean pit/bunker below ground level
     public int totalBlocks;
     public String capturedFacing = "NORTH";
     public String author = "Player";
@@ -76,6 +77,7 @@ public class CustomBlueprint {
         bp.sizeX = Math.max(1, maxX - minX + 1);
         bp.sizeY = Math.max(1, maxY - minY + 1);
         bp.sizeZ = Math.max(1, maxZ - minZ + 1);
+        bp.groundOffsetY = minY - area.getBaseY();
 
         BlockPos.MutableBlockPos cursor = new BlockPos.MutableBlockPos();
         List<VoxelRecord> list = new ArrayList<>();
@@ -147,11 +149,11 @@ public class CustomBlueprint {
         int boundW = (rotation == Rotation.CLOCKWISE_90 || rotation == Rotation.COUNTERCLOCKWISE_90) ? sizeZ : sizeX;
         int boundD = (rotation == Rotation.CLOCKWISE_90 || rotation == Rotation.COUNTERCLOCKWISE_90) ? sizeX : sizeZ;
 
-        // Anchor origin: place centered horizontally in front of the bot
-        BlockPos baseAnchor = origin.relative(front, 2).relative(right, -boundW / 2);
+        // Anchor origin: place centered horizontally in front of the bot, applying subterranean groundOffsetY if it's a pit/basement
+        BlockPos baseAnchor = origin.relative(front, 2).relative(right, -boundW / 2).above(groundOffsetY);
 
-        // First pass: Clear any obstructions/foliage within the build volume
-        for (int y = 0; y <= sizeY; y++) {
+        // First pass: Excavate / clear obstructions from top to bottom so subterranean pits are dug from the surface down
+        for (int y = sizeY - 1; y >= 0; y--) {
             for (int w = 0; w < boundW; w++) {
                 for (int d = 0; d < boundD; d++) {
                     BlockPos p = baseAnchor.relative(right, w).relative(front, d).above(y);
