@@ -304,13 +304,19 @@ public class BotManager {
             return;
         }
         String speakerName = speaker != null ? speaker.getPlainTextName() : "Admin";
+
+        if (bot.handleConductorChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
         boolean learnedNickname = bot.extractAndLearnNicknameFromPrompt(requestText);
         boolean learnedAnchor = bot.extractAndLearnAnchorFromPrompt(requestText);
         boolean learnedFarm = bot.extractAndLearnFarmConfigFromPrompt(requestText, speaker);
         boolean learnedHusbandry = bot.extractAndLearnHusbandryConfigFromPrompt(requestText, speaker);
-        boolean learnedConductor = bot.extractAndLearnConductorConfigFromPrompt(requestText, speaker);
         GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-        if (learnedNickname || learnedAnchor || learnedFarm || learnedHusbandry || learnedConductor) {
+        if (learnedNickname || learnedAnchor || learnedFarm || learnedHusbandry) {
             BotPersistence.saveAll(server);
         }
 

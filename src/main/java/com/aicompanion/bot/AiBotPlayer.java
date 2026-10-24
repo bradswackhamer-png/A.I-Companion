@@ -147,6 +147,10 @@ public class AiBotPlayer extends ServerPlayer {
     private int conductorState = 0;
     private long conductorLastWhistleTime = 0;
     private int conductorArrivedTicks = 0;
+    private int conductorTileTarget = 0;
+    private @Nullable Vec3 conductorMoveStartPos = null;
+    private boolean conductorFollowingPlayer = false;
+    private @Nullable ServerPlayer conductorTargetPlayer = null;
 
     // Tractor configuration
     private boolean tractorMode = false;
@@ -439,58 +443,249 @@ public class AiBotPlayer extends ServerPlayer {
         return true;
     }
 
-    public synchronized boolean extractAndLearnConductorConfigFromPrompt(String text, @Nullable ServerPlayer speaker) {
+    public synchronized boolean shouldReverseTowards(Entity loco, Vec3 targetPos) {
+        net.minecraft.core.Direction facing = TrainCompat.getFacing(loco);
+        double dx = targetPos.x - loco.getX();
+        double dz = targetPos.z - loco.getZ();
+        double dot = dx * facing.getStepX() + dz * facing.getStepZ();
+        return dot < 0;
+    }
+
+    public synchronized boolean handleConductorChatCommand(String text, @Nullable ServerPlayer speaker) {
         if (text == null || text.isBlank()) return false;
-        String lower = text.toLowerCase(Locale.ROOT);
-        boolean mentionsTrain = lower.contains("train") || lower.contains("locomotive") || lower.contains("conductor")
-                || lower.contains("freight") || lower.contains("cargo cart") || lower.contains("caboose");
-        if (!mentionsTrain) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
 
-        String dest = "";
-        String returnStation = "";
-        String freight = "";
-        int count = 64;
+        Entity loco = TrainCompat.getRiddenLocomotive(this);
+        boolean isConductorRole = this.botRole.toLowerCase().contains("conductor") || this.botRole.toLowerCase().contains("train");
+        boolean mentionsTrain = lower.contains("train") || lower.contains("locomotive") || lower.contains("rail")
+                || lower.contains("railway") || lower.contains("conductor");
 
+        // If not riding a train, not a conductor, and not talking about trains/conductors, this handler does not apply!
+        if (loco == null && !isConductorRole && !mentionsTrain) {
+            return false;
+        }
+
+        // 1. STOP / CANCEL / HALT / BRAKE
+        if (lower.equals("stop") || lower.contains("stop the train") || lower.contains("stop train")
+                || lower.contains("cancel that") || lower.contains("cancel") || lower.contains("halt")
+                || lower.contains("brake") || lower.contains("whoa") || lower.contains("hold on")
+                || lower.equals("stay") || lower.contains("stand still")) {
+            this.clearActions();
+            if (loco != null) {
+                TrainCompat.stopTrain(loco, this);
+                sayInChat("Train stopped. All locomotive orders cleared!");
+            } else {
+                stopMovement();
+                sayInChat("Orders cleared! Standing by.");
+            }
+            return true;
+        }
+
+        // 2. DISMOUNT / GET OUT / LEAVE TRAIN
+        if (lower.contains("get out") || lower.contains("dismount") || lower.contains("exit the train") || lower.contains("leave the train")) {
+            if (loco != null) {
+                TrainCompat.stopTrain(loco, this);
+                TrainCompat.dismountLocomotive(this);
+                sayInChat("Dismounted from the train!");
+            } else {
+                sayInChat("I'm not in a train right now.");
+            }
+            return true;
+        }
+
+        // 3. COME HERE / COME TO ME / DRIVE TO ME (Player along rail or nearby)
+        if (lower.contains("come here") || lower.contains("come to me") || lower.contains("drive to me")
+                || lower.contains("drive here") || lower.contains("bring the train to me") || lower.contains("bring train to me")
+                || lower.contains("follow me")) {
+            if (speaker != null) {
+                if (loco != null) {
+                    double distSq = loco.distanceToSqr(speaker);
+                    if (distSq <= 10000.0) {
+                        this.conductorFollowingPlayer = true;
+                        this.conductorTargetPlayer = speaker;
+                        this.conductorDestStation = "";
+                        this.conductorTileTarget = 0;
+                        boolean reverse = shouldReverseTowards(loco, speaker.position());
+                        TrainCompat.setReversed(loco, reverse);
+                        TrainCompat.refuelLocomotive(this, loco);
+                        TrainCompat.blowHorn(loco, this);
+                        TrainCompat.startTrain(loco, this, 2, reverse);
+                        sayInChat("Rolling down the rails to you right now!");
+                        return true;
+                    } else {
+                        TrainCompat.stopTrain(loco, this);
+                        TrainCompat.dismountLocomotive(this);
+                        sayInChat("You're a bit far from the rail line! Dismounting to come to you on foot.");
+                        moveTowards(speaker.position(), true);
+                        return true;
+                    }
+                } else {
+                    moveTowards(speaker.position(), true);
+                    sayInChat("Coming right over to you!");
+                    return true;
+                }
+            }
+        }
+
+        // Check if assigning conductor role
+        if (lower.contains("conductor") || lower.contains("train driver") || lower.contains("engineer")) {
+            this.botRole = "conductor";
+            sayInChat("All aboard! I'm now assigned as Conductor. Say 'move forward', 'ahead 4 tiles', 'reverse', or 'drive to <station>'!");
+            return true;
+        }
+
+        // Check if nearby locomotive can be mounted
+        if (loco == null) {
+            Entity nearby = TrainCompat.findNearbyLocomotive(this.level(), this.position(), 24.0);
+            if (nearby != null && (isConductorRole || lower.contains("train") || lower.contains("locomotive") || lower.contains("ahead") || lower.contains("forward") || lower.contains("reverse"))) {
+                TrainCompat.mountLocomotive(this, nearby);
+                loco = nearby;
+            }
+        }
+
+        if (loco == null && !isConductorRole && !lower.contains("train") && !lower.contains("locomotive")) {
+            return false;
+        }
+
+        // 4. FORWARD / AHEAD [N TILES/BLOCKS]
+        java.util.regex.Matcher fwdMatcher = java.util.regex.Pattern.compile(
+                "(?:move\\s+)?(?:ahead|forward|drive\\s+forward|go\\s+ahead)\\s*(?:(\\d+)\\s*(?:tiles?|blocks?|meters?|m)?)?",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+        if (fwdMatcher.find() && !lower.contains("to ") && !lower.contains("towards ")) {
+            int tiles = 0;
+            String countStr = fwdMatcher.group(1);
+            if (countStr != null && !countStr.isBlank()) {
+                try { tiles = Integer.parseInt(countStr.trim()); } catch (Exception ignored) {}
+            }
+            if (loco != null) {
+                this.conductorDestStation = "";
+                this.conductorFollowingPlayer = false;
+                this.conductorTileTarget = tiles;
+                this.conductorMoveStartPos = loco.position();
+                TrainCompat.setReversed(loco, false);
+                TrainCompat.refuelLocomotive(this, loco);
+                TrainCompat.startTrain(loco, this, 2, false);
+                if (tiles > 0) {
+                    sayInChat("Moving ahead " + tiles + " blocks!");
+                } else {
+                    sayInChat("Moving ahead down the rails.");
+                }
+                return true;
+            }
+        }
+
+        // 5. REVERSE / BACK / BACKWARD [N TILES/BLOCKS]
+        java.util.regex.Matcher revMatcher = java.util.regex.Pattern.compile(
+                "(?:move\\s+)?(?:back(?:ward)?|back\\s+up|reverse)\\s*(?:(\\d+)\\s*(?:tiles?|blocks?|meters?|m)?)?",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+        if (revMatcher.find() && !lower.contains("bring back") && !lower.contains("take it back")) {
+            int tiles = 0;
+            String countStr = revMatcher.group(1);
+            if (countStr != null && !countStr.isBlank()) {
+                try { tiles = Integer.parseInt(countStr.trim()); } catch (Exception ignored) {}
+            }
+            if (loco != null) {
+                this.conductorDestStation = "";
+                this.conductorFollowingPlayer = false;
+                this.conductorTileTarget = tiles;
+                this.conductorMoveStartPos = loco.position();
+                TrainCompat.setReversed(loco, true);
+                TrainCompat.refuelLocomotive(this, loco);
+                TrainCompat.startTrain(loco, this, 2, true);
+                if (tiles > 0) {
+                    sayInChat("Reversing " + tiles + " blocks!");
+                } else {
+                    sayInChat("Reversing train down the rails.");
+                }
+                return true;
+            }
+        }
+
+        // 6. BLOW HORN / WHISTLE
+        if (lower.contains("whistle") || lower.contains("horn") || lower.contains("honk")) {
+            if (loco != null) {
+                TrainCompat.blowHorn(loco, this);
+                sayInChat("Choo choo!");
+                return true;
+            }
+        }
+
+        // 7. SPEED CONTROL
+        if (lower.contains("faster") || lower.contains("speed up")) {
+            if (loco != null) {
+                int spd = TrainCompat.getSpeedLevel(loco);
+                TrainCompat.setSpeedLevel(loco, Math.min(5, spd + 1));
+                sayInChat("Notching up throttle! Speed level " + Math.min(5, spd + 1));
+                return true;
+            }
+        }
+        if (lower.contains("slower") || lower.contains("slow down")) {
+            if (loco != null) {
+                int spd = TrainCompat.getSpeedLevel(loco);
+                TrainCompat.setSpeedLevel(loco, Math.max(1, spd - 1));
+                sayInChat("Slowing down! Speed level " + Math.max(1, spd - 1));
+                return true;
+            }
+        }
+
+        // 8. DRIVE TO STATION / WAYPOINT
         java.util.regex.Matcher destMatcher = java.util.regex.Pattern.compile(
                 "(?:drive|take|run|conduct|go)\\s+(?:the\\s+)?(?:train|locomotive)?\\s*(?:to|towards)\\s+([a-zA-Z0-9_-]+)",
                 java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
         if (destMatcher.find()) {
-            dest = destMatcher.group(1).trim();
-        }
+            String candDest = destMatcher.group(1).trim();
+            Set<String> nonStations = Set.of("ahead", "forward", "back", "reverse", "stop", "here", "there", "me", "now", "it", "fast", "slow");
+            if (!nonStations.contains(candDest.toLowerCase())) {
+                String returnStation = "";
+                String freight = "all";
+                int count = 64;
 
-        java.util.regex.Matcher returnMatcher = java.util.regex.Pattern.compile(
-                "(?:return|bring\\s+back|take\\s+it\\s+back|come\\s+back)\\s+(?:to\\s+)?([a-zA-Z0-9_-]+)",
-                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
-        if (returnMatcher.find()) {
-            returnStation = returnMatcher.group(1).trim();
-        }
+                java.util.regex.Matcher retM = java.util.regex.Pattern.compile(
+                        "(?:return|bring\\s+back|take\\s+it\\s+back|come\\s+back)\\s+(?:to\\s+)?([a-zA-Z0-9_-]+)",
+                        java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+                if (retM.find()) {
+                    returnStation = retM.group(1).trim();
+                }
 
-        java.util.regex.Matcher freightMatcher = java.util.regex.Pattern.compile(
-                "(?:bring|pick\\s*up|load|haul|get|fetch|transport)\\s+(?:back\\s+)?(?:some\\s+)?(?:(\\d+)\\s+)?([a-zA-Z0-9_-]+)",
-                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
-        if (freightMatcher.find()) {
-            String countStr = freightMatcher.group(1);
-            if (countStr != null) {
-                try { count = Integer.parseInt(countStr); } catch (Exception ignored) {}
+                java.util.regex.Matcher frM = java.util.regex.Pattern.compile(
+                        "(?:bring|pick\\s*up|load|haul|get|fetch|transport)\\s+(?:back\\s+)?(?:some\\s+)?(?:(\\d+)\\s+)?([a-zA-Z0-9_-]+)",
+                        java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
+                if (frM.find()) {
+                    String countStr = frM.group(1);
+                    if (countStr != null) {
+                        try { count = Integer.parseInt(countStr); } catch (Exception ignored) {}
+                    }
+                    String itemStr = frM.group(2).trim();
+                    if (!itemStr.equalsIgnoreCase("freight") && !itemStr.equalsIgnoreCase("cargo") && !itemStr.equalsIgnoreCase("it")) {
+                        freight = itemStr;
+                    }
+                }
+
+                BotPersistence.SavedLocation savedLoc = BotPersistence.getLocation(candDest);
+                if (savedLoc == null) {
+                    sayInChat("I don't have a saved station named '" + candDest + "'. Stand at the station platform and say 'remember this spot as " + candDest + "' first!");
+                    this.conductorDestStation = "";
+                    return true;
+                }
+
+                this.botRole = "conductor";
+                setConductorConfig(candDest, returnStation, freight, count, false);
+                this.conductorTileTarget = 0;
+                this.conductorFollowingPlayer = false;
+
+                if (loco != null) {
+                    boolean reverse = shouldReverseTowards(loco, new Vec3(savedLoc.x + 0.5, savedLoc.y + 0.5, savedLoc.z + 0.5));
+                    TrainCompat.setReversed(loco, reverse);
+                    TrainCompat.refuelLocomotive(this, loco);
+                    TrainCompat.blowHorn(loco, this);
+                    TrainCompat.startTrain(loco, this, 3, reverse);
+                }
+                String retDesc = returnStation.isBlank() ? "" : " and return to '" + returnStation + "'";
+                sayInChat("Departing for station '" + candDest + "'" + retDesc + "! Throttle open.");
+                return true;
             }
-            freight = freightMatcher.group(2).trim();
-            if (freight.equalsIgnoreCase("freight") || freight.equalsIgnoreCase("cargo") || freight.equalsIgnoreCase("it")) {
-                freight = "all";
-            }
         }
 
-        if (!dest.isBlank()) {
-            this.botRole = "conductor";
-            setConductorConfig(dest, returnStation, freight, count, false);
-            String returnDesc = returnStation.isBlank() ? "" : " and return to '" + returnStation + "'";
-            String freightDesc = freight.isBlank() ? "" : " to transport " + (freight.equals("all") ? "freight" : freight);
-            sayInChat("Conductor duty set! Heading to drive the train to '" + dest + "'" + freightDesc + returnDesc + ".");
-            return true;
-        } else if (lower.contains("conductor") || lower.contains("train driver")) {
-            this.botRole = "conductor";
-            sayInChat("All aboard! I'm now assigned as Conductor. Tell me where to drive the train (e.g. 'James, drive the train to Town and bring back iron')!");
-            return true;
-        }
         return false;
     }
 
@@ -705,6 +900,17 @@ public class AiBotPlayer extends ServerPlayer {
         this.actionProgressCount = 0;
         this.actionTicks = 0;
         this.miningTicks = 0;
+        this.conductorDestStation = "";
+        this.conductorReturnStation = "";
+        this.conductorTileTarget = 0;
+        this.conductorMoveStartPos = null;
+        this.conductorFollowingPlayer = false;
+        this.conductorTargetPlayer = null;
+        this.conductorIsReturning = false;
+        Entity loco = TrainCompat.getRiddenLocomotive(this);
+        if (loco != null) {
+            TrainCompat.stopTrain(loco, this);
+        }
         this.stopMovement();
     }
 
@@ -2183,27 +2389,71 @@ public class AiBotPlayer extends ServerPlayer {
         // 1. Check if currently riding a locomotive
         Entity loco = TrainCompat.getRiddenLocomotive(this);
         if (loco == null) {
-            Entity nearbyLoco = TrainCompat.findNearbyLocomotive(this.level(), this.position(), 32.0);
-            if (nearbyLoco != null) {
-                double distSq = this.distanceToSqr(nearbyLoco);
-                if (distSq > 9.0) {
-                    moveTowards(nearbyLoco.position(), false);
+            // If we have an active train command/target, find nearby locomotive to board
+            if (this.conductorFollowingPlayer || !this.conductorDestStation.isBlank() || this.conductorTileTarget > 0) {
+                Entity nearbyLoco = TrainCompat.findNearbyLocomotive(this.level(), this.position(), 32.0);
+                if (nearbyLoco != null) {
+                    double distSq = this.distanceToSqr(nearbyLoco);
+                    if (distSq > 9.0) {
+                        moveTowards(nearbyLoco.position(), false);
+                    } else {
+                        stopMovement();
+                        TrainCompat.mountLocomotive(this, nearbyLoco);
+                        sayInChat("Boarded the locomotive! Conductor ready on the rails.");
+                    }
                 } else {
                     stopMovement();
-                    TrainCompat.mountLocomotive(this, nearbyLoco);
-                    sayInChat("Boarded the locomotive! Conductor ready on the rails.");
                 }
-            } else {
-                stopMovement();
             }
             return;
         }
 
-        // 2. We are aboard the locomotive!
+        // 2. We are aboard the locomotive! Maintain fuel
         if (this.tickCount % 40 == 0) {
             TrainCompat.refuelLocomotive(this, loco);
         }
 
+        // Case A: Following player along rails ("come here" / "come to me")
+        if (this.conductorFollowingPlayer && this.conductorTargetPlayer != null) {
+            ServerPlayer target = this.conductorTargetPlayer;
+            double distSq = loco.distanceToSqr(target);
+            if (distSq <= 16.0) { // within 4 blocks
+                TrainCompat.stopTrain(loco, this);
+                TrainCompat.blowHorn(loco, this);
+                this.conductorFollowingPlayer = false;
+                this.conductorTargetPlayer = null;
+                sayInChat("Arrived right in front of you!");
+                return;
+            }
+            if (!TrainCompat.isTrainRunning(loco)) {
+                boolean reverse = shouldReverseTowards(loco, target.position());
+                TrainCompat.setReversed(loco, reverse);
+                TrainCompat.refuelLocomotive(this, loco);
+                TrainCompat.startTrain(loco, this, 2, reverse);
+            }
+            return;
+        }
+
+        // Case B: Moving specific tile/block distance (e.g. "move ahead 4 tiles", "back 5 blocks")
+        if (this.conductorTileTarget > 0 && this.conductorMoveStartPos != null) {
+            double distTraveled = loco.position().distanceTo(this.conductorMoveStartPos);
+            if (distTraveled >= this.conductorTileTarget - 0.2) {
+                TrainCompat.stopTrain(loco, this);
+                TrainCompat.blowHorn(loco, this);
+                int target = this.conductorTileTarget;
+                this.conductorTileTarget = 0;
+                this.conductorMoveStartPos = null;
+                sayInChat("Finished moving " + target + " blocks!");
+                return;
+            }
+            if (!TrainCompat.isTrainRunning(loco)) {
+                TrainCompat.refuelLocomotive(this, loco);
+                TrainCompat.startTrain(loco, this, 2, TrainCompat.isReversed(loco));
+            }
+            return;
+        }
+
+        // Case C: Traveling to destination station
         String targetStationName = this.conductorIsReturning ? this.conductorReturnStation : this.conductorDestStation;
         if (targetStationName.isBlank()) {
             return;
@@ -2211,9 +2461,12 @@ public class AiBotPlayer extends ServerPlayer {
 
         BotPersistence.SavedLocation station = BotPersistence.getLocation(targetStationName);
         if (station == null) {
-            if (this.tickCount % 120 == 0) {
-                sayInChat("I don't have a saved station or waypoint named '" + targetStationName + "'. Stand at the station and say 'remember this spot as " + targetStationName + "' first!");
-            }
+            // Unknown station: notify ONCE and clear so it never spams!
+            sayInChat("Station '" + targetStationName + "' is unknown. Stand at the station platform and say 'remember this spot as " + targetStationName + "' first.");
+            this.conductorDestStation = "";
+            this.conductorReturnStation = "";
+            this.conductorIsReturning = false;
+            TrainCompat.stopTrain(loco, this);
             return;
         }
 
@@ -2223,7 +2476,7 @@ public class AiBotPlayer extends ServerPlayer {
         // Arrived at destination station (within 9 blocks)
         if (distToStationSq <= 81.0) {
             if (TrainCompat.isTrainRunning(loco)) {
-                TrainCompat.stopTrain(loco);
+                TrainCompat.stopTrain(loco, this);
                 TrainCompat.blowHorn(loco, this);
                 sayInChat("Arrived at " + (this.conductorIsReturning ? "return station '" + targetStationName + "'" : "station '" + targetStationName + "'") + "! Train stopped.");
                 this.conductorArrivedTicks = 0;
@@ -2243,7 +2496,8 @@ public class AiBotPlayer extends ServerPlayer {
                             int loaded = TrainCompat.transferFreightChestToTrain(chest, carts, this.conductorFreightItem, this.conductorFreightCount);
                             sayInChat("Loaded " + loaded + "x " + (this.conductorFreightItem.isBlank() ? "freight" : this.conductorFreightItem) + " from station chest. Preparing return trip to '" + this.conductorReturnStation + "'!");
                             this.conductorIsReturning = true;
-                            TrainCompat.toggleReversed(loco);
+                            boolean rev = shouldReverseTowards(loco, stationVec);
+                            TrainCompat.setReversed(loco, !rev);
                         }
                     } else {
                         int unloaded = TrainCompat.transferFreightTrainToChest(carts, chest, this.conductorFreightItem, this.conductorFreightCount);
@@ -2252,6 +2506,11 @@ public class AiBotPlayer extends ServerPlayer {
                         this.conductorReturnStation = "";
                         this.conductorIsReturning = false;
                     }
+                } else {
+                    sayInChat("No station chest found at '" + targetStationName + "'. Route complete!");
+                    this.conductorDestStation = "";
+                    this.conductorReturnStation = "";
+                    this.conductorIsReturning = false;
                 }
             }
             return;
@@ -2259,8 +2518,11 @@ public class AiBotPlayer extends ServerPlayer {
 
         // Underway towards destination
         if (!TrainCompat.isTrainRunning(loco)) {
+            boolean reverse = shouldReverseTowards(loco, stationVec);
+            TrainCompat.setReversed(loco, reverse);
             TrainCompat.blowHorn(loco, this);
-            TrainCompat.startTrain(loco, 3, TrainCompat.isReversed(loco));
+            TrainCompat.refuelLocomotive(this, loco);
+            TrainCompat.startTrain(loco, this, 3, reverse);
             sayInChat("All aboard! Train departing for '" + targetStationName + "'.");
             this.conductorLastWhistleTime = this.tickCount;
         } else {

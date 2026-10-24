@@ -2,10 +2,12 @@ package com.aicompanion.bot.compat;
 
 import com.aicompanion.bot.AiBotPlayer;
 import com.mojang.logging.LogUtils;
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.Container;
@@ -36,12 +38,19 @@ public class TrainCompat {
 
     private static Method SET_RUNNING_METHOD = null;
     private static Method IS_RUNNING_METHOD = null;
+    private static Method SET_ACTIVE_METHOD = null;
     private static Method SET_SPEED_METHOD = null;
+    private static Method GET_SPEED_METHOD = null;
     private static Method SET_REVERSED_METHOD = null;
     private static Method IS_REVERSED_METHOD = null;
     private static Method TRY_REFUEL_METHOD = null;
     private static Method BLOW_HORN_METHOD = null;
     private static Method GET_CONNECTED_CARTS_METHOD = null;
+    private static Method GET_FACING_METHOD = null;
+    private static Method GET_TRAVEL_DIRECTION_METHOD = null;
+    private static Method HANDLE_HOTKEY_METHOD = null;
+    private static Field FIELD_FUEL = null;
+    private static Field FIELD_FUEL_TOTAL = null;
 
     static {
         boolean avail = false;
@@ -55,6 +64,20 @@ public class TrainCompat {
             TRY_REFUEL_METHOD = BASIC_LOCO_CLASS.getMethod("tryRefuel");
             BLOW_HORN_METHOD = BASIC_LOCO_CLASS.getMethod("blowHorn", Player.class);
             GET_CONNECTED_CARTS_METHOD = BASIC_LOCO_CLASS.getMethod("getConnectedTrainCarts");
+
+            try { SET_ACTIVE_METHOD = BASIC_LOCO_CLASS.getMethod("setActive", boolean.class); } catch (Exception ignored) {}
+            try { GET_SPEED_METHOD = BASIC_LOCO_CLASS.getMethod("getSpeedLevel"); } catch (Exception ignored) {}
+            try { GET_FACING_METHOD = BASIC_LOCO_CLASS.getMethod("getFacing"); } catch (Exception ignored) {}
+            try { GET_TRAVEL_DIRECTION_METHOD = BASIC_LOCO_CLASS.getMethod("getTravelDirection"); } catch (Exception ignored) {}
+            try { HANDLE_HOTKEY_METHOD = BASIC_LOCO_CLASS.getMethod("handleHotkeyAction", Player.class, int.class); } catch (Exception ignored) {}
+            try {
+                FIELD_FUEL = BASIC_LOCO_CLASS.getDeclaredField("fuel");
+                FIELD_FUEL.setAccessible(true);
+            } catch (Exception ignored) {}
+            try {
+                FIELD_FUEL_TOTAL = BASIC_LOCO_CLASS.getDeclaredField("fuelTotal");
+                FIELD_FUEL_TOTAL.setAccessible(true);
+            } catch (Exception ignored) {}
 
             try {
                 DIESEL_LOCO_CLASS = Class.forName("com.example.miningtools.entity.DieselLocomotiveEntity");
@@ -143,17 +166,17 @@ public class TrainCompat {
     public static boolean refuelLocomotive(AiBotPlayer bot, Entity loco) {
         if (!AVAILABLE || loco == null) return false;
         try {
-            // First try calling the locomotive's tryRefuel() method
+            // 1. Try calling the locomotive's tryRefuel() method
             if (TRY_REFUEL_METHOD != null) {
                 boolean refueled = (boolean) TRY_REFUEL_METHOD.invoke(loco);
                 if (refueled) return true;
             }
-            // If internal inventory had no fuel, transfer coal from bot inventory into locomotive
+            // 2. If internal inventory had no fuel, transfer coal from bot inventory into locomotive
             if (loco instanceof Container container) {
                 for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
                     ItemStack stack = bot.getInventory().getItem(i);
                     if (!stack.isEmpty() && (stack.is(Items.COAL) || stack.is(Items.CHARCOAL) || stack.is(Items.COAL_BLOCK))) {
-                        for (int c = 0; c < container.getContainerSize(); c++) {
+                        for (int c = 0; c < Math.min(3, container.getContainerSize()); c++) {
                             ItemStack cartStack = container.getItem(c);
                             if (cartStack.isEmpty()) {
                                 container.setItem(c, stack.split(Math.min(16, stack.getCount())));
@@ -168,6 +191,17 @@ public class TrainCompat {
                             }
                         }
                     }
+                }
+            }
+            // 3. Fallback: ensure engine has burn ticks so it never stalls if fuel was empty
+            if (FIELD_FUEL != null) {
+                int fuel = FIELD_FUEL.getInt(loco);
+                if (fuel <= 20) {
+                    FIELD_FUEL.setInt(loco, 3200);
+                    if (FIELD_FUEL_TOTAL != null) {
+                        FIELD_FUEL_TOTAL.setInt(loco, 3200);
+                    }
+                    return true;
                 }
             }
         } catch (Exception e) {
@@ -187,36 +221,109 @@ public class TrainCompat {
         }
     }
 
-    public static boolean startTrain(Entity loco, int speedLevel, boolean reversed) {
+    public static boolean startTrain(Entity loco, @Nullable Player player, int speedLevel, boolean reversed) {
         if (!AVAILABLE || loco == null) return false;
         try {
+            if (player instanceof AiBotPlayer bot) {
+                refuelLocomotive(bot, loco);
+            }
+
             if (SET_REVERSED_METHOD != null) {
                 SET_REVERSED_METHOD.invoke(loco, reversed);
             }
             if (SET_SPEED_METHOD != null) {
                 SET_SPEED_METHOD.invoke(loco, Math.max(1, Math.min(5, speedLevel)));
             }
+
+            if (HANDLE_HOTKEY_METHOD != null && player != null) {
+                HANDLE_HOTKEY_METHOD.invoke(loco, player, 0); // Action 0 = start
+            }
+
             if (SET_RUNNING_METHOD != null) {
                 SET_RUNNING_METHOD.invoke(loco, true);
-                return true;
             }
+            if (SET_ACTIVE_METHOD != null) {
+                SET_ACTIVE_METHOD.invoke(loco, true);
+            }
+
+            // Apply direct movement impulse along travel direction
+            Direction dir = getTravelDirection(loco);
+            double spd = 0.28;
+            loco.setDeltaMovement(dir.getStepX() * spd, 0, dir.getStepZ() * spd);
+            return true;
         } catch (Exception e) {
             LOGGER.warn("Failed to start train locomotive", e);
         }
         return false;
     }
 
-    public static boolean stopTrain(Entity loco) {
+    public static boolean startTrain(Entity loco, int speedLevel, boolean reversed) {
+        return startTrain(loco, null, speedLevel, reversed);
+    }
+
+    public static boolean stopTrain(Entity loco, @Nullable Player player) {
         if (!AVAILABLE || loco == null) return false;
         try {
+            if (HANDLE_HOTKEY_METHOD != null && player != null) {
+                HANDLE_HOTKEY_METHOD.invoke(loco, player, 1); // Action 1 = stop
+            }
             if (SET_RUNNING_METHOD != null) {
                 SET_RUNNING_METHOD.invoke(loco, false);
-                return true;
             }
+            if (SET_ACTIVE_METHOD != null) {
+                SET_ACTIVE_METHOD.invoke(loco, false);
+            }
+            loco.setDeltaMovement(0, 0, 0);
+            return true;
         } catch (Exception e) {
             LOGGER.warn("Failed to stop train locomotive", e);
         }
         return false;
+    }
+
+    public static boolean stopTrain(Entity loco) {
+        return stopTrain(loco, null);
+    }
+
+    public static Direction getFacing(Entity loco) {
+        if (!AVAILABLE || loco == null || GET_FACING_METHOD == null) return Direction.NORTH;
+        try {
+            return (Direction) GET_FACING_METHOD.invoke(loco);
+        } catch (Exception e) {
+            return Direction.NORTH;
+        }
+    }
+
+    public static Direction getTravelDirection(Entity loco) {
+        if (!AVAILABLE || loco == null || GET_TRAVEL_DIRECTION_METHOD == null) return Direction.NORTH;
+        try {
+            return (Direction) GET_TRAVEL_DIRECTION_METHOD.invoke(loco);
+        } catch (Exception e) {
+            return Direction.NORTH;
+        }
+    }
+
+    public static void setReversed(Entity loco, boolean reversed) {
+        if (!AVAILABLE || loco == null || SET_REVERSED_METHOD == null) return;
+        try {
+            SET_REVERSED_METHOD.invoke(loco, reversed);
+        } catch (Exception ignored) {}
+    }
+
+    public static int getSpeedLevel(Entity loco) {
+        if (!AVAILABLE || loco == null || GET_SPEED_METHOD == null) return 2;
+        try {
+            return (int) GET_SPEED_METHOD.invoke(loco);
+        } catch (Exception e) {
+            return 2;
+        }
+    }
+
+    public static void setSpeedLevel(Entity loco, int speed) {
+        if (!AVAILABLE || loco == null || SET_SPEED_METHOD == null) return;
+        try {
+            SET_SPEED_METHOD.invoke(loco, Math.max(1, Math.min(5, speed)));
+        } catch (Exception ignored) {}
     }
 
     public static boolean isTrainRunning(Entity loco) {
