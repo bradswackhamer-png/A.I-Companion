@@ -58,7 +58,17 @@ Google provides free Gemini API access with **no credit card or billing required
 * **Emergency Shelters**: Type `"build a shelter"` to have the companion construct a protective 5x5 shelter or defensive wall.
 * **Auto-Equip & Auto-Defend**: Automatically equips the best weapons, armor, and shields found in their inventory.
 
-### 💾 5. Persistent World Memory
+### 🚂 5. Train Conductor (`conductor` / `train`) *(New in v1.1)*
+* **Full Locomotive Integration (`miningtools`)**: Automatically boards and commands locomotives, manages engine fuel, sounds horns, and controls throttle.
+* **Precise Rail Distance Commands**: Say `"move ahead 4 tiles"`, `"forward 10 blocks"`, or `"reverse 5 blocks"` and your train rolls the exact distance and stops.
+* **Smart Rail Pathfinding ("Come to Me")**: Say `"come here"` or `"drive to me"` while your conductor is on the train — they'll roll down the rails directly to your spot, stop within 4 blocks, and blow the whistle!
+* **Automated Freight Logistics**: Tell your conductor to haul freight between stations (e.g. `"drive to StationA, pick up iron, return to StationB"`). They will load from station chests into attached freight cars, transport cargo across your rail network, and unload automatically upon arrival.
+* **Instant Brakes**: Shout `"stop"`, `"brake"`, or `"cancel that"` to instantly stop the engine and clear active orders.
+
+### 🚜 6. Tractor Automation (`tractor`) *(New in v1.1)*
+* **Agricultural Machinery (`janemoose`)**: Companions can mount and steer rideable tractors equipped with plows, seeders, and mature crop harvesters across your farm fields.
+
+### 💾 7. Bulletproof World Persistence & Chunk Loading *(Updated v1.1)*
 * **Waypoints & Named Locations**: Teach companions locations in chat (e.g. `"remember this spot as Home"`) or use `/bot waypoint Base`. Bots can navigate back to saved locations anytime.
 * **Aliases & Nicknames**: Companions remember what you name them (e.g. `"call yourself Bob"`).
 * **Auto-Save on World Save**: All bot states, inventory, memories, farm areas, and ranch settings persist seamlessly across world reloads and server restarts.
