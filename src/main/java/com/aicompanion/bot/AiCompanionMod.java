@@ -29,11 +29,30 @@ public class AiCompanionMod {
     public static final net.neoforged.neoforge.registries.DeferredItem<com.aicompanion.bot.area.SurveyorWandItem> SURVEYOR_WAND =
             ITEMS.registerItem("surveyor_wand", com.aicompanion.bot.area.SurveyorWandItem::new, p -> p.stacksTo(1));
 
+    public static final net.neoforged.neoforge.registries.DeferredRegister<net.minecraft.world.item.CreativeModeTab> CREATIVE_MODE_TABS =
+            net.neoforged.neoforge.registries.DeferredRegister.create(net.minecraft.core.registries.Registries.CREATIVE_MODE_TAB, MODID);
+
+    public static final net.neoforged.neoforge.registries.DeferredHolder<net.minecraft.world.item.CreativeModeTab, net.minecraft.world.item.CreativeModeTab> COMPANION_TAB =
+            CREATIVE_MODE_TABS.register("companion_tab", () -> net.minecraft.world.item.CreativeModeTab.builder()
+                    .title(net.minecraft.network.chat.Component.translatable("itemGroup.aicompanion"))
+                    .icon(() -> new net.minecraft.world.item.ItemStack(SURVEYOR_WAND.get()))
+                    .displayItems((parameters, output) -> {
+                        output.accept(SURVEYOR_WAND.get());
+                    }).build());
+
     public AiCompanionMod(IEventBus modEventBus, ModContainer modContainer) {
         ITEMS.register(modEventBus);
+        CREATIVE_MODE_TABS.register(modEventBus);
+        modEventBus.addListener(this::addCreative);
         modContainer.registerConfig(ModConfig.Type.LOCAL, BotConfig.SPEC);
         NeoForge.EVENT_BUS.register(this);
         LOGGER.info("Gemini AI Companion Bot Mod (NeoForge 26.3.0.48-beta) initialized!");
+    }
+
+    private void addCreative(net.neoforged.neoforge.event.BuildCreativeModeTabContentsEvent event) {
+        if (event.getTabKey() == net.minecraft.world.item.CreativeModeTabs.TOOLS_AND_UTILITIES) {
+            event.accept(SURVEYOR_WAND.get());
+        }
     }
 
     @SubscribeEvent
