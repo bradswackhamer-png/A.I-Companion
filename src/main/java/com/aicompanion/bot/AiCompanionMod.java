@@ -27,7 +27,7 @@ public class AiCompanionMod {
             net.neoforged.neoforge.registries.DeferredRegister.createItems(MODID);
 
     public static final net.neoforged.neoforge.registries.DeferredItem<com.aicompanion.bot.area.SurveyorWandItem> SURVEYOR_WAND =
-            ITEMS.register("surveyor_wand", () -> new com.aicompanion.bot.area.SurveyorWandItem(new net.minecraft.world.item.Item.Properties().stacksTo(1)));
+            ITEMS.registerItem("surveyor_wand", com.aicompanion.bot.area.SurveyorWandItem::new, p -> p.stacksTo(1));
 
     public AiCompanionMod(IEventBus modEventBus, ModContainer modContainer) {
         ITEMS.register(modEventBus);
