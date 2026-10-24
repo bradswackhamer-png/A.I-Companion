@@ -60,9 +60,13 @@ public class AreaManager {
     }
 
     public static synchronized boolean saveActiveSelection(ServerPlayer player, String name, String type) {
+        return saveActiveSelection(player, name, type, -1);
+    }
+
+    public static synchronized boolean saveActiveSelection(ServerPlayer player, String name, String type, int height) {
         List<BlockPos> points = ACTIVE_SELECTIONS.get(player.getUUID());
-        if (points == null || points.size() < 3) {
-            player.sendSystemMessage(Component.literal("§c[Surveyor Wand] You need at least 3 corner points to form an area! Right-click blocks to place corners.")
+        if (points == null || points.size() < 2) {
+            player.sendSystemMessage(Component.literal("§c[Surveyor Wand] You need at least 2 corner points to form an area! Right-click blocks to place corners.")
                     .withStyle(ChatFormatting.RED));
             return false;
         }
@@ -71,30 +75,64 @@ public class AreaManager {
         int maxY = Integer.MIN_VALUE;
         List<int[]> flatPoints = new ArrayList<>();
 
-        for (BlockPos p : points) {
-            flatPoints.add(new int[]{p.getX(), p.getZ(), p.getY()});
-            if (p.getY() < minY) minY = p.getY();
-            if (p.getY() > maxY) maxY = p.getY();
+        if (points.size() == 2) {
+            // Convert 2 diagonal corners into a 4-corner bounding rectangle
+            BlockPos p1 = points.get(0);
+            BlockPos p2 = points.get(1);
+            int x1 = Math.min(p1.getX(), p2.getX());
+            int x2 = Math.max(p1.getX(), p2.getX());
+            int z1 = Math.min(p1.getZ(), p2.getZ());
+            int z2 = Math.max(p1.getZ(), p2.getZ());
+            int baseY = Math.min(p1.getY(), p2.getY());
+            int topY = Math.max(p1.getY(), p2.getY());
+
+            flatPoints.add(new int[]{x1, z1, baseY});
+            flatPoints.add(new int[]{x2, z1, baseY});
+            flatPoints.add(new int[]{x2, z2, baseY});
+            flatPoints.add(new int[]{x1, z2, baseY});
+
+            minY = baseY;
+            maxY = topY;
+        } else {
+            for (BlockPos p : points) {
+                flatPoints.add(new int[]{p.getX(), p.getZ(), p.getY()});
+                if (p.getY() < minY) minY = p.getY();
+                if (p.getY() > maxY) maxY = p.getY();
+            }
         }
 
-        // Add standard height buffer (10 blocks below lowest corner, 40 blocks above highest corner)
-        minY = Math.max(player.level().getMinY(), minY - 10);
-        maxY = Math.min(player.level().getMaxY(), maxY + 40);
+        boolean cubed = false;
+        if (height > 0) {
+            maxY = minY + height - 1;
+            cubed = true;
+        } else if (points.size() == 2 && maxY > minY) {
+            cubed = true;
+        } else {
+            // Standard height buffer for open 2D zones
+            minY = Math.max(player.level().getMinY(), minY - 10);
+            maxY = Math.min(player.level().getMaxY(), maxY + 40);
+        }
 
         String dim = player.level().dimension().identifier().toString();
         SavedArea area = new SavedArea(name, type, dim, minY, maxY, flatPoints);
+        area.isCubed = cubed;
 
         BotPersistence.saveArea(area);
         BotPersistence.saveAll(player.level().getServer());
 
         ACTIVE_SELECTIONS.remove(player.getUUID());
 
-        // Emit celebration / confirmation particles around the new perimeter
-        area.spawnPerimeterParticles(player.level(), ParticleTypes.HAPPY_VILLAGER);
-
-        player.sendSystemMessage(Component.literal("§a★ Global Area '§f" + area.name + "§a' (Type: §e" + area.type
-                + "§a, " + points.size() + " corners, ~" + (int) area.getAreaSqMeters() + " m²) saved to bot navigation network!")
-                .withStyle(ChatFormatting.GOLD));
+        if (cubed) {
+            area.spawnCubeParticles(player.level(), ParticleTypes.ELECTRIC_SPARK);
+            player.sendSystemMessage(Component.literal("§a★ Cubed Area '§f" + area.name + "§a' (Height: §e" + area.getHeight()
+                    + "§a blocks, ~" + area.getVolume() + " m³ volume) saved to bot catalog!")
+                    .withStyle(ChatFormatting.GOLD));
+        } else {
+            area.spawnPerimeterParticles(player.level(), ParticleTypes.HAPPY_VILLAGER);
+            player.sendSystemMessage(Component.literal("§a★ Global Area '§f" + area.name + "§a' (Type: §e" + area.type
+                    + "§a, " + flatPoints.size() + " corners, ~" + (int) area.getAreaSqMeters() + " m²) saved to bot navigation network!")
+                    .withStyle(ChatFormatting.GOLD));
+        }
 
         return true;
     }

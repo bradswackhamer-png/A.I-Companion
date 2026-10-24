@@ -43,13 +43,26 @@ Google provides free Gemini API access with **no credit card or billing required
 
 ### 🗺️ 2. Global Waypoint & Area System with Surveyor Wand *(New in v1.1)*
 * **Surveyor Wand Tool (`/bot wand`)**:
-  * Right-click blocks to link perimeter corners with glowing laser particle fences.
+  * Right-click blocks to link perimeter corners with glowing laser particle fences (supports 2-corner diagonal boxes or multi-corner polygons).
   * Sneak + Right-Click opens the **Area Configuration GUI** to name zones (`Compound`, `NorthFarm`) and select zone types (`COMPOUND`, `FARM`, `RANCH`, `SAFE_ZONE`, `RESTRICTED`).
   * Craftable in survival with **1 Compass + 2 Sticks** diagonally on a crafting table.
+* **3D Cuboid Volume Extrusion (`/bot area height` / `/bot area cube`)**:
+  * Assign a vertical height to any surveyed area (`/bot area height <name> <height>`).
+  * Instantly projects a 3D holographic wireframe volume with vertical corner beacons and upper/lower particle boundaries.
 * **Perimeter Confinement**: Assigned companions (`/bot area assign <bot> <area>` or chat *"guard Compound"*) are locked within borders; movement vectors automatically reflect back toward the zone center.
 * **AI Telemetry**: Real-time zone presence is automatically passed to Gemini AI prompts.
 
-### 🏠 3. Autonomous Architectural Builder & Expanded Catalog (`builder`) *(New in v1.1)*
+### 📐 3. In-World Blueprint Scanner & Custom Builder Catalog *(New in v1.1)*
+* **Scan & Capture Any Building**:
+  * Run `/bot blueprint capture <areaName> <blueprintName>` to scan everything inside a 3D cubed area into a persistent blueprint.
+  * Records exact block IDs, rotation properties, and relative coordinates.
+  * Check material bills and dimensions anytime with `/bot blueprint info <blueprintName>`.
+* **Builder Bot Remakes**:
+  * Blueprints are instantly registered into the bot's building catalog!
+  * Tell any builder companion in chat: `"builder, build <blueprintName>"` or type `/bot build <bot> <blueprintName>`.
+  * The bot automatically rotates the structure to match their facing direction, clears the footprint, requisitions materials from workshop chests (crafting raw logs into planks if needed), and constructs the entire build block by block!
+
+### 🏠 4. Autonomous Architectural Builder & Expanded Catalog (`builder`) *(New in v1.1)*
 * **Multi-Archetype Architectural Catalog**:
   * **Defensive Guard Watchtower ($5 \times 5$, 10 blocks tall)**: Multi-floor outpost with stone brick base, ladder climbing shaft, mid-floor guard deck, and open battlements with arrow slits for guards (`"build watchtower"` / `"build tower"`).
   * **Farmhouse Barn & Granary ($9 \times 9$, high-vaulted ceiling)**: High vaulted plank roof, double barn doors (Macaw's Barn Doors compatible), decorative hay bales, and deposit chests for farmers (`"build barn"` / `"build granary"`).

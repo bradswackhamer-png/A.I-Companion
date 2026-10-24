@@ -112,6 +112,7 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import com.aicompanion.bot.village.HouseBlueprint;
+import com.aicompanion.bot.village.CustomBlueprint;
 import com.aicompanion.bot.village.VillageManager;
 import com.aicompanion.bot.village.ArchitecturalPalette;
 
@@ -3548,6 +3549,15 @@ public class AiBotPlayer extends ServerPlayer {
         String lower = text.toLowerCase(Locale.ROOT);
         BlockPos buildSite = this.blockPosition().relative(this.getDirection(), 2);
 
+        // Check for custom saved blueprints in catalog
+        for (CustomBlueprint bp : BotPersistence.getAllBlueprints().values()) {
+            String bpName = bp.name.toLowerCase(Locale.ROOT);
+            if (lower.contains("build " + bpName) || lower.contains("construct " + bpName) || lower.contains(bpName)) {
+                startCustomBlueprintConstruction(bp, buildSite, this.getDirection());
+                return true;
+            }
+        }
+
         if (lower.contains("watchtower") || lower.contains("tower") || lower.contains("bunker")) {
             startCustomConstruction("watchtower", buildSite, this.getDirection());
             return true;
@@ -3566,6 +3576,15 @@ public class AiBotPlayer extends ServerPlayer {
 
     public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {
         startCustomConstruction("cottage", origin, facing);
+    }
+
+    public void startCustomBlueprintConstruction(CustomBlueprint blueprint, BlockPos origin, net.minecraft.core.Direction facing) {
+        retrieveWorkshopSupplies(origin);
+        this.activeHouseQueue = blueprint.toVoxelSteps(origin, facing);
+        this.currentHouseOrigin = origin;
+        this.currentAction = new BotAction("BUILD_BLUEPRINT", blueprint.name, null, activeHouseQueue.size());
+        this.actionProgressCount = 0;
+        sayInChat("Retrieved workshop supplies: Constructing blueprint '" + blueprint.name + "' (" + blueprint.sizeX + "x" + blueprint.sizeY + "x" + blueprint.sizeZ + ")! (" + activeHouseQueue.size() + " blocks queued)");
     }
 
     public void startCustomConstruction(String archetype, BlockPos origin, net.minecraft.core.Direction facing) {
@@ -3626,7 +3645,11 @@ public class AiBotPlayer extends ServerPlayer {
                     .relative(this.getDirection().getOpposite(), 6).above(1) : this.blockPosition();
             VillageManager.registerHouse(compound, doorPos, bedPos, null);
 
-            sayInChat("House construction complete! Integrated custom roof, doors, windows, lighting, and bed. Registered in village housing registry!");
+            if (this.currentAction != null && "BUILD_BLUEPRINT".equalsIgnoreCase(this.currentAction.type)) {
+                sayInChat("Blueprint '" + (this.currentAction.target != null ? this.currentAction.target : "custom") + "' construction complete! Structure registered in village catalog.");
+            } else {
+                sayInChat("House construction complete! Integrated custom roof, doors, windows, lighting, and bed. Registered in village housing registry!");
+            }
             return true;
         }
 

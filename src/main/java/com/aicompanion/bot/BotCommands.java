@@ -1,6 +1,7 @@
 package com.aicompanion.bot;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
@@ -16,6 +17,8 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.phys.Vec3;
+import com.aicompanion.bot.area.SavedArea;
+import com.aicompanion.bot.village.CustomBlueprint;
 
 public class BotCommands {
 
@@ -34,6 +37,11 @@ public class BotCommands {
 
     private static final SuggestionProvider<CommandSourceStack> AREA_TYPE_SUGGESTIONS = (ctx, builder) ->
             SharedSuggestionProvider.suggest(java.util.List.of("COMPOUND", "FARM", "RANCH", "SAFE_ZONE", "RESTRICTED", "GENERAL"), builder);
+
+    private static final SuggestionProvider<CommandSourceStack> BLUEPRINT_SUGGESTIONS = (ctx, builder) -> {
+        var names = BotPersistence.getAllBlueprints().values().stream().map(b -> b.name).toList();
+        return SharedSuggestionProvider.suggest(names, builder);
+    };
 
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(buildCommandTree("bot"));
@@ -108,6 +116,20 @@ public class BotCommands {
                                 .then(Commands.argument("areaName", StringArgumentType.word())
                                         .suggests(AREA_SUGGESTIONS)
                                         .executes(ctx -> showAreaCmd(ctx, StringArgumentType.getString(ctx, "areaName")))))
+                        .then(Commands.literal("height")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .suggests(AREA_SUGGESTIONS)
+                                        .then(Commands.argument("height", IntegerArgumentType.integer(1, 256))
+                                                .executes(ctx -> setAreaHeightCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "areaName"),
+                                                        IntegerArgumentType.getInteger(ctx, "height"))))))
+                        .then(Commands.literal("cube")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .suggests(AREA_SUGGESTIONS)
+                                        .then(Commands.argument("height", IntegerArgumentType.integer(1, 256))
+                                                .executes(ctx -> setAreaHeightCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "areaName"),
+                                                        IntegerArgumentType.getInteger(ctx, "height"))))))
                         .then(Commands.literal("assign")
                                 .then(Commands.argument("botName", StringArgumentType.word())
                                         .suggests(BOT_NAME_SUGGESTIONS)
@@ -116,6 +138,47 @@ public class BotCommands {
                                                 .executes(ctx -> assignAreaCmd(ctx,
                                                         StringArgumentType.getString(ctx, "botName"),
                                                         StringArgumentType.getString(ctx, "areaName")))))))
+                .then(Commands.literal("blueprint")
+                        .then(Commands.literal("capture")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .suggests(AREA_SUGGESTIONS)
+                                        .then(Commands.argument("blueprintName", StringArgumentType.word())
+                                                .executes(ctx -> captureBlueprintCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "areaName"),
+                                                        StringArgumentType.getString(ctx, "blueprintName"))))))
+                        .then(Commands.literal("scan")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .suggests(AREA_SUGGESTIONS)
+                                        .then(Commands.argument("blueprintName", StringArgumentType.word())
+                                                .executes(ctx -> captureBlueprintCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "areaName"),
+                                                        StringArgumentType.getString(ctx, "blueprintName"))))))
+                        .then(Commands.literal("list")
+                                .executes(BotCommands::listBlueprintsCmd))
+                        .then(Commands.literal("info")
+                                .then(Commands.argument("blueprintName", StringArgumentType.word())
+                                        .suggests(BLUEPRINT_SUGGESTIONS)
+                                        .executes(ctx -> infoBlueprintCmd(ctx, StringArgumentType.getString(ctx, "blueprintName")))))
+                        .then(Commands.literal("remove")
+                                .then(Commands.argument("blueprintName", StringArgumentType.word())
+                                        .suggests(BLUEPRINT_SUGGESTIONS)
+                                        .executes(ctx -> removeBlueprintCmd(ctx, StringArgumentType.getString(ctx, "blueprintName")))))
+                        .then(Commands.literal("build")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .then(Commands.argument("blueprintName", StringArgumentType.word())
+                                                .suggests(BLUEPRINT_SUGGESTIONS)
+                                                .executes(ctx -> buildBlueprintCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
+                                                        StringArgumentType.getString(ctx, "blueprintName")))))))
+                .then(Commands.literal("build")
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .then(Commands.argument("blueprintName", StringArgumentType.word())
+                                        .suggests(BLUEPRINT_SUGGESTIONS)
+                                        .executes(ctx -> buildBlueprintCmd(ctx,
+                                                StringArgumentType.getString(ctx, "botName"),
+                                                StringArgumentType.getString(ctx, "blueprintName"))))))
                 .then(Commands.literal("gui")
                         .then(Commands.argument("botName", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
@@ -227,8 +290,141 @@ public class BotCommands {
             ctx.getSource().sendFailure(Component.literal("Area '" + name + "' not found."));
             return 0;
         }
-        area.spawnPerimeterParticles(ctx.getSource().getLevel(), net.minecraft.core.particles.ParticleTypes.END_ROD);
-        ctx.getSource().sendSuccess(() -> Component.literal("Illuminated boundary for area '" + area.name + "' with glowing perimeter particles!").withStyle(ChatFormatting.AQUA), false);
+        if (area.isCubed || (area.maxY - area.minY < 100 && area.maxY - area.minY > 0)) {
+            area.spawnCubeParticles(ctx.getSource().getLevel(), net.minecraft.core.particles.ParticleTypes.ELECTRIC_SPARK);
+            ctx.getSource().sendSuccess(() -> Component.literal("★ Illuminated 3D Cubed Volume for area '" + area.name + "' (Height: " + area.getHeight() + " blocks, Y: " + area.minY + " to " + area.maxY + ")!").withStyle(ChatFormatting.AQUA), false);
+        } else {
+            area.spawnPerimeterParticles(ctx.getSource().getLevel(), net.minecraft.core.particles.ParticleTypes.END_ROD);
+            ctx.getSource().sendSuccess(() -> Component.literal("Illuminated boundary for area '" + area.name + "' with glowing perimeter particles!").withStyle(ChatFormatting.AQUA), false);
+        }
+        return 1;
+    }
+
+    private static int setAreaHeightCmd(CommandContext<CommandSourceStack> ctx, String areaName, int height) {
+        CommandSourceStack source = ctx.getSource();
+        ServerPlayer player = source.getPlayer();
+        var area = BotPersistence.getArea(areaName);
+        if (area == null) {
+            if (player != null && !com.aicompanion.bot.area.AreaManager.getSelectedPoints(player.getUUID()).isEmpty()) {
+                boolean ok = com.aicompanion.bot.area.AreaManager.saveActiveSelection(player, areaName, "COMPOUND", height);
+                return ok ? 1 : 0;
+            }
+            source.sendFailure(Component.literal("Area '" + areaName + "' not found. Right-click corners with the Surveyor Wand to select an area first, or specify an existing area name."));
+            return 0;
+        }
+
+        area.setCubedHeight(height);
+        BotPersistence.saveArea(area);
+        BotPersistence.saveAll(source.getServer());
+        area.spawnCubeParticles(source.getLevel(), net.minecraft.core.particles.ParticleTypes.ELECTRIC_SPARK);
+
+        source.sendSuccess(() -> Component.literal("§a★ Area '§f" + area.name + "§a' converted to 3D Cuboid! Height: §e" + height + "§a blocks (Y: " + area.minY + " to " + area.maxY + ", Volume: ~" + area.getVolume() + " m³)")
+                .withStyle(ChatFormatting.GOLD), true);
+        return 1;
+    }
+
+    private static int captureBlueprintCmd(CommandContext<CommandSourceStack> ctx, String areaName, String blueprintName) {
+        CommandSourceStack source = ctx.getSource();
+        ServerPlayer player = source.getPlayer();
+        var area = BotPersistence.getArea(areaName);
+        if (area == null) {
+            source.sendFailure(Component.literal("Area '" + areaName + "' not found. Define it with your Surveyor Wand and set its height with /bot area height " + areaName + " <height>."));
+            return 0;
+        }
+
+        if (!area.isCubed && (area.maxY - area.minY > 100)) {
+            area.setCubedHeight(16);
+            BotPersistence.saveArea(area);
+        }
+
+        net.minecraft.core.Direction facing = player != null ? player.getDirection() : net.minecraft.core.Direction.NORTH;
+        String author = player != null ? player.getName().getString() : "Server";
+
+        CustomBlueprint bp = CustomBlueprint.capture(source.getLevel(), area, blueprintName, facing, author);
+        if (bp.totalBlocks == 0) {
+            source.sendFailure(Component.literal("No blocks found inside area '" + areaName + "'. Make sure the area encloses blocks and has a valid height!"));
+            return 0;
+        }
+
+        BotPersistence.saveBlueprint(bp);
+        BotPersistence.saveAll(source.getServer());
+
+        area.spawnCubeParticles(source.getLevel(), net.minecraft.core.particles.ParticleTypes.HAPPY_VILLAGER);
+
+        source.sendSuccess(() -> Component.literal("§a★ Blueprint '§6" + bp.name + "§a' created! Captured §e" + bp.totalBlocks + "§a blocks from '§f" + area.name + "§a'.")
+                .withStyle(ChatFormatting.GREEN), true);
+        source.sendSuccess(() -> Component.literal("§7• Dimensions: §e" + bp.sizeX + "w × " + bp.sizeY + "h × " + bp.sizeZ + "d §7| Facing: §b" + bp.capturedFacing)
+                .withStyle(ChatFormatting.GRAY), false);
+        source.sendSuccess(() -> Component.literal("§a✔ Added to Builder Catalog! Tell any builder §f\"builder, build " + bp.name + "\"§a or type §e/bot build <bot> " + bp.name + "§a to construct it!")
+                .withStyle(ChatFormatting.GOLD), false);
+        return 1;
+    }
+
+    private static int listBlueprintsCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        var blueprints = BotPersistence.getAllBlueprints();
+        if (blueprints.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("No custom blueprints saved yet. Use /bot wand to mark an area, /bot area height <name> <height>, then /bot blueprint capture <area> <name>!").withStyle(ChatFormatting.YELLOW), false);
+            return 1;
+        }
+        source.sendSuccess(() -> Component.literal("=== Saved Architectural Blueprints (" + blueprints.size() + ") ===").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        for (var bp : blueprints.values()) {
+            source.sendSuccess(() -> Component.literal("• §6" + bp.name + " §7(" + bp.sizeX + "x" + bp.sizeY + "x" + bp.sizeZ + ", §e" + bp.totalBlocks + " blocks§7, by " + bp.author + ")"), false);
+        }
+        return 1;
+    }
+
+    private static int infoBlueprintCmd(CommandContext<CommandSourceStack> ctx, String blueprintName) {
+        CommandSourceStack source = ctx.getSource();
+        var bp = BotPersistence.getBlueprint(blueprintName);
+        if (bp == null) {
+            source.sendFailure(Component.literal("Blueprint '" + blueprintName + "' not found."));
+            return 0;
+        }
+        source.sendSuccess(() -> Component.literal("=== Blueprint: " + bp.name + " ===").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        source.sendSuccess(() -> Component.literal("• Dimensions: " + bp.sizeX + "x" + bp.sizeY + "x" + bp.sizeZ + " (" + bp.totalBlocks + " total blocks)"), false);
+        source.sendSuccess(() -> Component.literal("• Captured Facing: " + bp.capturedFacing + " | Creator: " + bp.author), false);
+        source.sendSuccess(() -> Component.literal("• Required Materials:").withStyle(ChatFormatting.YELLOW), false);
+        int shown = 0;
+        for (var entry : bp.materialSummary.entrySet()) {
+            if (shown++ >= 10) {
+                source.sendSuccess(() -> Component.literal("  ... and " + (bp.materialSummary.size() - 10) + " more material types."), false);
+                break;
+            }
+            source.sendSuccess(() -> Component.literal("  - §f" + entry.getKey() + ": §e" + entry.getValue()), false);
+        }
+        return 1;
+    }
+
+    private static int removeBlueprintCmd(CommandContext<CommandSourceStack> ctx, String blueprintName) {
+        CommandSourceStack source = ctx.getSource();
+        boolean removed = BotPersistence.removeBlueprint(blueprintName);
+        if (removed) {
+            BotPersistence.saveAll(source.getServer());
+            source.sendSuccess(() -> Component.literal("Removed blueprint '" + blueprintName + "' from catalog.").withStyle(ChatFormatting.GREEN), true);
+            return 1;
+        } else {
+            source.sendFailure(Component.literal("Blueprint '" + blueprintName + "' not found."));
+            return 0;
+        }
+    }
+
+    private static int buildBlueprintCmd(CommandContext<CommandSourceStack> ctx, String botName, String blueprintName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("Bot '" + botName + "' not found."));
+            return 0;
+        }
+        var bp = BotPersistence.getBlueprint(blueprintName);
+        if (bp == null) {
+            source.sendFailure(Component.literal("Blueprint '" + blueprintName + "' not found. Available blueprints: "
+                    + String.join(", ", BotPersistence.getAllBlueprints().keySet())));
+            return 0;
+        }
+        net.minecraft.core.BlockPos site = bot.blockPosition().relative(bot.getDirection(), 2);
+        bot.startCustomBlueprintConstruction(bp, site, bot.getDirection());
+        source.sendSuccess(() -> Component.literal("Ordered " + bot.getBotName() + " to construct blueprint '" + bp.name + "'!").withStyle(ChatFormatting.GREEN), true);
         return 1;
     }
 

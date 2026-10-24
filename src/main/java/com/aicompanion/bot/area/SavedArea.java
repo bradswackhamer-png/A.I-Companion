@@ -14,7 +14,8 @@ public class SavedArea {
     public String dimension = "minecraft:overworld";
     public int minY = -64;
     public int maxY = 320;
-    // Polygon vertices in horizontal plane: each element is [x, z]
+    public boolean isCubed = false;
+    // Polygon vertices in horizontal plane: each element is [x, z, y?]
     public List<int[]> points = new ArrayList<>();
 
     // Transient cached Axis-Aligned Bounding Box for fast preliminary rejection
@@ -167,6 +168,77 @@ public class SavedArea {
                 double py = y1 + t * dy + 0.25;
                 double pz = z1 + t * dz;
                 level.sendParticles(particle, px, py, pz, 1, 0, 0, 0, 0);
+            }
+        }
+    }
+
+    public int getBaseY() {
+        int lowest = Integer.MAX_VALUE;
+        for (int[] pt : points) {
+            if (pt.length > 2 && pt[2] < lowest) {
+                lowest = pt[2];
+            }
+        }
+        return lowest != Integer.MAX_VALUE ? lowest : minY;
+    }
+
+    public int getHeight() {
+        return Math.max(1, maxY - minY + 1);
+    }
+
+    public int getVolume() {
+        return (int) (getAreaSqMeters() * getHeight());
+    }
+
+    public void setCubedHeight(int height) {
+        int baseY = getBaseY();
+        this.minY = baseY;
+        this.maxY = baseY + Math.max(1, height) - 1;
+        this.isCubed = true;
+    }
+
+    /**
+     * Renders a full 3D holographic wireframe box enclosing the cubed area.
+     */
+    public void spawnCubeParticles(ServerLevel level, ParticleOptions particle) {
+        if (points.size() < 2) return;
+        int n = points.size();
+
+        // 1. Vertical corner pillars from minY to maxY + 1
+        for (int[] pt : points) {
+            double px = pt[0] + 0.5;
+            double pz = pt[1] + 0.5;
+            int y1 = minY;
+            int y2 = maxY + 1;
+            for (int y = y1; y <= y2; y++) {
+                level.sendParticles(ParticleTypes.END_ROD, px, y + 0.5, pz, 1, 0, 0, 0, 0);
+            }
+        }
+
+        // 2. Bottom loop (minY) and Top loop (maxY + 1)
+        for (int i = 0; i < n; i++) {
+            int[] p1 = points.get(i);
+            int[] p2 = points.get((i + 1) % n);
+
+            double x1 = p1[0] + 0.5;
+            double z1 = p1[1] + 0.5;
+            double x2 = p2[0] + 0.5;
+            double z2 = p2[1] + 0.5;
+
+            double dx = x2 - x1;
+            double dz = z2 - z1;
+            double dist = Math.sqrt(dx * dx + dz * dz);
+            int steps = Math.max(1, (int) (dist / 0.75));
+
+            for (int s = 0; s <= steps; s++) {
+                double t = (double) s / steps;
+                double px = x1 + t * dx;
+                double pz = z1 + t * dz;
+
+                // Bottom perimeter edge
+                level.sendParticles(particle, px, minY + 0.1, pz, 1, 0, 0, 0, 0);
+                // Top perimeter edge
+                level.sendParticles(particle, px, maxY + 1.1, pz, 1, 0, 0, 0, 0);
             }
         }
     }

@@ -22,12 +22,33 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 ### 🗺️ New Feature: Global Waypoint & Area System (`Surveyor Wand`)
 - **Surveyor Wand Tool (`/bot wand`):**
   - Right-click blocks in-world to connect multi-point perimeter vertices with glowing laser particle fences.
+  - Supports 2-corner diagonal rectangular bounding boxes as well as multi-corner polygons.
   - Sneak + Right-Click opens the in-game **Area Configuration GUI** to name zones (`Compound`, `NorthFarm`) and select zone types (`COMPOUND`, `FARM`, `RANCH`, `SAFE_ZONE`, `RESTRICTED`).
   - Added dedicated **AI Companion** Creative Tab and diagonal survival crafting recipe (1 Compass + 2 Sticks).
+- **3D Cuboid Volume Extrusion (`/bot area height` / `/bot area cube`):**
+  - Assign custom height to any surveyed area (`/bot area height <name> <height>` or `/bot area cube <name> <height>`).
+  - Renders a glowing 3D holographic wireframe volume with vertical `END_ROD` pillars and top/bottom shimmering particle boundaries.
+  - Saves 3D volume dimensions persistently to world memory.
 - **Perimeter Confinement & AI Telemetry:**
   - Assigned companions (`/bot area assign <bot> <area>` or chat *"guard Compound"*) are locked within boundaries; movement vectors reflect off borders back to the zone center.
   - Gemini AI prompts receive real-time location telemetry indicating which named area the player and companion occupy.
-- **Area Commands:** `/bot wand`, `/bot area list`, `/bot area show <name>`, `/bot area assign <bot> <area>`, `/bot area remove <name>`, `/bot area clear`.
+- **Area Commands:** `/bot wand`, `/bot area list`, `/bot area height <name> <h>`, `/bot area cube <name> <h>`, `/bot area show <name>`, `/bot area assign <bot> <area>`, `/bot area remove <name>`, `/bot area clear`.
+
+### 📐 New Feature: In-World Blueprint Scanner & Custom Builder Catalog (`/bot blueprint`)
+- **Capture In-World Structures as Blueprints:**
+  - Run `/bot blueprint capture <areaName> <blueprintName>` (or `/bot blueprint scan`) to scan and record all blocks within a cubed area.
+  - Captures exact block states, rotation properties (`FACING`, `HALF`, `PART`, `AXIS`, `WATERLOGGED`), and relative coordinates.
+  - Automatically calculates material bills and dimensions (`/bot blueprint info <name>`).
+- **Autonomous Builder Reconstruction:**
+  - Saved blueprints are immediately added to the bot's building catalog.
+  - Tell your builder companion in chat: `"builder, build <blueprintName>"` or run `/bot build <bot> <blueprintName>`.
+  - Builders automatically rotate the structure to match their current facing direction, clear foliage/air obstructions, pull materials from workshop chests, and place every block voxel by voxel.
+- **Blueprint Commands:**
+  - `/bot blueprint capture <areaName> <blueprintName>` - Scan cubed area into a saved blueprint.
+  - `/bot blueprint list` - List all custom blueprints and their dimensions.
+  - `/bot blueprint info <blueprintName>` - Display block count, dimensions, and material requirements.
+  - `/bot blueprint remove <blueprintName>` - Delete a custom blueprint.
+  - `/bot blueprint build <botName> <blueprintName>` / `/bot build <botName> <blueprintName>` - Order bot to construct the blueprint.
 
 ### 🏠 New Feature: Autonomous Architectural Builder & Expanded Catalog (`builder`)
 - **Multi-Archetype Architectural Catalog:**

@@ -1,6 +1,7 @@
 package com.aicompanion.bot;
 
 import com.aicompanion.bot.area.SavedArea;
+import com.aicompanion.bot.village.CustomBlueprint;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.mojang.logging.LogUtils;
@@ -144,6 +145,40 @@ public class BotPersistence {
         public List<SavedBotData> bots = new ArrayList<>();
         public Map<String, SavedLocation> locations = new LinkedHashMap<>();
         public Map<String, SavedArea> areas = new LinkedHashMap<>();
+        public Map<String, CustomBlueprint> blueprints = new LinkedHashMap<>();
+    }
+
+    // Persistent custom architectural blueprints captured from world
+    private static final Map<String, CustomBlueprint> SAVED_BLUEPRINTS = new LinkedHashMap<>();
+
+    public static synchronized void saveBlueprint(CustomBlueprint blueprint) {
+        if (blueprint == null || blueprint.name == null || blueprint.name.isBlank()) return;
+        String key = blueprint.name.trim().toLowerCase(Locale.ROOT);
+        SAVED_BLUEPRINTS.put(key, blueprint);
+    }
+
+    public static synchronized CustomBlueprint getBlueprint(String name) {
+        if (name == null || name.isBlank()) return null;
+        String key = name.trim().toLowerCase(Locale.ROOT);
+        if (SAVED_BLUEPRINTS.containsKey(key)) {
+            return SAVED_BLUEPRINTS.get(key);
+        }
+        for (Map.Entry<String, CustomBlueprint> entry : SAVED_BLUEPRINTS.entrySet()) {
+            if (key.contains(entry.getKey()) || entry.getKey().contains(key)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    public static synchronized Map<String, CustomBlueprint> getAllBlueprints() {
+        return new LinkedHashMap<>(SAVED_BLUEPRINTS);
+    }
+
+    public static synchronized boolean removeBlueprint(String name) {
+        if (name == null || name.isBlank()) return false;
+        String key = name.trim().toLowerCase(Locale.ROOT);
+        return SAVED_BLUEPRINTS.remove(key) != null;
     }
 
     // Persistent global areas (e.g. "Compound", "Base", "NorthFarm")
@@ -235,6 +270,7 @@ public class BotPersistence {
             PersistentStore store = new PersistentStore();
             store.locations.putAll(SAVED_LOCATIONS);
             store.areas.putAll(SAVED_AREAS);
+            store.blueprints.putAll(SAVED_BLUEPRINTS);
 
             for (AiBotPlayer bot : BotManager.getActiveBots()) {
                 SavedBotData data = new SavedBotData();
@@ -383,6 +419,11 @@ public class BotPersistence {
                 for (SavedArea area : SAVED_AREAS.values()) {
                     area.computeAABB();
                 }
+            }
+
+            SAVED_BLUEPRINTS.clear();
+            if (store.blueprints != null) {
+                SAVED_BLUEPRINTS.putAll(store.blueprints);
             }
 
             if (store.bots != null) {
