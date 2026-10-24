@@ -29,15 +29,18 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
   - Gemini AI prompts receive real-time location telemetry indicating which named area the player and companion occupy.
 - **Area Commands:** `/bot wand`, `/bot area list`, `/bot area show <name>`, `/bot area assign <bot> <area>`, `/bot area remove <name>`, `/bot area clear`.
 
-### 🏠 New Feature: Autonomous Architectural Builder (`builder`)
-- **Voxel Cottage Construction Pipeline:**
-  - Say *"build a house"*, *"build home"*, or *"build cottage"* to initiate complete architectural construction.
-  - **Site Leveling:** Automatically clears foliage, grass, and obstruction blocks.
-  - **Cobblestone Foundation:** Lays a level 7x7 stone floor.
-  - **Framing & Walls:** Raises corner Oak Log pillars and 3-block tall Oak Plank walls.
-  - **Doors & Windows:** Inserts glass windows and a functional wooden door with proper lower/upper halves.
-  - **Overhanging Roof:** Builds a protective plank roof keeping out rain and phantoms.
-  - **Lighting & Furnishing:** Mounts interior torches (preventing hostile mob spawns) and places a cozy bed.
+### 🏠 New Feature: Autonomous Architectural Builder & Expanded Catalog (`builder`)
+- **Multi-Archetype Architectural Catalog:**
+  - **Defensive Guard Watchtower ($5 \times 5$, 10 blocks tall):** Stone brick foundation, internal ladder climbing shaft, mid-floor guard outpost, and open-air crenelated roof battlements with arrow slits for guards to snipe hostile monsters (`"build watchtower"` / `"build tower"`).
+  - **Farmhouse Barn & Granary ($9 \times 9$, high-vaulted ceiling):** Cobblestone foundation, high vaulted plank ceiling, double barn doors (Macaw's Barn Doors compatible), decorative hay bales, and built-in deposit chests for farmers (`"build barn"` / `"build granary"`).
+  - **Blacksmith Forge & Workshop ($7 \times 7$):** Open-air industrial stone pavilion with chimney, Blast Furnace, standard Furnace, Crafting Table, and Anvil (`"build forge"` / `"build blacksmith"`).
+  - **Frontier Residential Cottage ($7 \times 7$):** Classic starter cottage with stone foundation, wooden log pillars, glass windows, wooden door, torch lighting, and bed (`"build house"` / `"build cottage"`).
+- **Autonomous Workshop Crafting & Supply Logistics:**
+  - Builders automatically scan workshop chests within 16 blocks of the construction site for building materials (cobblestone, stone bricks, logs, glass, planks).
+  - Raw logs in chests are autonomously processed into wood planks and sticks if building supplies run short, eliminating tedious manual hand-feeding.
+- **Adaptive Modded Palette Engine (Macaw's Modpack Support):**
+  - Dynamically inspects player chests and mod block registries for Macaw's mods (`mcwdoors`, `mcwroofs`, `mcwwindows`, `mcwlights`, `mcwfurnitures`).
+  - Automatically harmonizes wood types (Spruce, Birch, Acacia, Dark Oak, Mangrove, Cherry, Bamboo) across roofs, doors, windows, and furniture.
 - **Village Housing Registry (`VillageManager`):**
   - Tracks completed houses, total beds, and bed vacancies per compound to power colony growth and apprentice recruitment.
 

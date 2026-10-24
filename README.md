@@ -49,9 +49,17 @@ Google provides free Gemini API access with **no credit card or billing required
 * **Perimeter Confinement**: Assigned companions (`/bot area assign <bot> <area>` or chat *"guard Compound"*) are locked within borders; movement vectors automatically reflect back toward the zone center.
 * **AI Telemetry**: Real-time zone presence is automatically passed to Gemini AI prompts.
 
-### 🏠 3. Autonomous Architectural Builder (`builder`) *(New in v1.1)*
-* **Complete Village Cottages**: Tell your builder *"build a house"* or *"build cottage"*.
-* **Procedural Construction**: Clears foliage, lays a solid 7x7 cobblestone foundation, raises Oak Log corner pillars, builds Oak Plank walls, adds glass windows, installs a working wooden door, roofs the structure, lights the interior with torches (no hostile spawns), and places a cozy bed.
+### 🏠 3. Autonomous Architectural Builder & Expanded Catalog (`builder`) *(New in v1.1)*
+* **Multi-Archetype Architectural Catalog**:
+  * **Defensive Guard Watchtower ($5 \times 5$, 10 blocks tall)**: Multi-floor outpost with stone brick base, ladder climbing shaft, mid-floor guard deck, and open battlements with arrow slits for guards (`"build watchtower"` / `"build tower"`).
+  * **Farmhouse Barn & Granary ($9 \times 9$, high-vaulted ceiling)**: High vaulted plank roof, double barn doors (Macaw's Barn Doors compatible), decorative hay bales, and deposit chests for farmers (`"build barn"` / `"build granary"`).
+  * **Blacksmith Forge & Workshop ($7 \times 7$)**: Open-air industrial stone pavilion with chimney, Blast Furnace, standard Furnace, Crafting Table, and Anvil (`"build forge"` / `"build blacksmith"`).
+  * **Frontier Residential Cottage ($7 \times 7$)**: Starter home with foundation, log pillars, glass windows, wooden door, torch lighting, and bed (`"build house"` / `"build cottage"`).
+* **Autonomous Workshop Crafting & Supply Logistics**:
+  * Builders automatically scan workshop chests within 16 blocks of the construction site.
+  * If supplies run low, raw logs found in chests are autonomously crafted into wooden planks and sticks without manual player hand-feeding.
+* **Adaptive Modded Palette Engine**:
+  * Dynamically scans nearby storage and mod registries for Macaw's packs (`mcwdoors`, `mcwroofs`, `mcwwindows`, `mcwlights`, `mcwfurnitures`) and harmonizes matching wood themes across all structures.
 * **Village Housing Registry**: Automatically tracks completed houses and available beds to support future colony expansion.
 
 ### ⚔️ 4. Player-Grade Tactical Combat & Squad Defense *(New in v1.1)*

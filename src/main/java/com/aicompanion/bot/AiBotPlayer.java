@@ -3546,20 +3546,74 @@ public class AiBotPlayer extends ServerPlayer {
 
     public boolean handleBuilderChatCommand(String text, @Nullable ServerPlayer speaker) {
         String lower = text.toLowerCase(Locale.ROOT);
-        if (lower.contains("build a house") || lower.contains("build house") || lower.contains("build home") || lower.contains("build cottage")) {
-            startHouseConstruction(this.blockPosition().relative(this.getDirection(), 2), this.getDirection());
+        BlockPos buildSite = this.blockPosition().relative(this.getDirection(), 2);
+
+        if (lower.contains("watchtower") || lower.contains("tower") || lower.contains("bunker")) {
+            startCustomConstruction("watchtower", buildSite, this.getDirection());
+            return true;
+        } else if (lower.contains("barn") || lower.contains("granary") || lower.contains("farmhouse")) {
+            startCustomConstruction("barn", buildSite, this.getDirection());
+            return true;
+        } else if (lower.contains("forge") || lower.contains("blacksmith") || lower.contains("workshop")) {
+            startCustomConstruction("forge", buildSite, this.getDirection());
+            return true;
+        } else if (lower.contains("build a house") || lower.contains("build house") || lower.contains("build home") || lower.contains("build cottage")) {
+            startCustomConstruction("cottage", buildSite, this.getDirection());
             return true;
         }
         return false;
     }
 
     public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {
+        startCustomConstruction("cottage", origin, facing);
+    }
+
+    public void startCustomConstruction(String archetype, BlockPos origin, net.minecraft.core.Direction facing) {
+        retrieveWorkshopSupplies(origin);
         ArchitecturalPalette palette = ArchitecturalPalette.resolve((ServerLevel) this.level(), origin, this);
-        this.activeHouseQueue = HouseBlueprint.generateCottage(origin, facing, palette);
+        this.activeHouseQueue = HouseBlueprint.generateBlueprint(archetype, origin, facing, palette);
         this.currentHouseOrigin = origin;
-        this.currentAction = new BotAction("BUILD_HOUSE", "cottage", null, activeHouseQueue.size());
+        this.currentAction = new BotAction("BUILD_HOUSE", archetype, null, activeHouseQueue.size());
         this.actionProgressCount = 0;
-        sayInChat("Surveyed block registry & storage: Building with " + palette.themeName + "! Loaded " + activeHouseQueue.size() + " structural blocks.");
+        sayInChat("Surveyed block registry & workshop chests: Constructing a " + archetype.toUpperCase() + " using " + palette.themeName + "! (" + activeHouseQueue.size() + " blocks queued)");
+    }
+
+    private void retrieveWorkshopSupplies(BlockPos origin) {
+        int radius = 16;
+        for (int x = -radius; x <= radius; x += 4) {
+            for (int y = -3; y <= 4; y += 2) {
+                for (int z = -radius; z <= radius; z += 4) {
+                    BlockPos p = origin.offset(x, y, z);
+                    BlockEntity be = this.level().getBlockEntity(p);
+                    if (be instanceof Container c) {
+                        for (int i = 0; i < c.getContainerSize(); i++) {
+                            ItemStack s = c.getItem(i);
+                            if (!s.isEmpty()) {
+                                String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
+                                if (id.contains("log") || id.contains("plank") || id.contains("stone") || id.contains("cobble") ||
+                                    id.contains("glass") || id.contains("door") || id.contains("roof") || id.contains("window") ||
+                                    id.contains("torch") || id.contains("lamp") || id.contains("hay") || id.contains("bed")) {
+                                    ItemStack taken = c.removeItem(i, Math.min(s.getCount(), 32));
+                                    if (!taken.isEmpty()) {
+                                        this.getInventory().add(taken);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Auto-process raw logs into planks if planks are low
+        int logCount = countMatching(this::isLog);
+        int plankCount = countMatching(this::isPlank);
+        if (logCount > 0 && plankCount < 64) {
+            int logsToCraft = Math.min(logCount, 16);
+            if (consumeMatching(this::isLog, logsToCraft)) {
+                this.getInventory().add(new ItemStack(Items.OAK_PLANKS, logsToCraft * 4));
+            }
+        }
     }
 
     private boolean tickHouseBuildingAction() {
