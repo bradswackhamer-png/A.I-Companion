@@ -189,6 +189,10 @@ public class AiBotPlayer extends ServerPlayer {
     // Tactical Combat & Defense
     private int shieldBlockTicks = 0;
     private int lastDistressTick = 0;
+    private int currentCombatTargetId = -1;
+    private int combatTargetEngageTicks = 0;
+    private double bestCombatTargetDistSq = Double.MAX_VALUE;
+    private final java.util.Map<Integer, Integer> unreachableMobBlacklist = new java.util.HashMap<>();
 
     // Village House Construction
     private @Nullable List<HouseBlueprint.VoxelStep> activeHouseQueue = null;
@@ -997,6 +1001,7 @@ public class AiBotPlayer extends ServerPlayer {
 
         // Periodic survival maintenance every 20 ticks
         if (this.tickCount % 20 == 0) {
+            this.unreachableMobBlacklist.entrySet().removeIf(entry -> this.tickCount >= entry.getValue());
             if (BotConfig.AUTO_EAT.getAsBoolean()) {
                 tryAutoEat();
             }
@@ -1007,7 +1012,7 @@ public class AiBotPlayer extends ServerPlayer {
         // Auto-defend if attacked by a monster
         if (BotConfig.AUTO_DEFEND.getAsBoolean() && this.getLastHurtByMob() != null && this.getLastHurtByMob().isAlive()) {
             LivingEntity attacker = this.getLastHurtByMob();
-            if (!(attacker instanceof Player) && this.distanceToSqr(attacker) < 64.0) {
+            if (!(attacker instanceof Player) && this.distanceToSqr(attacker) < 64.0 && !this.unreachableMobBlacklist.containsKey(attacker.getId())) {
                 engageTarget(attacker);
                 return;
             }
@@ -1706,8 +1711,35 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void engageTarget(LivingEntity target) {
-        lookAtPos(target.getEyePosition());
         double distSq = this.distanceToSqr(target);
+        if (target.getId() != this.currentCombatTargetId) {
+            this.currentCombatTargetId = target.getId();
+            this.combatTargetEngageTicks = 0;
+            this.bestCombatTargetDistSq = distSq;
+        } else {
+            this.combatTargetEngageTicks++;
+            if (distSq < this.bestCombatTargetDistSq - 0.75) {
+                this.bestCombatTargetDistSq = distSq;
+                this.combatTargetEngageTicks = Math.max(0, this.combatTargetEngageTicks - 8);
+            }
+        }
+
+        double hdx = target.getX() - this.getX();
+        double hdz = target.getZ() - this.getZ();
+        double horizDistSq = hdx * hdx + hdz * hdz;
+        double vertDiff = Math.abs(target.getY() - this.getY());
+
+        // Timeout or underground spin check: if standing directly above/below a mob without line of sight, or unable to reach after 80 ticks (4s)
+        if ((horizDistSq < 3.5 && vertDiff > 2.5 && !this.hasLineOfSight(target)) || this.combatTargetEngageTicks > 80) {
+            this.unreachableMobBlacklist.put(target.getId(), this.tickCount + 200);
+            this.currentCombatTargetId = -1;
+            this.combatTargetEngageTicks = 0;
+            this.setLastHurtByMob(null);
+            stopMovement();
+            return;
+        }
+
+        lookAtPos(target.getEyePosition());
 
         // 1. Tactical Shield Check (creeper explosions, skeleton bow drawing)
         boolean shouldShield = false;
@@ -1737,7 +1769,17 @@ public class AiBotPlayer extends ServerPlayer {
         equipBestWeapon();
 
         if (distSq > 9.5) {
-            moveTowards(target.position(), true);
+            Vec3 moveGoal = target.position();
+            // Leverage the mob's own vanilla A* PathNavigation in reverse to route around corners/obstacles!
+            if (!this.hasLineOfSight(target) && target instanceof net.minecraft.world.entity.Mob mob) {
+                net.minecraft.world.level.pathfinder.Path path = mob.getNavigation().createPath(this.blockPosition(), 0);
+                if (path != null && path.getNodeCount() >= 2) {
+                    int idx = Math.max(0, path.getNodeCount() - 2);
+                    net.minecraft.world.level.pathfinder.Node stepNode = path.getNode(idx);
+                    moveGoal = new Vec3(stepNode.x + 0.5, stepNode.y, stepNode.z + 0.5);
+                }
+            }
+            moveTowards(moveGoal, true);
         } else {
             // In melee striking range!
             // Tactical Sprint-Crit: jump right before attack to trigger player-grade critical hits
@@ -1758,6 +1800,7 @@ public class AiBotPlayer extends ServerPlayer {
                 this.attack(target);
                 this.resetAttackStrengthTicker();
                 this.attackCooldown = 11;
+                this.combatTargetEngageTicks = 0;
             }
         }
     }
@@ -3385,10 +3428,40 @@ public class AiBotPlayer extends ServerPlayer {
         return best;
     }
 
+    private boolean isMobReachableAndValid(LivingEntity target) {
+        if (target == null || !target.isAlive()) return false;
+        if (this.unreachableMobBlacklist.containsKey(target.getId())) return false;
+
+        double vertDiff = Math.abs(target.getY() - this.getY());
+        if (vertDiff > 6.0) return false;
+
+        double hdx = target.getX() - this.getX();
+        double hdz = target.getZ() - this.getZ();
+        double horizDistSq = hdx * hdx + hdz * hdz;
+
+        // If directly above or below the bot through solid floor/ceiling without line of sight, ignore
+        if (horizDistSq < 4.0 && vertDiff > 2.2 && !this.hasLineOfSight(target)) {
+            return false;
+        }
+
+        // Direct line of sight is always valid
+        if (this.hasLineOfSight(target)) {
+            return true;
+        }
+
+        // If out of line of sight, check if the mob's own vanilla A* PathNavigation can reach us
+        if (target instanceof net.minecraft.world.entity.Mob mob) {
+            net.minecraft.world.level.pathfinder.Path path = mob.getNavigation().createPath(this.blockPosition(), 1);
+            return path != null && path.canReach();
+        }
+
+        return false;
+    }
+
     private @Nullable Monster findNearestMonsterNear(BlockPos center, double radius) {
-        AABB box = new AABB(center).inflate(radius);
+        AABB box = new AABB(center).inflate(radius, 6.0, radius);
         List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
-            if (!m.isAlive()) return false;
+            if (!isMobReachableAndValid(m)) return false;
             // Ignore monsters separated by fences/walls
             if (isLineBlockedByFence(this.getEyePosition(), m.getEyePosition())) {
                 return false;
@@ -3400,9 +3473,9 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable LivingEntity findNearestTargetMob(String query, double radius) {
-        AABB box = this.getBoundingBox().inflate(radius);
+        AABB box = this.getBoundingBox().inflate(radius, 6.0, radius);
         List<LivingEntity> list = this.level().getEntitiesOfClass(LivingEntity.class, box, e -> {
-            if (e == this || e instanceof Player || !e.isAlive()) return false;
+            if (e == this || e instanceof Player || !isMobReachableAndValid(e)) return false;
             if (this.guardAnchorPos != null && isLineBlockedByFence(this.getEyePosition(), e.getEyePosition())) {
                 return false;
             }
