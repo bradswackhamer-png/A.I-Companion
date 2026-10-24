@@ -111,6 +111,8 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import com.aicompanion.bot.village.HouseBlueprint;
+import com.aicompanion.bot.village.VillageManager;
 
 public class AiBotPlayer extends ServerPlayer {
     private final String botName;
@@ -181,6 +183,15 @@ public class AiBotPlayer extends ServerPlayer {
     private Vec3 lastCheckedPos = Vec3.ZERO;
     private double bestGoalDistSq = Double.MAX_VALUE;
     private int noProgressTicks = 0;
+
+    // Tactical Combat & Defense
+    private int shieldBlockTicks = 0;
+    private int lastDistressTick = 0;
+
+    // Village House Construction
+    private @Nullable List<HouseBlueprint.VoxelStep> activeHouseQueue = null;
+    private int houseBuildCooldown = 0;
+    private @Nullable BlockPos currentHouseOrigin = null;
 
     public AiBotPlayer(ServerLevel level, GameProfile profile, String role) {
         super(level.getServer(), level, profile, ClientInformation.createDefault());
@@ -847,7 +858,11 @@ public class AiBotPlayer extends ServerPlayer {
         } else if (r.contains("builder") || r.contains("build")) {
             this.getInventory().add(new ItemStack(Items.COBBLESTONE, 64));
             this.getInventory().add(new ItemStack(Items.OAK_PLANKS, 64));
+            this.getInventory().add(new ItemStack(Items.OAK_DOOR, 1));
+            this.getInventory().add(new ItemStack(Items.BED.red(), 1));
+            this.getInventory().add(new ItemStack(Items.GLASS, 8));
             this.getInventory().add(new ItemStack(Items.TORCH, 16));
+            this.getInventory().add(new ItemStack(Items.STONE_AXE, 1));
         } else if (r.contains("courier") || r.contains("helper") || r.contains("collector")) {
             this.getInventory().add(new ItemStack(Items.CHEST, 2));
             this.getInventory().add(new ItemStack(Items.BREAD, 8));
@@ -969,6 +984,13 @@ public class AiBotPlayer extends ServerPlayer {
 
         if (this.attackCooldown > 0) {
             this.attackCooldown--;
+        }
+
+        if (this.shieldBlockTicks > 0) {
+            this.shieldBlockTicks--;
+            if (this.shieldBlockTicks <= 0 && this.isUsingItem() && this.getOffhandItem().is(Items.SHIELD)) {
+                this.stopUsingItem();
+            }
         }
 
         // Periodic survival maintenance every 20 ticks
@@ -1137,6 +1159,7 @@ public class AiBotPlayer extends ServerPlayer {
                 yield true;
             }
             case "PLACE", "BUILD" -> executePlaceAction(action);
+            case "BUILD_HOUSE" -> tickHouseBuildingAction();
             case "CHEST_STORE" -> tickChestAction(action, true);
             case "CHEST_TAKE" -> tickChestAction(action, false);
             case "CONDUCT_TRAIN", "DRIVE_TRAIN" -> {
@@ -1681,14 +1704,54 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void engageTarget(LivingEntity target) {
-        equipBestWeapon();
         lookAtPos(target.getEyePosition());
         double distSq = this.distanceToSqr(target);
+
+        // 1. Tactical Shield Check (creeper explosions, skeleton bow drawing)
+        boolean shouldShield = false;
+        if (target instanceof net.minecraft.world.entity.monster.Creeper creeper) {
+            if (creeper.getSwellDir() > 0 || distSq < 9.0) {
+                shouldShield = true;
+            }
+        } else if (target.isUsingItem()) {
+            shouldShield = true;
+        }
+
+        if (shouldShield && this.getOffhandItem().is(Items.SHIELD)) {
+            if (!this.isUsingItem()) {
+                this.startUsingItem(net.minecraft.world.InteractionHand.OFF_HAND);
+            }
+            this.shieldBlockTicks = 15;
+            moveTowards(target.position(), false);
+            return;
+        }
+
+        // Drop shield before striking
+        if (this.isUsingItem() && this.getOffhandItem().is(Items.SHIELD) && this.shieldBlockTicks <= 0) {
+            this.stopUsingItem();
+        }
+
+        // 2. Weapon & Range Handling
+        equipBestWeapon();
+
         if (distSq > 9.5) {
             moveTowards(target.position(), true);
         } else {
-            stopMovement();
+            // In melee striking range!
+            // Tactical Sprint-Crit: jump right before attack to trigger player-grade critical hits
+            if (this.onGround() && this.attackCooldown <= 1) {
+                this.jumpFromGround();
+                this.setDeltaMovement(this.getDeltaMovement().add(
+                        (target.getX() - this.getX()) * 0.15,
+                        0.32,
+                        (target.getZ() - this.getZ()) * 0.15
+                ));
+            }
+
             if (this.attackCooldown <= 0) {
+                if (!this.onGround() && this.getDeltaMovement().y < 0) {
+                    this.fallDistance = 0.5;
+                }
                 broadcastSwing();
                 this.attack(target);
                 this.resetAttackStrengthTicker();
@@ -1701,7 +1764,12 @@ public class AiBotPlayer extends ServerPlayer {
         String target = action.getPrimaryTarget().toLowerCase().replace("minecraft:", "").trim();
         BlockPos origin = this.blockPosition();
 
-        if (target.contains("shelter") || target.contains("house") || target.contains("hut")) {
+        if (target.contains("cottage") || target.contains("house") || target.contains("home")) {
+            startHouseConstruction(origin.relative(this.getDirection(), 2), this.getDirection());
+            return true;
+        }
+
+        if (target.contains("shelter") || target.contains("hut")) {
             int placed = buildQuickShelter(origin);
             if (placed > 0) {
                 sayInChat("Built a protective shelter (" + placed + " blocks placed)!");
@@ -3383,6 +3451,118 @@ public class AiBotPlayer extends ServerPlayer {
         if (nearest != null) {
             this.teleportTo(nearest.getX() + 1.5, nearest.getY(), nearest.getZ() + 1.5);
         }
+    }
+
+    @Override
+    public boolean hurtServer(ServerLevel level, DamageSource damageSource, float amount) {
+        // Dynamic Shield Blocking: Check if bot is holding a shield and facing the attacker
+        if (this.isBlocking()) {
+            Entity directEntity = damageSource.getDirectEntity();
+            if (directEntity != null) {
+                Vec3 viewVec = this.getViewVector(1.0F);
+                Vec3 diff = directEntity.position().vectorTo(this.position()).normalize();
+                diff = new Vec3(diff.x, 0.0, diff.z);
+                if (diff.dot(viewVec) < 0.0) {
+                    this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                            SoundEvents.SHIELD_BLOCK.value(),
+                            SoundSource.PLAYERS, 1.0f, 1.0f);
+                    return false;
+                }
+            }
+        }
+
+        boolean result = super.hurtServer(level, damageSource, amount);
+        if (result && damageSource.getEntity() instanceof LivingEntity attacker && !(attacker instanceof Player)) {
+            // Auto-raise shield if available to block consecutive hits
+            if (this.getOffhandItem().is(Items.SHIELD)) {
+                this.shieldBlockTicks = 20;
+                this.startUsingItem(net.minecraft.world.InteractionHand.OFF_HAND);
+            }
+
+            // Non-guard workers broadcast distress call to nearby guards
+            String role = this.botRole.toLowerCase();
+            if (!role.contains("guard") && !role.contains("bodyguard") && !role.contains("warrior") && !role.contains("soldier")) {
+                if (this.tickCount - this.lastDistressTick > 100) {
+                    this.lastDistressTick = this.tickCount;
+                    BotManager.broadcastDistress(this, attacker, this.blockPosition());
+                }
+            }
+        }
+        return result;
+    }
+
+    public void respondToDistressCall(LivingEntity threat, AiBotPlayer caller) {
+        sayInChat("Backup is on the way, " + caller.getBotName() + "! Engaging " + threat.getType().getDescription().getString() + "!");
+        this.actionQueue.clear();
+        this.currentAction = new BotAction("ATTACK", threat.getType().getDescription().getString(), null, 1);
+        engageTarget(threat);
+    }
+
+    public boolean handleBuilderChatCommand(String text, @Nullable ServerPlayer speaker) {
+        String lower = text.toLowerCase(Locale.ROOT);
+        if (lower.contains("build a house") || lower.contains("build house") || lower.contains("build home") || lower.contains("build cottage")) {
+            startHouseConstruction(this.blockPosition().relative(this.getDirection(), 2), this.getDirection());
+            return true;
+        }
+        return false;
+    }
+
+    public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {
+        this.activeHouseQueue = HouseBlueprint.generateCottage(origin, facing);
+        this.currentHouseOrigin = origin;
+        this.currentAction = new BotAction("BUILD_HOUSE", "cottage", null, activeHouseQueue.size());
+        this.actionProgressCount = 0;
+        sayInChat("Starting architectural construction of a village cottage! Loaded blueprint with " + activeHouseQueue.size() + " structural blocks.");
+    }
+
+    private boolean tickHouseBuildingAction() {
+        if (this.activeHouseQueue == null || this.activeHouseQueue.isEmpty()) {
+            this.activeHouseQueue = null;
+            // Register completed house in VillageManager
+            String compound = this.assignedAreaName != null ? this.assignedAreaName : "Village";
+            BlockPos doorPos = this.currentHouseOrigin != null ? this.currentHouseOrigin.relative(this.getDirection(), 1).above(1) : this.blockPosition();
+            BlockPos bedPos = this.currentHouseOrigin != null ? this.currentHouseOrigin.relative(this.getDirection().getClockWise(), -2)
+                    .relative(this.getDirection().getOpposite(), 6).above(1) : this.blockPosition();
+            VillageManager.registerHouse(compound, doorPos, bedPos, null);
+
+            sayInChat("House construction complete! Equipped with cobblestone floor, oak walls, windows, door, torches, and a bed. Registered in village housing registry!");
+            return true;
+        }
+
+        if (this.houseBuildCooldown > 0) {
+            this.houseBuildCooldown--;
+            return false;
+        }
+
+        // Take next voxel step
+        HouseBlueprint.VoxelStep step = this.activeHouseQueue.remove(0);
+        this.actionProgressCount++;
+
+        // Walk close to the target block if too far (> 5 blocks away)
+        if (this.distanceToSqr(Vec3.atCenterOf(step.pos())) > 25.0) {
+            moveTowards(Vec3.atCenterOf(step.pos()), false);
+            this.activeHouseQueue.add(0, step);
+            this.actionProgressCount--;
+            return false;
+        }
+
+        lookAtPos(Vec3.atCenterOf(step.pos()));
+
+        if (step.isClearAir()) {
+            if (!this.level().getBlockState(step.pos()).isAir()) {
+                this.level().destroyBlock(step.pos(), false, this);
+                broadcastSwing();
+            }
+        } else {
+            this.level().setBlockAndUpdate(step.pos(), step.state());
+            broadcastSwing();
+            this.level().playSound(null, step.pos(),
+                    step.state().getSoundType().getPlaceSound(),
+                    SoundSource.BLOCKS, 1.0f, 1.0f);
+        }
+
+        this.houseBuildCooldown = 2;
+        return false;
     }
 
     private static class BotNetHandler extends ServerGamePacketListenerImpl {

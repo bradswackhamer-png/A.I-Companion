@@ -12,6 +12,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import net.minecraft.ChatFormatting;
+import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoRemovePacket;
 import net.minecraft.network.protocol.game.ClientboundPlayerInfoUpdatePacket;
@@ -342,6 +343,12 @@ public class BotManager {
             return;
         }
 
+        if (bot.handleBuilderChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
         // Check if player is assigning bot to a global area: "guard Compound" / "stay inside Base"
         java.util.regex.Matcher areaMatcher = java.util.regex.Pattern.compile(
                 "(?:guard|patrol|stay\\s+(?:in|inside)|defend|hold|watch)\\s+(?:the\\s+)?([a-zA-Z0-9_-]+)",
@@ -386,5 +393,21 @@ public class BotManager {
                 BotPersistence.saveAll(server);
             });
         });
+    }
+
+    public static void broadcastDistress(AiBotPlayer victim, net.minecraft.world.entity.LivingEntity threat, BlockPos pos) {
+        String threatName = threat.getType().getDescription().getString();
+        victim.sayInChat("[Distress] Under attack by " + threatName + " at (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ")! Requesting backup!");
+
+        for (AiBotPlayer bot : ACTIVE_BOTS.values()) {
+            if (bot == victim) continue;
+            if (bot.level() != victim.level()) continue;
+            if (bot.distanceToSqr(victim) > 48.0 * 48.0) continue;
+
+            String role = bot.getBotRole().toLowerCase();
+            if (role.contains("guard") || role.contains("bodyguard") || role.contains("warrior") || role.contains("soldier")) {
+                bot.respondToDistressCall(threat, victim);
+            }
+        }
     }
 }
