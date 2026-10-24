@@ -23,7 +23,14 @@ public class AiCompanionMod {
     public static final String MODID = "aicompanion";
     public static final Logger LOGGER = LogUtils.getLogger();
 
+    public static final net.neoforged.neoforge.registries.DeferredRegister.Items ITEMS =
+            net.neoforged.neoforge.registries.DeferredRegister.createItems(MODID);
+
+    public static final net.neoforged.neoforge.registries.DeferredItem<com.aicompanion.bot.area.SurveyorWandItem> SURVEYOR_WAND =
+            ITEMS.register("surveyor_wand", () -> new com.aicompanion.bot.area.SurveyorWandItem(new net.minecraft.world.item.Item.Properties().stacksTo(1)));
+
     public AiCompanionMod(IEventBus modEventBus, ModContainer modContainer) {
+        ITEMS.register(modEventBus);
         modContainer.registerConfig(ModConfig.Type.LOCAL, BotConfig.SPEC);
         NeoForge.EVENT_BUS.register(this);
         LOGGER.info("Gemini AI Companion Bot Mod (NeoForge 26.3.0.48-beta) initialized!");

@@ -342,6 +342,22 @@ public class BotManager {
             return;
         }
 
+        // Check if player is assigning bot to a global area: "guard Compound" / "stay inside Base"
+        java.util.regex.Matcher areaMatcher = java.util.regex.Pattern.compile(
+                "(?:guard|patrol|stay\\s+(?:in|inside)|defend|hold|watch)\\s+(?:the\\s+)?([a-zA-Z0-9_-]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(requestText);
+        if (areaMatcher.find()) {
+            String candArea = areaMatcher.group(1).trim();
+            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(candArea);
+            if (area != null) {
+                bot.setAssignedArea(area.name);
+                bot.sayInChat("Understood! I am now guarding and holding the perimeter of '" + area.name + "' (" + area.type + "). I will strictly remain inside its borders!");
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+        }
+
         boolean learnedNickname = bot.extractAndLearnNicknameFromPrompt(requestText);
         boolean learnedAnchor = bot.extractAndLearnAnchorFromPrompt(requestText);
         boolean learnedFarm = bot.extractAndLearnFarmConfigFromPrompt(requestText, speaker);

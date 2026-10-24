@@ -1,5 +1,6 @@
 package com.aicompanion.bot;
 
+import com.aicompanion.bot.area.SavedArea;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.mojang.logging.LogUtils;
@@ -132,6 +133,8 @@ public class BotPersistence {
         public boolean conductorReturning = false;
         public boolean tractorMode = false;
 
+        public String assignedArea = "";
+
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
         public List<BotAction> activeActions = new ArrayList<>();
@@ -140,6 +143,52 @@ public class BotPersistence {
     public static class PersistentStore {
         public List<SavedBotData> bots = new ArrayList<>();
         public Map<String, SavedLocation> locations = new LinkedHashMap<>();
+        public Map<String, SavedArea> areas = new LinkedHashMap<>();
+    }
+
+    // Persistent global areas (e.g. "Compound", "Base", "NorthFarm")
+    private static final Map<String, SavedArea> SAVED_AREAS = new LinkedHashMap<>();
+
+    public static synchronized void saveArea(SavedArea area) {
+        if (area == null || area.name == null || area.name.isBlank()) return;
+        String key = area.name.trim().toLowerCase(Locale.ROOT);
+        SAVED_AREAS.put(key, area);
+    }
+
+    public static synchronized SavedArea getArea(String name) {
+        if (name == null || name.isBlank()) return null;
+        String key = name.trim().toLowerCase(Locale.ROOT);
+        if (SAVED_AREAS.containsKey(key)) {
+            return SAVED_AREAS.get(key);
+        }
+        for (Map.Entry<String, SavedArea> entry : SAVED_AREAS.entrySet()) {
+            if (key.contains(entry.getKey()) || entry.getKey().contains(key)) {
+                return entry.getValue();
+            }
+        }
+        return null;
+    }
+
+    public static synchronized Map<String, SavedArea> getAllAreas() {
+        return new LinkedHashMap<>(SAVED_AREAS);
+    }
+
+    public static synchronized boolean removeArea(String name) {
+        if (name == null || name.isBlank()) return false;
+        String key = name.trim().toLowerCase(Locale.ROOT);
+        return SAVED_AREAS.remove(key) != null;
+    }
+
+    public static synchronized List<SavedArea> getAreasContaining(double x, double y, double z, String dimension) {
+        List<SavedArea> list = new ArrayList<>();
+        for (SavedArea area : SAVED_AREAS.values()) {
+            if (dimension == null || area.dimension.equalsIgnoreCase(dimension)) {
+                if (area.contains(x, y, z)) {
+                    list.add(area);
+                }
+            }
+        }
+        return list;
     }
 
     public static synchronized void saveLocation(String name, BlockPos pos, String dimension) {
@@ -185,6 +234,7 @@ public class BotPersistence {
         try {
             PersistentStore store = new PersistentStore();
             store.locations.putAll(SAVED_LOCATIONS);
+            store.areas.putAll(SAVED_AREAS);
 
             for (AiBotPlayer bot : BotManager.getActiveBots()) {
                 SavedBotData data = new SavedBotData();
@@ -193,6 +243,7 @@ public class BotPersistence {
                 data.aliases = bot.getAliases();
                 data.role = bot.getBotRole();
                 data.dimension = bot.level().dimension().identifier().toString();
+                data.assignedArea = bot.getAssignedAreaName() != null ? bot.getAssignedAreaName() : "";
                 data.x = bot.getX();
                 data.y = bot.getY();
                 data.z = bot.getZ();
@@ -326,6 +377,14 @@ public class BotPersistence {
                 SAVED_LOCATIONS.putAll(store.locations);
             }
 
+            SAVED_AREAS.clear();
+            if (store.areas != null) {
+                SAVED_AREAS.putAll(store.areas);
+                for (SavedArea area : SAVED_AREAS.values()) {
+                    area.computeAABB();
+                }
+            }
+
             if (store.bots != null) {
                 for (SavedBotData data : store.bots) {
                     if (data.name == null || data.name.isBlank()) continue;
@@ -343,6 +402,9 @@ public class BotPersistence {
                     targetLevel.getChunk(BlockPos.containing(data.x, data.y, data.z));
                     AiBotPlayer bot = BotManager.spawnBotFromSave(targetLevel, data);
                     bot.setAliases(data.aliases, data.nickname);
+                    if (data.assignedArea != null && !data.assignedArea.isBlank()) {
+                        bot.setAssignedArea(data.assignedArea);
+                    }
                     if (data.anchorX != null && data.anchorY != null && data.anchorZ != null) {
                         bot.setGuardAnchor(new BlockPos(data.anchorX, data.anchorY, data.anchorZ), data.anchorRadius);
                     }
@@ -370,8 +432,8 @@ public class BotPersistence {
                         bot.setActionPlan(data.activeActions);
                     }
                 }
-                LOGGER.info("Restored {} AI Companion bot(s) and {} saved location(s) from persistent memory.",
-                        store.bots.size(), SAVED_LOCATIONS.size());
+                LOGGER.info("Restored {} AI Companion bot(s), {} location(s), and {} global area(s) from persistent memory.",
+                        store.bots.size(), SAVED_LOCATIONS.size(), SAVED_AREAS.size());
             }
         } catch (Exception e) {
             LOGGER.error("Failed to load AI bot persistent memory", e);

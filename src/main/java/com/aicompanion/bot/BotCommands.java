@@ -27,6 +27,14 @@ public class BotCommands {
     private static final SuggestionProvider<CommandSourceStack> ROLE_SUGGESTIONS = (ctx, builder) ->
             SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher", "conductor"), builder);
 
+    private static final SuggestionProvider<CommandSourceStack> AREA_SUGGESTIONS = (ctx, builder) -> {
+        var names = BotPersistence.getAllAreas().values().stream().map(a -> a.name).toList();
+        return SharedSuggestionProvider.suggest(names, builder);
+    };
+
+    private static final SuggestionProvider<CommandSourceStack> AREA_TYPE_SUGGESTIONS = (ctx, builder) ->
+            SharedSuggestionProvider.suggest(java.util.List.of("COMPOUND", "FARM", "RANCH", "SAFE_ZONE", "RESTRICTED", "GENERAL"), builder);
+
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(buildCommandTree("bot"));
         dispatcher.register(buildCommandTree("aibot"));
@@ -76,7 +84,124 @@ public class BotCommands {
                                 .executes(ctx -> setModel(ctx, StringArgumentType.getString(ctx, "modelName")))))
                 .then(Commands.literal("waypoint")
                         .then(Commands.argument("locationName", StringArgumentType.word())
-                                .executes(ctx -> saveWaypoint(ctx, StringArgumentType.getString(ctx, "locationName")))));
+                                .executes(ctx -> saveWaypoint(ctx, StringArgumentType.getString(ctx, "locationName")))))
+                .then(Commands.literal("wand")
+                        .executes(BotCommands::giveWand))
+                .then(Commands.literal("area")
+                        .then(Commands.literal("list")
+                                .executes(BotCommands::listAreas))
+                        .then(Commands.literal("clear")
+                                .executes(BotCommands::clearAreaPoints))
+                        .then(Commands.literal("save")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .executes(ctx -> saveAreaCmd(ctx, StringArgumentType.getString(ctx, "areaName"), "COMPOUND"))
+                                        .then(Commands.argument("areaType", StringArgumentType.word())
+                                                .suggests(AREA_TYPE_SUGGESTIONS)
+                                                .executes(ctx -> saveAreaCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "areaName"),
+                                                        StringArgumentType.getString(ctx, "areaType"))))))
+                        .then(Commands.literal("remove")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .suggests(AREA_SUGGESTIONS)
+                                        .executes(ctx -> removeAreaCmd(ctx, StringArgumentType.getString(ctx, "areaName")))))
+                        .then(Commands.literal("show")
+                                .then(Commands.argument("areaName", StringArgumentType.word())
+                                        .suggests(AREA_SUGGESTIONS)
+                                        .executes(ctx -> showAreaCmd(ctx, StringArgumentType.getString(ctx, "areaName")))))
+                        .then(Commands.literal("assign")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .then(Commands.argument("areaName", StringArgumentType.word())
+                                                .suggests(AREA_SUGGESTIONS)
+                                                .executes(ctx -> assignAreaCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
+                                                        StringArgumentType.getString(ctx, "areaName")))))));
+    }
+
+    private static int giveWand(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        ServerPlayer player = source.getPlayer();
+        if (player == null) {
+            source.sendFailure(Component.literal("Only in-game players can hold the Surveyor Wand."));
+            return 0;
+        }
+        ItemStack wand = AiCompanionMod.SURVEYOR_WAND.toStack();
+        player.getInventory().add(wand);
+        source.sendSuccess(() -> Component.literal("§aGiven §6Surveyor Wand§a! Right-click blocks to set corners, then Sneak + Right-Click to save the boundary.")
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int listAreas(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        var areas = BotPersistence.getAllAreas();
+        if (areas.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("No global areas saved yet. Use /bot wand to mark corners and save an area!").withStyle(ChatFormatting.YELLOW), false);
+            return 1;
+        }
+        source.sendSuccess(() -> Component.literal("=== Global Companion Areas (" + areas.size() + ") ===").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        for (var a : areas.values()) {
+            source.sendSuccess(() -> Component.literal("• §f" + a.name + " §7[§e" + a.type + "§7] §a" + a.points.size() + " corners §7(~" + (int) a.getAreaSqMeters() + " m², Dim: " + a.dimension + ")"), false);
+        }
+        return 1;
+    }
+
+    private static int clearAreaPoints(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player != null) {
+            com.aicompanion.bot.area.AreaManager.clearSelection(player);
+        }
+        return 1;
+    }
+
+    private static int saveAreaCmd(CommandContext<CommandSourceStack> ctx, String name, String type) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.literal("Only players can save areas from active wand selections."));
+            return 0;
+        }
+        boolean ok = com.aicompanion.bot.area.AreaManager.saveActiveSelection(player, name, type);
+        return ok ? 1 : 0;
+    }
+
+    private static int removeAreaCmd(CommandContext<CommandSourceStack> ctx, String name) {
+        boolean removed = BotPersistence.removeArea(name);
+        if (removed) {
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            ctx.getSource().sendSuccess(() -> Component.literal("Removed global area '" + name + "'.").withStyle(ChatFormatting.GREEN), true);
+            return 1;
+        } else {
+            ctx.getSource().sendFailure(Component.literal("No global area named '" + name + "' found."));
+            return 0;
+        }
+    }
+
+    private static int showAreaCmd(CommandContext<CommandSourceStack> ctx, String name) {
+        var area = BotPersistence.getArea(name);
+        if (area == null) {
+            ctx.getSource().sendFailure(Component.literal("Area '" + name + "' not found."));
+            return 0;
+        }
+        area.spawnPerimeterParticles(ctx.getSource().getLevel(), net.minecraft.core.particles.ParticleTypes.END_ROD);
+        ctx.getSource().sendSuccess(() -> Component.literal("Illuminated boundary for area '" + area.name + "' with glowing perimeter particles!").withStyle(ChatFormatting.AQUA), false);
+        return 1;
+    }
+
+    private static int assignAreaCmd(CommandContext<CommandSourceStack> ctx, String botName, String areaName) {
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("Bot '" + botName + "' not found."));
+            return 0;
+        }
+        var area = BotPersistence.getArea(areaName);
+        if (area == null) {
+            ctx.getSource().sendFailure(Component.literal("Area '" + areaName + "' not found."));
+            return 0;
+        }
+        bot.setAssignedArea(area.name);
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        ctx.getSource().sendSuccess(() -> Component.literal("Assigned " + bot.getBotName() + " to global area '" + area.name + "' (" + area.type + "). Bot will strictly patrol and operate inside this perimeter!").withStyle(ChatFormatting.GREEN), true);
+        return 1;
     }
 
     private static int saveWaypoint(CommandContext<CommandSourceStack> ctx, String locationName) {

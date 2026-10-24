@@ -299,6 +299,17 @@ public class GeminiService {
                     sb.append(String.format("- %s: (%d, %d, %d)\n", loc.name, loc.x, loc.y, loc.z)));
         }
 
+        // Global Saved Areas / Base Perimeters
+        Map<String, com.aicompanion.bot.area.SavedArea> areas = BotPersistence.getAllAreas();
+        if (!areas.isEmpty()) {
+            sb.append("\n=== GLOBAL SAVED AREAS & BASE PERIMETERS ===\n");
+            for (var a : areas.values()) {
+                boolean botInside = a.contains(bot.getX(), bot.getY(), bot.getZ());
+                sb.append(String.format("- %s [%s]: %d corners, ~%d m² (Bot is currently inside: %s)\n",
+                        a.name, a.type, a.points.size(), (int) a.getAreaSqMeters(), botInside ? "YES" : "NO"));
+            }
+        }
+
         // Recent conversation memory
         List<String> mem = getMemory(bot.getBotName());
         if (!mem.isEmpty()) {

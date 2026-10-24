@@ -16,6 +16,7 @@ import java.util.function.Consumer;
 import java.util.function.Predicate;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.particles.ParticleTypes;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.Connection;
@@ -154,6 +155,18 @@ public class AiBotPlayer extends ServerPlayer {
 
     // Tractor configuration
     private boolean tractorMode = false;
+
+    // Global area assignment (e.g. "Compound", "NorthFarm")
+    private @Nullable String assignedAreaName = null;
+    private int holeEscapeTicks = 0;
+
+    public @Nullable String getAssignedAreaName() {
+        return this.assignedAreaName;
+    }
+
+    public synchronized void setAssignedArea(@Nullable String areaName) {
+        this.assignedAreaName = areaName;
+    }
 
     private final Deque<BotAction> actionQueue = new ArrayDeque<>();
     private @Nullable BotAction currentAction = null;
@@ -2805,12 +2818,75 @@ public class AiBotPlayer extends ServerPlayer {
     private final java.util.Set<BlockPos> learnedHazardPits = new java.util.HashSet<>();
 
     private boolean isDeepPitAt(BlockPos footCandidate) {
-        if (!this.level().getBlockState(footCandidate).isAir()) return false;
-        return this.level().getBlockState(footCandidate.below()).isAir()
-                && this.level().getBlockState(footCandidate.below(2)).isAir();
+        BlockState footState = this.level().getBlockState(footCandidate);
+        if (!footState.isAir() && !footState.canBeReplaced()) return false;
+        BlockState belowState = this.level().getBlockState(footCandidate.below());
+        // If 1 block below candidate foot is air/passable, stepping here causes a 2+ block fall!
+        return belowState.isAir() || belowState.canBeReplaced();
+    }
+
+    private boolean isEnclosedInHole() {
+        BlockPos feet = this.blockPosition();
+        int solidWalls = 0;
+        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            BlockPos wallPos = feet.relative(d).above();
+            BlockState s = this.level().getBlockState(wallPos);
+            if (!s.isAir() && !s.canBeReplaced() && !isFenceOrWall(s)) {
+                solidWalls++;
+            }
+        }
+        return solidWalls >= 2;
+    }
+
+    private void executeHoleEscape() {
+        BlockPos feetPos = this.blockPosition();
+        BlockPos aboveHead = feetPos.above(2);
+
+        // 1. Break block directly above head if obstructed
+        BlockState aboveHeadState = this.level().getBlockState(aboveHead);
+        if (!aboveHeadState.isAir() && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0 && aboveHeadState.getDestroySpeed(this.level(), aboveHead) < 15.0f) {
+            this.level().destroyBlock(aboveHead, true, this);
+        }
+
+        // 2. Pillar jump straight up and place building block beneath feet
+        lookAtPos(new Vec3(this.getX(), this.getY() - 1.0, this.getZ()));
+        this.setPos(this.getX(), this.getY() + 1.05, this.getZ());
+        this.setDeltaMovement(0, 0.42, 0);
+
+        if (!placeBuildingBlockAt(feetPos)) {
+            // Survival fallback: place dirt so companion is never permanently trapped
+            this.level().setBlockAndUpdate(feetPos, Blocks.DIRT.defaultBlockState());
+        }
+
+        this.level().playSound(null, feetPos, net.minecraft.sounds.SoundEvents.STONE_PLACE, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f);
+        this.level().sendParticles(ParticleTypes.HAPPY_VILLAGER, feetPos.getX() + 0.5, feetPos.getY() + 1.2, feetPos.getZ() + 0.5, 6, 0.2, 0.2, 0.2, 0.05);
+
+        // 3. Clear step in front so we can walk forward onto the next level
+        net.minecraft.core.Direction dir = this.getDirection();
+        BlockPos frontHead = feetPos.relative(dir).above(2);
+        BlockState frontHeadState = this.level().getBlockState(frontHead);
+        if (!frontHeadState.isAir() && frontHeadState.getDestroySpeed(this.level(), frontHead) >= 0 && frontHeadState.getDestroySpeed(this.level(), frontHead) < 15.0f) {
+            this.level().destroyBlock(frontHead, true, this);
+        }
+        vacuumNearbyDrops();
+        this.stuckTicks = 0;
     }
 
     private void moveTowards(Vec3 target, boolean sprint) {
+        // Global Area Perimeter Boundary Enforcement
+        if (this.assignedAreaName != null && !this.assignedAreaName.isBlank()) {
+            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(this.assignedAreaName);
+            if (area != null) {
+                boolean botInside = area.contains(this.getX(), this.getY(), this.getZ());
+                boolean targetInside = area.contains(target.x, target.y, target.z);
+                if (!botInside || !targetInside) {
+                    Vec3 center = area.getCenter();
+                    lookAtPos(new Vec3(center.x, center.y + this.getEyeHeight(), center.z));
+                    target = center;
+                }
+            }
+        }
+
         lookAtPos(new Vec3(target.x, target.y + this.getEyeHeight(), target.z));
         this.setSprinting(sprint);
         this.zza = sprint ? 1.0f : 0.8f;
@@ -2844,29 +2920,48 @@ public class AiBotPlayer extends ServerPlayer {
                     this.jumpFromGround();
                 }
                 return;
-            } else if (!placeBuildingBlockAt(frontPos.below())) {
+            } else if (placeBuildingBlockAt(frontPos.below())) {
+                // Successfully bridged pit with a block!
+                this.zza = 0.5f;
+                this.xxa = 0.0f;
+                return;
+            } else {
                 // Wide pit and no blocks to bridge: steer sideways around the pit instead of falling in
                 BlockPos leftPos = this.blockPosition().relative(dir.getCounterClockWise());
                 boolean leftSafe = !isDeepPitAt(leftPos);
                 this.zza = 0.2f;
                 this.xxa = leftSafe ? 0.9f : -0.9f;
+                return;
             }
         }
 
-        // Fence and Wall Barrier Recognition: Never endlessly jump against fences or walls!
+        // Fence and Wall Barrier Recognition: Never endlessly jump against fences or 2-block tall walls!
         BlockPos headFront = frontPos.above();
         BlockState headState = this.level().getBlockState(headFront);
         boolean isFenceBarrier = isFenceOrWall(frontState) || isFenceOrWall(headState);
+        boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier;
 
-        // Jump over 1-block ledges or swim in water/lava
+        // Jump over 1-block ledges or swim in water/lava (Never jump at 2-block tall solid walls!)
         boolean stepUpPossible = !frontState.isAir() && headState.isAir() && this.level().getBlockState(headFront.above()).isAir() && !isFenceBarrier;
-        boolean shouldJump = (this.horizontalCollision || stepUpPossible || this.isInWater() || this.isInLava()) && !isFenceBarrier;
-        if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isFenceBarrier) {
+        boolean shouldJump = (stepUpPossible || (this.horizontalCollision && !isTallWall) || this.isInWater() || this.isInLava()) && !isFenceBarrier;
+        if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier) {
             shouldJump = true;
         }
         this.setJumping(shouldJump);
         if (shouldJump && this.onGround()) {
             this.jumpFromGround();
+        }
+
+        // 2+ Block Deep Hole / Trap Self-Rescue Engine: Pillar jump and build up!
+        if ((isTallWall || isEnclosedInHole()) && target.y >= this.getY() - 0.5) {
+            this.holeEscapeTicks++;
+            if (this.holeEscapeTicks >= 4) {
+                this.holeEscapeTicks = 0;
+                executeHoleEscape();
+                return;
+            }
+        } else {
+            this.holeEscapeTicks = 0;
         }
 
         if (isFenceBarrier) {
@@ -2901,43 +2996,7 @@ public class AiBotPlayer extends ServerPlayer {
                 }
             } else if (this.stuckTicks > 24) {
                 this.learnedHazardPits.add(this.blockPosition().immutable());
-                boolean needClimbUp = target.y > this.getY() + 0.8
-                        || (!frontState.isAir() && !headState.isAir());
-
-                if (needClimbUp) {
-                    // 1. Clear ceiling above bot's head so it can jump/pillar
-                    BlockPos aboveHead = this.blockPosition().above(2);
-                    BlockState aboveHeadState = this.level().getBlockState(aboveHead);
-                    if (!aboveHeadState.isAir() && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0) {
-                        this.level().destroyBlock(aboveHead, true, this);
-                    }
-
-                    // 2. Carve an upward staircase in front (leave frontPos intact as a step if solid, clear headFront & headFront.above())
-                    BlockPos headFront2 = headFront.above();
-                    BlockState headState2 = this.level().getBlockState(headFront2);
-                    if (!headState.isAir() && headState.getDestroySpeed(this.level(), headFront) >= 0 && headState.getDestroySpeed(this.level(), headFront) < 15.0f) {
-                        this.level().destroyBlock(headFront, true, this);
-                    }
-                    if (!headState2.isAir() && headState2.getDestroySpeed(this.level(), headFront2) >= 0 && headState2.getDestroySpeed(this.level(), headFront2) < 15.0f) {
-                        this.level().destroyBlock(headFront2, true, this);
-                    }
-                    vacuumNearbyDrops();
-
-                    // 3. Pillar up out of deep pit so the bot is never trapped
-                    BlockPos underPos = this.blockPosition();
-                    this.setPos(this.getX(), this.getY() + 1.05, this.getZ());
-                    if (!placeBuildingBlockAt(underPos)) {
-                        this.level().setBlockAndUpdate(underPos, Blocks.DIRT.defaultBlockState());
-                    }
-                } else {
-                    // Blocked horizontally on flat ground: break obstacle at head/foot level (never break fences)
-                    if (!headState.isAir() && !isFenceOrWall(headState) && headState.getDestroySpeed(this.level(), headFront) >= 0 && headState.getDestroySpeed(this.level(), headFront) < 15.0f) {
-                        this.level().destroyBlock(headFront, true, this);
-                    } else if (!frontState.isAir() && !isFenceOrWall(frontState) && frontState.getDestroySpeed(this.level(), frontPos) >= 0 && frontState.getDestroySpeed(this.level(), frontPos) < 15.0f) {
-                        this.level().destroyBlock(frontPos, true, this);
-                    }
-                    vacuumNearbyDrops();
-                }
+                executeHoleEscape();
                 this.stuckTicks = 0;
             }
         } else {
