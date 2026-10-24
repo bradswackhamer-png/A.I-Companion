@@ -63,7 +63,7 @@ public class AiCompanionMod {
 
     @SubscribeEvent
     public void onLevelSave(LevelEvent.Save event) {
-        if (BotManager.isServerStopping()) {
+        if (BotManager.isServerStopping() || !BotPersistence.hasLoadedFromDisk()) {
             return;
         }
         if (event.getLevel() instanceof ServerLevel serverLevel && serverLevel.dimension() == Level.OVERWORLD) {

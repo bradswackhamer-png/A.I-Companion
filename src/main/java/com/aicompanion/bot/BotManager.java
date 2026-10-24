@@ -78,8 +78,10 @@ public class BotManager {
         bot.getInventory().add(new ItemStack(Items.BREAD, 8));
         bot.applyRoleStarterKit();
 
+        BotPersistence.markBotCreated();
         registerBotInWorldAndPlayerList(level, bot);
         ACTIVE_BOTS.put(key, bot);
+        level.setChunkForced(bot.blockPosition().getX() >> 4, bot.blockPosition().getZ() >> 4, true);
         BotPersistence.saveAll(level.getServer());
 
         if (BotConfig.getCandidateApiKeys(null).isEmpty()) {
@@ -127,8 +129,10 @@ public class BotManager {
             }
         }
 
+        BotPersistence.markBotCreated();
         registerBotInWorldAndPlayerList(level, bot);
         ACTIVE_BOTS.put(key, bot);
+        level.setChunkForced(bot.blockPosition().getX() >> 4, bot.blockPosition().getZ() >> 4, true);
         return bot;
     }
 
@@ -191,10 +195,14 @@ public class BotManager {
 
         bot.clearActions();
         ServerLevel level = bot.level();
+        level.setChunkForced(bot.blockPosition().getX() >> 4, bot.blockPosition().getZ() >> 4, false);
         MinecraftServer server = level.getServer();
         unregisterBotFromPlayerList(server.getPlayerList(), bot);
         level.removePlayerImmediately(bot, Entity.RemovalReason.DISCARDED);
         server.getPlayerList().broadcastAll(new ClientboundPlayerInfoRemovePacket(List.of(bot.getUUID())));
+        if (ACTIVE_BOTS.isEmpty()) {
+            BotPersistence.markExplicitlyCleared();
+        }
         if (saveChanges) {
             BotPersistence.saveAll(server);
         }
@@ -202,6 +210,7 @@ public class BotManager {
     }
 
     public static synchronized int removeAllBots() {
+        BotPersistence.markExplicitlyCleared();
         List<String> names = new ArrayList<>(ACTIVE_BOTS.keySet());
         int count = 0;
         for (String name : names) {
@@ -227,6 +236,28 @@ public class BotManager {
             if (bot.level() == joiningPlayer.level()) {
                 bot.level().getChunk(bot.blockPosition());
                 bot.level().getChunkSource().move(bot);
+
+                // If joining player is in proximity, immediately send entity spawn packets
+                double distSq = bot.distanceToSqr(joiningPlayer);
+                if (distSq <= 16384.0) { // within 128 blocks
+                    joiningPlayer.connection.send(new net.minecraft.network.protocol.game.ClientboundAddEntityPacket(bot, 0, bot.blockPosition()));
+                    java.util.List<net.minecraft.network.syncher.SynchedEntityData.DataValue<?>> nonDefault = bot.getEntityData().getNonDefaultValues();
+                    if (nonDefault != null && !nonDefault.isEmpty()) {
+                        joiningPlayer.connection.send(new net.minecraft.network.protocol.game.ClientboundSetEntityDataPacket(bot.getId(), nonDefault));
+                    }
+                    joiningPlayer.connection.send(new net.minecraft.network.protocol.game.ClientboundRotateHeadPacket(bot, (byte)(bot.getYHeadRot() * 256.0F / 360.0F)));
+
+                    List<com.mojang.datafixers.util.Pair<EquipmentSlot, ItemStack>> eqList = new ArrayList<>();
+                    for (EquipmentSlot slot : EquipmentSlot.values()) {
+                        ItemStack item = bot.getItemBySlot(slot);
+                        if (!item.isEmpty()) {
+                            eqList.add(com.mojang.datafixers.util.Pair.of(slot, item));
+                        }
+                    }
+                    if (!eqList.isEmpty()) {
+                        joiningPlayer.connection.send(new net.minecraft.network.protocol.game.ClientboundSetEquipmentPacket(bot.getId(), eqList));
+                    }
+                }
             }
         }
     }

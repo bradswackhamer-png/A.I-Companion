@@ -35,6 +35,21 @@ public class BotPersistence {
     // Persistent named locations (e.g., "town", "base", "mine") shared across bots
     private static final Map<String, SavedLocation> SAVED_LOCATIONS = new LinkedHashMap<>();
 
+    private static volatile boolean hasLoadedFromDisk = false;
+    private static volatile boolean hasExplicitlyClearedAllBots = false;
+
+    public static void markExplicitlyCleared() {
+        hasExplicitlyClearedAllBots = true;
+    }
+
+    public static void markBotCreated() {
+        hasExplicitlyClearedAllBots = false;
+    }
+
+    public static boolean hasLoadedFromDisk() {
+        return hasLoadedFromDisk;
+    }
+
     public static class SavedLocation {
         public String name = "";
         public int x;
@@ -157,12 +172,17 @@ public class BotPersistence {
     }
 
     public static synchronized void saveAll(MinecraftServer server) {
-        try {
-            if (BotManager.getActiveBots().isEmpty() && BotManager.isServerStopping()) {
-                LOGGER.info("Skipping BotPersistence.saveAll during shutdown because active bot list is empty.");
-                return;
-            }
+        if (!hasLoadedFromDisk) {
+            LOGGER.warn("Skipping BotPersistence.saveAll: world bots have not finished loading from disk yet.");
+            return;
+        }
 
+        if (BotManager.getActiveBots().isEmpty() && !hasExplicitlyClearedAllBots) {
+            LOGGER.warn("Skipping BotPersistence.saveAll: active bot list is empty and bots were not explicitly removed by user command.");
+            return;
+        }
+
+        try {
             PersistentStore store = new PersistentStore();
             store.locations.putAll(SAVED_LOCATIONS);
 
@@ -236,8 +256,23 @@ public class BotPersistence {
             }
 
             File file = getSaveFile(server);
-            try (FileWriter writer = new FileWriter(file, StandardCharsets.UTF_8)) {
+            File bakFile = new File(file.getParentFile(), "aicompanion_memory.json.bak");
+            File tmpFile = new File(file.getParentFile(), "aicompanion_memory.json.tmp");
+
+            try (FileWriter writer = new FileWriter(tmpFile, StandardCharsets.UTF_8)) {
                 GSON.toJson(store, writer);
+            }
+
+            if (file.exists() && file.length() > 0) {
+                try {
+                    java.nio.file.Files.copy(file.toPath(), bakFile.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+                } catch (Exception ignored) {}
+            }
+
+            try {
+                java.nio.file.Files.move(tmpFile.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING, java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } catch (Exception e) {
+                java.nio.file.Files.move(tmpFile.toPath(), file.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
             }
         } catch (Exception e) {
             LOGGER.error("Failed to save AI bot persistent memory", e);
@@ -246,11 +281,45 @@ public class BotPersistence {
 
     public static synchronized void loadAll(MinecraftServer server) {
         File file = getSaveFile(server);
-        if (!file.exists()) return;
+        File bakFile = new File(file.getParentFile(), "aicompanion_memory.json.bak");
 
-        try (FileReader reader = new FileReader(file, StandardCharsets.UTF_8)) {
+        File targetToRead = file;
+        if (!targetToRead.exists() || targetToRead.length() == 0) {
+            if (bakFile.exists() && bakFile.length() > 50) {
+                LOGGER.info("Primary bot memory file missing or empty, falling back to backup file: {}", bakFile.getName());
+                targetToRead = bakFile;
+            } else {
+                hasLoadedFromDisk = true;
+                return;
+            }
+        }
+
+        try (FileReader reader = new FileReader(targetToRead, StandardCharsets.UTF_8)) {
             PersistentStore store = GSON.fromJson(reader, PersistentStore.class);
-            if (store == null) return;
+            if (store == null && targetToRead != bakFile && bakFile.exists() && bakFile.length() > 50) {
+                try (FileReader bakReader = new FileReader(bakFile, StandardCharsets.UTF_8)) {
+                    store = GSON.fromJson(bakReader, PersistentStore.class);
+                }
+            }
+            if (store == null) {
+                hasLoadedFromDisk = true;
+                return;
+            }
+
+            // If primary file has 0 bots but backup has bots, restore from backup
+            if ((store.bots == null || store.bots.isEmpty()) && targetToRead != bakFile && bakFile.exists() && bakFile.length() > 50) {
+                try (FileReader bakReader = new FileReader(bakFile, StandardCharsets.UTF_8)) {
+                    PersistentStore bakStore = GSON.fromJson(bakReader, PersistentStore.class);
+                    if (bakStore != null && bakStore.bots != null && !bakStore.bots.isEmpty()) {
+                        LOGGER.warn("Primary memory file had 0 bots but backup has {} bots. Restoring from backup!", bakStore.bots.size());
+                        store = bakStore;
+                    }
+                } catch (Exception e) {
+                    LOGGER.warn("Could not read backup file", e);
+                }
+            }
+
+            hasLoadedFromDisk = true;
 
             SAVED_LOCATIONS.clear();
             if (store.locations != null) {
@@ -306,6 +375,7 @@ public class BotPersistence {
             }
         } catch (Exception e) {
             LOGGER.error("Failed to load AI bot persistent memory", e);
+            hasLoadedFromDisk = true;
         }
     }
 
