@@ -113,6 +113,7 @@ import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
 import com.aicompanion.bot.village.HouseBlueprint;
 import com.aicompanion.bot.village.VillageManager;
+import com.aicompanion.bot.village.ArchitecturalPalette;
 
 public class AiBotPlayer extends ServerPlayer {
     private final String botName;
@@ -3553,11 +3554,12 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {
-        this.activeHouseQueue = HouseBlueprint.generateCottage(origin, facing);
+        ArchitecturalPalette palette = ArchitecturalPalette.resolve((ServerLevel) this.level(), origin, this);
+        this.activeHouseQueue = HouseBlueprint.generateCottage(origin, facing, palette);
         this.currentHouseOrigin = origin;
         this.currentAction = new BotAction("BUILD_HOUSE", "cottage", null, activeHouseQueue.size());
         this.actionProgressCount = 0;
-        sayInChat("Starting architectural construction of a village cottage! Loaded blueprint with " + activeHouseQueue.size() + " structural blocks.");
+        sayInChat("Surveyed block registry & storage: Building with " + palette.themeName + "! Loaded " + activeHouseQueue.size() + " structural blocks.");
     }
 
     private boolean tickHouseBuildingAction() {
@@ -3570,7 +3572,7 @@ public class AiBotPlayer extends ServerPlayer {
                     .relative(this.getDirection().getOpposite(), 6).above(1) : this.blockPosition();
             VillageManager.registerHouse(compound, doorPos, bedPos, null);
 
-            sayInChat("House construction complete! Equipped with cobblestone floor, oak walls, windows, door, torches, and a bed. Registered in village housing registry!");
+            sayInChat("House construction complete! Integrated custom roof, doors, windows, lighting, and bed. Registered in village housing registry!");
             return true;
         }
 

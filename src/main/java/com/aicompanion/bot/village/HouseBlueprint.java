@@ -34,13 +34,15 @@ public class HouseBlueprint {
      * - Interior: Oak bed + wall torch
      */
     public static List<VoxelStep> generateCottage(BlockPos origin, Direction facing) {
+        return generateCottage(origin, facing, new ArchitecturalPalette());
+    }
+
+    public static List<VoxelStep> generateCottage(BlockPos origin, Direction facing, ArchitecturalPalette palette) {
         List<VoxelStep> steps = new ArrayList<>();
 
         Direction right = facing.getClockWise();
         Direction back = facing.getOpposite();
 
-        // Calculate offset vector so origin is just in front of the front door
-        // We build from x = -3 to +3 (relative right), z = 1 to 7 (relative back)
         int halfWidth = 3;
         int depth = 6;
         int wallHeight = 3; // y = 1 to 3
@@ -55,11 +57,11 @@ public class HouseBlueprint {
             }
         }
 
-        // Step 2: Lay solid cobblestone foundation / floor (y = 0)
+        // Step 2: Lay solid foundation / floor (y = 0)
         for (int w = -halfWidth; w <= halfWidth; w++) {
             for (int d = 1; d <= depth + 1; d++) {
                 BlockPos floorPos = origin.relative(right, w).relative(back, d);
-                steps.add(new VoxelStep(floorPos, Blocks.COBBLESTONE.defaultBlockState(), false));
+                steps.add(new VoxelStep(floorPos, palette.foundation, false));
             }
         }
 
@@ -76,69 +78,81 @@ public class HouseBlueprint {
 
                     // Front Doorway at w = 0, d = 1
                     if (w == 0 && d == 1) {
-                        if (h == 1) {
-                            BlockState doorLower = Blocks.OAK_DOOR.defaultBlockState()
-                                    .setValue(DoorBlock.FACING, facing)
-                                    .setValue(DoorBlock.HALF, DoubleBlockHalf.LOWER);
-                            steps.add(new VoxelStep(p, doorLower, false));
-                        } else if (h == 2) {
-                            BlockState doorUpper = Blocks.OAK_DOOR.defaultBlockState()
-                                    .setValue(DoorBlock.FACING, facing)
-                                    .setValue(DoorBlock.HALF, DoubleBlockHalf.UPPER);
-                            steps.add(new VoxelStep(p, doorUpper, false));
+                        if (palette.door.getBlock() instanceof DoorBlock) {
+                            if (h == 1) {
+                                BlockState doorLower = palette.door
+                                        .setValue(DoorBlock.FACING, facing)
+                                        .setValue(DoorBlock.HALF, DoubleBlockHalf.LOWER);
+                                steps.add(new VoxelStep(p, doorLower, false));
+                            } else if (h == 2) {
+                                BlockState doorUpper = palette.door
+                                        .setValue(DoorBlock.FACING, facing)
+                                        .setValue(DoorBlock.HALF, DoubleBlockHalf.UPPER);
+                                steps.add(new VoxelStep(p, doorUpper, false));
+                            } else {
+                                steps.add(new VoxelStep(p, palette.walls, false));
+                            }
                         } else {
-                            // Lintel above door
-                            steps.add(new VoxelStep(p, Blocks.OAK_PLANKS.defaultBlockState(), false));
+                            if (h <= 2) {
+                                steps.add(new VoxelStep(p, palette.door, false));
+                            } else {
+                                steps.add(new VoxelStep(p, palette.walls, false));
+                            }
                         }
                         continue;
                     }
 
                     // Log corner pillars
                     if (isCorner) {
-                        steps.add(new VoxelStep(p, Blocks.OAK_LOG.defaultBlockState(), false));
+                        steps.add(new VoxelStep(p, palette.cornerPillars, false));
                         continue;
                     }
 
                     // Windows at height 2 in the center of side walls
                     boolean isWindow = (h == 2) && ((Math.abs(w) == halfWidth && d == 4) || (w == 0 && d == depth + 1));
                     if (isWindow) {
-                        steps.add(new VoxelStep(p, Blocks.GLASS.defaultBlockState(), false));
+                        steps.add(new VoxelStep(p, palette.windows, false));
                     } else {
-                        steps.add(new VoxelStep(p, Blocks.OAK_PLANKS.defaultBlockState(), false));
+                        steps.add(new VoxelStep(p, palette.walls, false));
                     }
                 }
             }
         }
 
-        // Step 4: Roof (Flat layer at y = 4 + overhanging eaves)
+        // Step 4: Roof (y = wallHeight + 1 + overhanging eaves)
         int roofY = wallHeight + 1;
         for (int w = -halfWidth - 1; w <= halfWidth + 1; w++) {
             for (int d = 0; d <= depth + 2; d++) {
                 BlockPos p = origin.relative(right, w).relative(back, d).above(roofY);
-                steps.add(new VoxelStep(p, Blocks.OAK_PLANKS.defaultBlockState(), false));
+                steps.add(new VoxelStep(p, palette.roof, false));
             }
         }
 
-        // Step 5: Interior furnishing - Torches for lighting (prevent hostiles)
+        // Step 5: Interior furnishing - Lighting
         BlockPos torchPos1 = origin.relative(right, -2).relative(back, 2).above(2);
         BlockPos torchPos2 = origin.relative(right, 2).relative(back, depth).above(2);
-        steps.add(new VoxelStep(torchPos1, Blocks.TORCH.defaultBlockState(), false));
-        steps.add(new VoxelStep(torchPos2, Blocks.TORCH.defaultBlockState(), false));
+        steps.add(new VoxelStep(torchPos1, palette.interiorLighting, false));
+        steps.add(new VoxelStep(torchPos2, palette.interiorLighting, false));
 
-        // Step 6: Interior furnishing - Bed (Red bed in the cozy back corner)
-        // Bed foot at back-left, head against back wall
+        // Step 6: Interior furnishing - Bed
         BlockPos bedFoot = origin.relative(right, -2).relative(back, depth - 1).above(1);
         BlockPos bedHead = origin.relative(right, -2).relative(back, depth).above(1);
 
-        BlockState footState = Blocks.BED.red().defaultBlockState()
+        BlockState footState = palette.bed
                 .setValue(BedBlock.FACING, back)
                 .setValue(BedBlock.PART, BedPart.FOOT);
-        BlockState headState = Blocks.BED.red().defaultBlockState()
+        BlockState headState = palette.bed
                 .setValue(BedBlock.FACING, back)
                 .setValue(BedBlock.PART, BedPart.HEAD);
 
         steps.add(new VoxelStep(bedFoot, footState, false));
         steps.add(new VoxelStep(bedHead, headState, false));
+
+        // Step 7: Optional Furniture (Macaw's chair / desk)
+        if (palette.furniture != null) {
+            BlockPos furnPos = origin.relative(right, 2).relative(back, depth - 1).above(1);
+            steps.add(new VoxelStep(furnPos, palette.furniture, false));
+        }
 
         return steps;
     }
