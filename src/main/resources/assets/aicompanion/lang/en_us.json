@@ -1,5 +1,7 @@
 {
   "item.aicompanion.surveyor_wand": "Surveyor Wand",
   "itemGroup.aicompanion": "AI Companion",
-  "gui.aicompanion.area_config": "Companion Area Configuration"
+  "gui.aicompanion.area_config": "Companion Area Configuration",
+  "key.aicompanion.open_gui": "Open Companion Dashboard",
+  "key.categories.aicompanion": "AI Companion"
 }

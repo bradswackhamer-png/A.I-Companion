@@ -29,6 +29,12 @@ public class AiCompanionMod {
     public static final net.neoforged.neoforge.registries.DeferredItem<com.aicompanion.bot.area.SurveyorWandItem> SURVEYOR_WAND =
             ITEMS.registerItem("surveyor_wand", com.aicompanion.bot.area.SurveyorWandItem::new, p -> p.stacksTo(1));
 
+    public static final net.neoforged.neoforge.registries.DeferredRegister<net.minecraft.world.inventory.MenuType<?>> MENUS =
+            net.neoforged.neoforge.registries.DeferredRegister.create(net.minecraft.core.registries.Registries.MENU, MODID);
+
+    public static final net.neoforged.neoforge.registries.DeferredHolder<net.minecraft.world.inventory.MenuType<?>, net.minecraft.world.inventory.MenuType<com.aicompanion.bot.menu.BotDashboardMenu>> BOT_DASHBOARD_MENU =
+            MENUS.register("bot_dashboard", () -> new net.minecraft.world.inventory.MenuType<>(com.aicompanion.bot.menu.BotDashboardMenu::new, net.minecraft.world.flag.FeatureFlags.DEFAULT_FLAGS));
+
     public static final net.neoforged.neoforge.registries.DeferredRegister<net.minecraft.world.item.CreativeModeTab> CREATIVE_MODE_TABS =
             net.neoforged.neoforge.registries.DeferredRegister.create(net.minecraft.core.registries.Registries.CREATIVE_MODE_TAB, MODID);
 
@@ -42,8 +48,12 @@ public class AiCompanionMod {
 
     public AiCompanionMod(IEventBus modEventBus, ModContainer modContainer) {
         ITEMS.register(modEventBus);
+        MENUS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
         modEventBus.addListener(this::addCreative);
+        if (net.neoforged.fml.loading.FMLEnvironment.getDist().isClient()) {
+            com.aicompanion.bot.client.AiCompanionClient.init(modEventBus);
+        }
         modContainer.registerConfig(ModConfig.Type.LOCAL, BotConfig.SPEC);
         NeoForge.EVENT_BUS.register(this);
         LOGGER.info("Gemini AI Companion Bot Mod (NeoForge 26.3.0.48-beta) initialized!");
@@ -58,6 +68,17 @@ public class AiCompanionMod {
     @SubscribeEvent
     public void onRegisterCommands(RegisterCommandsEvent event) {
         BotCommands.register(event.getDispatcher());
+    }
+
+    @SubscribeEvent
+    public void onEntityInteract(net.neoforged.neoforge.event.entity.player.PlayerInteractEvent.EntityInteract event) {
+        if (event.getTarget() instanceof AiBotPlayer bot && event.getEntity() instanceof ServerPlayer player) {
+            if (!player.level().isClientSide()) {
+                bot.openCompanionGui(player);
+            }
+            event.setCanceled(true);
+            event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+        }
     }
 
     @SubscribeEvent

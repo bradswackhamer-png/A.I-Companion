@@ -3214,7 +3214,11 @@ public class AiBotPlayer extends ServerPlayer {
         }
     }
 
-    private void forceEatFromInventory() {
+    public @Nullable BotAction getCurrentAction() {
+        return this.currentAction;
+    }
+
+    public void forceEatFromInventory() {
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack s = this.getInventory().getItem(i);
             if (!s.isEmpty()) {
@@ -3438,6 +3442,47 @@ public class AiBotPlayer extends ServerPlayer {
 
     @Override
     public void openHorseInventory(AbstractHorse horse, Container container) {
+    }
+
+    public void openCompanionGui(ServerPlayer player) {
+        net.minecraft.world.inventory.SimpleContainerData data = new net.minecraft.world.inventory.SimpleContainerData(com.aicompanion.bot.menu.BotDashboardMenu.DATA_COUNT);
+        data.set(0, (int) (this.getHealth() * 10.0f));
+        data.set(1, (int) (this.getMaxHealth() * 10.0f));
+        data.set(2, this.getFoodData().getFoodLevel());
+        data.set(3, getRoleCode(this.botRole));
+        data.set(4, getActionCode(this.currentAction));
+        data.set(5, this.actionProgressCount);
+        data.set(6, this.currentAction != null ? this.currentAction.count : 0);
+        data.set(7, this.assignedAreaName != null ? 1 : 0);
+
+        player.openMenu(new net.minecraft.world.SimpleMenuProvider(
+                (containerId, playerInv, p) -> new com.aicompanion.bot.menu.BotDashboardMenu(containerId, playerInv, this.getInventory(), data, this),
+                Component.literal("Companion: " + this.getBotName())
+        ));
+    }
+
+    private static int getRoleCode(String role) {
+        String r = role.toLowerCase();
+        if (r.contains("guard") || r.contains("bodyguard")) return 1;
+        if (r.contains("farm")) return 2;
+        if (r.contains("mine")) return 3;
+        if (r.contains("lumber")) return 4;
+        if (r.contains("build")) return 5;
+        if (r.contains("husbandry") || r.contains("ranch")) return 6;
+        if (r.contains("conductor") || r.contains("train")) return 7;
+        return 0;
+    }
+
+    private static int getActionCode(@Nullable BotAction action) {
+        if (action == null) return 0;
+        String t = action.getNormalizedType();
+        if ("FOLLOW".equals(t)) return 1;
+        if ("GUARD".equals(t)) return 2;
+        if ("FARM".equals(t)) return 3;
+        if ("MINE".equals(t)) return 4;
+        if ("BUILD".equals(t) || "BUILD_HOUSE".equals(t)) return 5;
+        if ("CONDUCT_TRAIN".equals(t)) return 6;
+        return 0;
     }
 
     @Override

@@ -115,7 +115,52 @@ public class BotCommands {
                                                 .suggests(AREA_SUGGESTIONS)
                                                 .executes(ctx -> assignAreaCmd(ctx,
                                                         StringArgumentType.getString(ctx, "botName"),
-                                                        StringArgumentType.getString(ctx, "areaName")))))));
+                                                        StringArgumentType.getString(ctx, "areaName")))))))
+                .then(Commands.literal("gui")
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> openBotGuiCmd(ctx, StringArgumentType.getString(ctx, "botName"))))
+                        .executes(BotCommands::openNearestBotGuiCmd));
+    }
+
+    private static int openBotGuiCmd(CommandContext<CommandSourceStack> ctx, String botName) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.literal("Only players can open bot dashboards."));
+            return 0;
+        }
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("Bot '" + botName + "' not found."));
+            return 0;
+        }
+        bot.openCompanionGui(player);
+        return 1;
+    }
+
+    private static int openNearestBotGuiCmd(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.literal("Only players can open bot dashboards."));
+            return 0;
+        }
+        AiBotPlayer nearest = null;
+        double bestDist = 64.0;
+        for (AiBotPlayer bot : BotManager.getActiveBots()) {
+            if (bot.level() == player.level()) {
+                double d = bot.distanceToSqr(player);
+                if (d < bestDist) {
+                    bestDist = d;
+                    nearest = bot;
+                }
+            }
+        }
+        if (nearest == null) {
+            ctx.getSource().sendFailure(Component.literal("No companion bot nearby. Right-click a bot or stand closer."));
+            return 0;
+        }
+        nearest.openCompanionGui(player);
+        return 1;
     }
 
     private static int giveWand(CommandContext<CommandSourceStack> ctx) {
