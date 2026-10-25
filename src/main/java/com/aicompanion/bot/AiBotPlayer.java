@@ -156,6 +156,8 @@ public class AiBotPlayer extends ServerPlayer {
     private @Nullable Vec3 conductorMoveStartPos = null;
     private boolean conductorFollowingPlayer = false;
     private @Nullable ServerPlayer conductorTargetPlayer = null;
+    private int trainBoardCooldownTicks = 0;
+    private @Nullable String previousRoleBeforeTrain = null;
 
     // Tractor configuration
     private boolean tractorMode = false;
@@ -391,22 +393,29 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized boolean extractAndLearnNicknameFromPrompt(String text) {
         if (text == null || text.isBlank()) return false;
         String[] patterns = new String[]{
+                "(?:assign\\s+(?:you\\s+)?(?:a\\s+|the\\s+)?nickname(?:\\s+to|\\s+is|:)?)\\s+([a-zA-Z0-9_-]{2,20})",
+                "(?:set\\s+(?:your\\s+)?nickname(?:\\s+to|\\s+is|:)?)\\s+([a-zA-Z0-9_-]{2,20})",
+                "(?:give\\s+you\\s+(?:the\\s+)?nickname(?:\\s+to|\\s+is|:)?)\\s+([a-zA-Z0-9_-]{2,20})",
+                "(?:your\\s+nickname\\s+is(?:\\s+now)?)\\s+([a-zA-Z0-9_-]{2,20})",
+                "(?:change\\s+(?:your\\s+)?(?:nick)?name\\s+to)\\s+([a-zA-Z0-9_-]{2,20})",
+                "(?:nickname(?:\\s+is|:)?)\\s+([a-zA-Z0-9_-]{2,20})",
                 "(?:call\\s+you|name\\s+you|rename\\s+you(?:\\s+to)?|rename\\s+yourself(?:\\s+to)?|your\\s+name\\s+is|you\\s+are\\s+now)\\s+([a-zA-Z0-9_-]{2,20})",
                 "(?:respond\\s+to|answer\\s+to)\\s+([a-zA-Z0-9_-]{2,20})"
         };
-        Set<String> stopWords = Set.of("from", "now", "on", "me", "here", "there", "please", "the", "a", "an", "to", "that", "this");
-        boolean learned = false;
+        Set<String> stopWords = Set.of("from", "now", "on", "me", "here", "there", "please", "the", "a", "an", "to", "that", "this", "assign", "set", "give", "bot", "companion");
         for (String regex : patterns) {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile(regex, java.util.regex.Pattern.CASE_INSENSITIVE).matcher(text);
-            while (m.find()) {
+            if (m.find()) {
                 String candidate = m.group(1).trim();
-                if (!stopWords.contains(candidate.toLowerCase()) && !candidate.equalsIgnoreCase(this.botName)) {
+                if (!stopWords.contains(candidate.toLowerCase(Locale.ROOT)) && !candidate.equalsIgnoreCase(this.botName)) {
                     addAlias(candidate);
-                    learned = true;
+                    this.activeNickname = candidate;
+                    sayInChat("Nickname set to '" + candidate + "'! I will now respond to this name.");
+                    return true;
                 }
             }
         }
-        return learned;
+        return false;
     }
 
     public synchronized void setGuardAnchor(@Nullable BlockPos pos, double radius) {
@@ -445,12 +454,75 @@ public class AiBotPlayer extends ServerPlayer {
         return false;
     }
 
+    public synchronized void configureFarmForSavedArea(com.aicompanion.bot.area.SavedArea area) {
+        this.assignedAreaName = area.name;
+        this.botRole = "farmer";
+        this.farmOriginPos = BlockPos.containing(area.getCenter());
+        int halfW = Math.max(8, (area.getMaxX() - area.getMinX() + 2) / 2);
+        int halfL = Math.max(8, (area.getMaxZ() - area.getMinZ() + 2) / 2);
+        this.farmRadiusX = halfW;
+        this.farmRadiusZ = halfL;
+        this.farmAllowTill = true;
+        sayInChat("Farm duty set to mapped area '" + area.name + "' (~" + (int) area.getAreaSqMeters() + " m²)! I will systematically tend, harvest, replant, and deposit crops across the entire mapped area.");
+    }
+
     public synchronized boolean extractAndLearnFarmConfigFromPrompt(String text, @Nullable ServerPlayer speaker) {
         if (text == null || text.isBlank()) return false;
         String lower = text.toLowerCase(Locale.ROOT);
         boolean mentionsFarm = lower.contains("farm") || lower.contains("harvest") || lower.contains("crop")
                 || lower.contains("plant") || lower.contains("replant") || lower.contains("till");
         if (!mentionsFarm) return false;
+
+        com.aicompanion.bot.area.SavedArea foundArea = null;
+        for (com.aicompanion.bot.area.SavedArea a : BotPersistence.getAllAreas().values()) {
+            if (lower.contains(a.name.toLowerCase(Locale.ROOT))) {
+                foundArea = a;
+                break;
+            }
+        }
+        if (foundArea == null && this.assignedAreaName != null && !this.assignedAreaName.isBlank()) {
+            foundArea = BotPersistence.getArea(this.assignedAreaName);
+        }
+        if (foundArea == null && speaker != null) {
+            for (com.aicompanion.bot.area.SavedArea a : BotPersistence.getAllAreas().values()) {
+                if (a.contains(speaker.blockPosition())) {
+                    foundArea = a;
+                    break;
+                }
+            }
+        }
+        if (foundArea == null) {
+            for (com.aicompanion.bot.area.SavedArea a : BotPersistence.getAllAreas().values()) {
+                if (a.contains(this.blockPosition())) {
+                    foundArea = a;
+                    break;
+                }
+            }
+        }
+        if (foundArea == null && (lower.contains("this area") || lower.contains("the area") || lower.contains("it") || lower.contains("whole area") || lower.contains("area") || lower.contains("zone") || lower.contains("here"))) {
+            com.aicompanion.bot.area.SavedArea closest = null;
+            double closestDist = 48.0 * 48.0;
+            BlockPos ref = speaker != null ? speaker.blockPosition() : this.blockPosition();
+            for (com.aicompanion.bot.area.SavedArea a : BotPersistence.getAllAreas().values()) {
+                Vec3 c = a.getCenter();
+                double d = ref.distToCenterSqr(c.x, c.y, c.z);
+                if (d < closestDist) {
+                    closestDist = d;
+                    closest = a;
+                }
+            }
+            if (closest != null) {
+                foundArea = closest;
+            }
+        }
+
+        if (foundArea != null) {
+            if (lower.contains("tractor")) {
+                this.tractorMode = true;
+            }
+            configureFarmForSavedArea(foundArea);
+            return true;
+        }
 
         // Check area dimensions: e.g. "10x10", "20x20", "15 by 15", "10 x 10"
         int rx = 5;
@@ -511,6 +583,41 @@ public class AiBotPlayer extends ServerPlayer {
         return dot < 0;
     }
 
+    public synchronized void dismountFromTrain() {
+        Entity loco = TrainCompat.getRiddenLocomotive(this);
+        if (loco != null) {
+            TrainCompat.stopTrain(loco, this);
+            TrainCompat.dismountLocomotive(this);
+        } else if (this.getVehicle() != null) {
+            this.stopRiding();
+        }
+
+        // Clear all active locomotive orders & targets
+        this.conductorFollowingPlayer = false;
+        this.conductorTargetPlayer = null;
+        this.conductorDestStation = "";
+        this.conductorReturnStation = "";
+        this.conductorTileTarget = 0;
+        this.conductorMoveStartPos = null;
+        this.conductorState = 0;
+        this.conductorArrivedTicks = 0;
+        this.clearActions();
+        this.trainBoardCooldownTicks = 100; // 5 seconds dismount grace cooldown
+
+        // If bot had a previous role prior to boarding, restore it
+        if (this.previousRoleBeforeTrain != null && !this.previousRoleBeforeTrain.isBlank()) {
+            this.botRole = this.previousRoleBeforeTrain;
+            this.previousRoleBeforeTrain = null;
+        } else if (this.botRole.equalsIgnoreCase("conductor") || this.botRole.equalsIgnoreCase("train")) {
+            this.botRole = "companion";
+        }
+
+        // Step slightly away from the train so the bot isn't trapped in the train hitbox
+        Vec3 p = this.position();
+        this.teleportTo(p.x + 1.2, p.y, p.z + 1.2);
+        this.stopMovement();
+    }
+
     public synchronized boolean handleConductorChatCommand(String text, @Nullable ServerPlayer speaker) {
         if (text == null || text.isBlank()) return false;
         String lower = text.toLowerCase(Locale.ROOT).trim();
@@ -541,11 +648,12 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
-        // 2. DISMOUNT / GET OUT / LEAVE TRAIN
-        if (lower.contains("get out") || lower.contains("dismount") || lower.contains("exit the train") || lower.contains("leave the train")) {
-            if (loco != null) {
-                TrainCompat.stopTrain(loco, this);
-                TrainCompat.dismountLocomotive(this);
+        // 2. DISMOUNT / GET OUT / LEAVE TRAIN / GET OFF / EXIT
+        if (lower.contains("get out") || lower.contains("dismount") || lower.contains("exit")
+                || lower.contains("leave") || lower.contains("get off") || lower.contains("hop off")
+                || lower.contains("hop out") || lower.contains("step out") || lower.contains("jump out")) {
+            if (loco != null || this.getVehicle() != null) {
+                dismountFromTrain();
                 sayInChat("Dismounted from the train!");
             } else {
                 sayInChat("I'm not in a train right now.");
@@ -573,8 +681,7 @@ public class AiBotPlayer extends ServerPlayer {
                         sayInChat("Rolling down the rails to you right now!");
                         return true;
                     } else {
-                        TrainCompat.stopTrain(loco, this);
-                        TrainCompat.dismountLocomotive(this);
+                        dismountFromTrain();
                         sayInChat("You're a bit far from the rail line! Dismounting to come to you on foot.");
                         moveTowards(speaker.position(), true);
                         return true;
@@ -598,6 +705,9 @@ public class AiBotPlayer extends ServerPlayer {
         if (loco == null) {
             Entity nearby = TrainCompat.findNearbyLocomotive(this.level(), this.position(), 24.0);
             if (nearby != null && (isConductorRole || lower.contains("train") || lower.contains("locomotive") || lower.contains("ahead") || lower.contains("forward") || lower.contains("reverse"))) {
+                if (this.previousRoleBeforeTrain == null && !isConductorRole) {
+                    this.previousRoleBeforeTrain = this.botRole;
+                }
                 TrainCompat.mountLocomotive(this, nearby);
                 loco = nearby;
             }
@@ -824,13 +934,19 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public boolean isInsideFarmArea(BlockPos p) {
+        if (this.assignedAreaName != null && !this.assignedAreaName.isBlank()) {
+            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(this.assignedAreaName);
+            if (area != null) {
+                return area.contains(p);
+            }
+        }
         if (this.farmOriginPos == null) {
             return this.distanceToSqr(Vec3.atCenterOf(p)) <= 400.0;
         }
         int dx = Math.abs(p.getX() - this.farmOriginPos.getX());
         int dy = Math.abs(p.getY() - this.farmOriginPos.getY());
         int dz = Math.abs(p.getZ() - this.farmOriginPos.getZ());
-        return dx <= this.farmRadiusX && dz <= this.farmRadiusZ && dy <= 3;
+        return dx <= this.farmRadiusX && dz <= this.farmRadiusZ && dy <= 6;
     }
 
     public boolean isCropAllowed(net.minecraft.world.level.block.CropBlock crop) {
@@ -1182,7 +1298,15 @@ public class AiBotPlayer extends ServerPlayer {
         String type = action.getNormalizedType();
         return switch (type) {
             case "STOP" -> {
+                if (TrainCompat.getRiddenLocomotive(this) != null || this.getVehicle() != null) {
+                    dismountFromTrain();
+                }
                 clearActions();
+                yield true;
+            }
+            case "DISMOUNT" -> {
+                dismountFromTrain();
+                sayInChat("Dismounted from the train!");
                 yield true;
             }
             case "FOLLOW" -> tickFollowAction(action);
@@ -1211,6 +1335,9 @@ public class AiBotPlayer extends ServerPlayer {
                 String freight = action.item != null ? action.item : "all";
                 int count = action.count > 0 ? action.count : 64;
                 setConductorConfig(dest, "", freight, count, false);
+                if (this.previousRoleBeforeTrain == null && !this.botRole.equalsIgnoreCase("conductor")) {
+                    this.previousRoleBeforeTrain = this.botRole;
+                }
                 this.botRole = "conductor";
                 tickPassiveConductor();
                 yield this.conductorDestStation.isBlank();
@@ -2061,9 +2188,9 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private boolean tickChestAction(BotAction action, boolean store) {
-        BlockPos chestPos = findNearestContainerBlock(16);
+        BlockPos chestPos = store ? findNearestAvailableContainerBlock(16) : findNearestContainerBlock(16);
         if (chestPos == null) {
-            sayInChat("I couldn't find a chest or barrel nearby.");
+            sayInChat(store ? "I couldn't find an available chest with free space nearby." : "I couldn't find a chest or barrel nearby.");
             return true;
         }
 
@@ -2080,8 +2207,8 @@ public class AiBotPlayer extends ServerPlayer {
 
         stopMovement();
         lookAtPos(Vec3.atCenterOf(chestPos));
-        BlockEntity be = this.level().getBlockEntity(chestPos);
-        if (!(be instanceof Container container)) {
+        Container container = getContainerAt(chestPos);
+        if (container == null) {
             sayInChat("That block isn't a valid container.");
             return true;
         }
@@ -2271,14 +2398,46 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable BlockPos findNearestMatureCrop(int radius) {
-        BlockPos center = this.farmOriginPos != null ? this.farmOriginPos : this.blockPosition();
-        int rx = this.farmOriginPos != null ? this.farmRadiusX : radius;
-        int rz = this.farmOriginPos != null ? this.farmRadiusZ : radius;
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
 
+        if (this.assignedAreaName != null && !this.assignedAreaName.isBlank()) {
+            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(this.assignedAreaName);
+            if (area != null) {
+                int minX = area.getMinX();
+                int maxX = area.getMaxX();
+                int minZ = area.getMinZ();
+                int maxZ = area.getMaxZ();
+                int minY = area.minY;
+                int maxY = area.maxY;
+                for (int x = minX; x <= maxX; x++) {
+                    for (int z = minZ; z <= maxZ; z++) {
+                        for (int y = minY; y <= maxY; y++) {
+                            BlockPos p = new BlockPos(x, y, z);
+                            if (!area.contains(p)) continue;
+                            BlockState s = this.level().getBlockState(p);
+                            if (s.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop && crop.isMaxAge(s)) {
+                                if (isCropAllowed(crop)) {
+                                    double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                                    if (d < bestDist) {
+                                        bestDist = d;
+                                        best = p.immutable();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                return best;
+            }
+        }
+
+        BlockPos center = this.farmOriginPos != null ? this.farmOriginPos : this.blockPosition();
+        int rx = this.farmOriginPos != null ? this.farmRadiusX : radius;
+        int rz = this.farmOriginPos != null ? this.farmRadiusZ : radius;
+
         for (int dx = -rx; dx <= rx; dx++) {
-            for (int dy = -3; dy <= 3; dy++) {
+            for (int dy = -4; dy <= 4; dy++) {
                 for (int dz = -rz; dz <= rz; dz++) {
                     BlockPos p = center.offset(dx, dy, dz);
                     if (!isInsideFarmArea(p)) continue;
@@ -2299,14 +2458,43 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable BlockPos findNearestBareFarmland(int radius) {
-        BlockPos center = this.farmOriginPos != null ? this.farmOriginPos : this.blockPosition();
-        int rx = this.farmOriginPos != null ? this.farmRadiusX : radius;
-        int rz = this.farmOriginPos != null ? this.farmRadiusZ : radius;
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
 
+        if (this.assignedAreaName != null && !this.assignedAreaName.isBlank()) {
+            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(this.assignedAreaName);
+            if (area != null) {
+                int minX = area.getMinX();
+                int maxX = area.getMaxX();
+                int minZ = area.getMinZ();
+                int maxZ = area.getMaxZ();
+                int minY = area.minY;
+                int maxY = area.maxY;
+                for (int x = minX; x <= maxX; x++) {
+                    for (int z = minZ; z <= maxZ; z++) {
+                        for (int y = minY; y <= maxY; y++) {
+                            BlockPos p = new BlockPos(x, y, z);
+                            if (!area.contains(p)) continue;
+                            if (this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
+                                double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                                if (d < bestDist) {
+                                    bestDist = d;
+                                    best = p.immutable();
+                                }
+                            }
+                        }
+                    }
+                }
+                return best;
+            }
+        }
+
+        BlockPos center = this.farmOriginPos != null ? this.farmOriginPos : this.blockPosition();
+        int rx = this.farmOriginPos != null ? this.farmRadiusX : radius;
+        int rz = this.farmOriginPos != null ? this.farmRadiusZ : radius;
+
         for (int dx = -rx; dx <= rx; dx++) {
-            for (int dy = -3; dy <= 3; dy++) {
+            for (int dy = -4; dy <= 4; dy++) {
                 for (int dz = -rz; dz <= rz; dz++) {
                     BlockPos p = center.offset(dx, dy, dz);
                     if (!isInsideFarmArea(p)) continue;
@@ -2324,15 +2512,47 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable BlockPos findNearestTillableDirtInFarmBox() {
-        if (this.farmOriginPos == null) return null;
-        BlockPos origin = this.farmOriginPos;
         BlockPos best = null;
         double bestDist = Double.MAX_VALUE;
 
+        if (this.assignedAreaName != null && !this.assignedAreaName.isBlank()) {
+            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(this.assignedAreaName);
+            if (area != null) {
+                int minX = area.getMinX();
+                int maxX = area.getMaxX();
+                int minZ = area.getMinZ();
+                int maxZ = area.getMaxZ();
+                int minY = area.minY;
+                int maxY = area.maxY;
+                for (int x = minX; x <= maxX; x++) {
+                    for (int z = minZ; z <= maxZ; z++) {
+                        for (int y = minY; y <= maxY; y++) {
+                            BlockPos p = new BlockPos(x, y, z);
+                            if (!area.contains(p)) continue;
+                            BlockState state = this.level().getBlockState(p);
+                            if ((state.is(Blocks.DIRT) || state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.COARSE_DIRT))
+                                    && this.level().getBlockState(p.above()).isAir()) {
+                                double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                                if (d < bestDist) {
+                                    bestDist = d;
+                                    best = p.immutable();
+                                }
+                            }
+                        }
+                    }
+                }
+                return best;
+            }
+        }
+
+        if (this.farmOriginPos == null) return null;
+        BlockPos origin = this.farmOriginPos;
+
         for (int dx = -this.farmRadiusX; dx <= this.farmRadiusX; dx++) {
-            for (int dy = -2; dy <= 2; dy++) {
+            for (int dy = -3; dy <= 3; dy++) {
                 for (int dz = -this.farmRadiusZ; dz <= this.farmRadiusZ; dz++) {
                     BlockPos p = origin.offset(dx, dy, dz);
+                    if (!isInsideFarmArea(p)) continue;
                     BlockState state = this.level().getBlockState(p);
                     if ((state.is(Blocks.DIRT) || state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.COARSE_DIRT))
                             && this.level().getBlockState(p.above()).isAir()) {
@@ -2408,12 +2628,13 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private boolean tickFarmAction(BotAction action) {
-        int goal = action.count > 0 ? action.count : 20;
+        boolean isAreaFarming = this.assignedAreaName != null && !this.assignedAreaName.isBlank();
+        int goal = action.count > 0 ? action.count : (isAreaFarming ? Integer.MAX_VALUE : 20);
         if (this.actionProgressCount >= goal) {
             stopMovement();
-            BlockPos chestPos = findNearestContainerBlock(16);
+            BlockPos chestPos = findNearestAvailableContainerBlock(24);
             if (chestPos != null) {
-                tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+                depositFarmerCropsIntoChest(chestPos);
             }
             sayInChat("Farm duty complete! Harvested " + this.actionProgressCount + "x crops and replanted seeds.");
             return true;
@@ -2451,12 +2672,17 @@ public class AiBotPlayer extends ServerPlayer {
                 tryPlantSeedOnFarmland(bareFarmland);
                 return false;
             } else {
-                BlockPos chestPos = findNearestContainerBlock(20);
-                if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
-                    int taken = takeItemsFromContainer(c, "seed", 32);
-                    if (taken > 0) {
-                        sayInChat("Grabbed " + taken + "x seeds from chest to continue planting.");
-                        return false;
+                BlockPos chestPos = findNearestContainerBlock(24);
+                if (chestPos != null) {
+                    Container c = getContainerAt(chestPos);
+                    if (c != null) {
+                        int taken = takeItemsFromContainer(c, "seed", 32);
+                        if (taken == 0) taken = takeItemsFromContainer(c, "carrot", 16);
+                        if (taken == 0) taken = takeItemsFromContainer(c, "potato", 16);
+                        if (taken > 0) {
+                            sayInChat("Grabbed " + taken + "x planting supplies from chest to continue planting.");
+                            return false;
+                        }
                     }
                 }
             }
@@ -2468,9 +2694,9 @@ public class AiBotPlayer extends ServerPlayer {
 
         stopMovement();
         if (getFarmerDepositableCropCount() > 0) {
-            BlockPos chestPos = findNearestContainerBlock(16);
+            BlockPos chestPos = findNearestAvailableContainerBlock(24);
             if (chestPos != null) {
-                tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+                depositFarmerCropsIntoChest(chestPos);
             }
         }
         if (this.actionProgressCount > 0) {
@@ -2571,7 +2797,7 @@ public class AiBotPlayer extends ServerPlayer {
         // 1. Store crops into nearby chest only when there is an actual surplus of harvested crops to deposit (>= 16)
         int depositable = getFarmerDepositableCropCount();
         if (depositable >= 16) {
-            BlockPos chestPos = findNearestContainerBlock(20);
+            BlockPos chestPos = findNearestAvailableContainerBlock(24);
             if (chestPos != null) {
                 double distSq = this.distanceToSqr(Vec3.atCenterOf(chestPos));
                 if (distSq > 9.0) {
@@ -2579,9 +2805,17 @@ public class AiBotPlayer extends ServerPlayer {
                     return;
                 } else {
                     stopMovement();
-                    tickChestAction(new BotAction("CHEST_STORE", "all", "", 64), true);
+                    depositFarmerCropsIntoChest(chestPos);
+                    if (getFarmerDepositableCropCount() >= 16) {
+                        BlockPos nextChest = findNearestAvailableContainerBlock(24);
+                        if (nextChest != null && !nextChest.equals(chestPos)) {
+                            moveTowards(Vec3.atCenterOf(nextChest), false);
+                        }
+                    }
                     return;
                 }
+            } else if (this.tickCount % 200 == 0) {
+                sayInChat("My bags are full of crops and all nearby chests are full! Please place an empty chest.");
             }
         }
 
@@ -2616,9 +2850,14 @@ public class AiBotPlayer extends ServerPlayer {
                 }
                 return;
             } else {
-                BlockPos chestPos = findNearestContainerBlock(20);
-                if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
-                    takeItemsFromContainer(c, "seed", 32);
+                BlockPos chestPos = findNearestContainerBlock(24);
+                if (chestPos != null) {
+                    Container c = getContainerAt(chestPos);
+                    if (c != null) {
+                        int taken = takeItemsFromContainer(c, "seed", 32);
+                        if (taken == 0) taken = takeItemsFromContainer(c, "carrot", 16);
+                        if (taken == 0) taken = takeItemsFromContainer(c, "potato", 16);
+                    }
                 }
             }
             return;
@@ -2640,10 +2879,18 @@ public class AiBotPlayer extends ServerPlayer {
         if (!TrainCompat.isAvailable()) {
             return;
         }
+        if (this.trainBoardCooldownTicks > 0) {
+            this.trainBoardCooldownTicks--;
+            return;
+        }
 
         // 1. Check if currently riding a locomotive
         Entity loco = TrainCompat.getRiddenLocomotive(this);
         if (loco == null) {
+            boolean isConductorRole = this.botRole.toLowerCase().contains("conductor") || this.botRole.toLowerCase().contains("train");
+            if (!isConductorRole) {
+                return; // Non-conductors must NEVER auto-board!
+            }
             // If we have an active train command/target, find nearby locomotive to board
             if (this.conductorFollowingPlayer || !this.conductorDestStation.isBlank() || this.conductorTileTarget > 0) {
                 Entity nearbyLoco = TrainCompat.findNearbyLocomotive(this.level(), this.position(), 32.0);
@@ -3384,10 +3631,23 @@ public class AiBotPlayer extends ServerPlayer {
             if (area != null) {
                 boolean botInside = area.contains(this.getX(), this.getY(), this.getZ());
                 boolean targetInside = area.contains(target.x, target.y, target.z);
-                if (!botInside || !targetInside) {
-                    Vec3 center = area.getCenter();
-                    lookAtPos(new Vec3(center.x, center.y + this.getEyeHeight(), center.z));
-                    target = center;
+
+                BlockPos targetBlock = BlockPos.containing(target);
+                boolean isContainerTarget = getContainerAt(targetBlock) != null;
+                boolean isNearPerimeter = Math.abs(target.y - ((area.minY + area.maxY) / 2.0)) <= (area.getHeight() + 10)
+                        && target.x >= (area.getMinX() - 4.0) && target.x <= (area.getMaxX() + 4.0)
+                        && target.z >= (area.getMinZ() - 4.0) && target.z <= (area.getMaxZ() + 4.0);
+
+                if (!targetInside) {
+                    if (isContainerTarget && target.distanceTo(area.getCenter()) <= (Math.max(area.getMaxX() - area.getMinX(), area.getMaxZ() - area.getMinZ()) + 24.0)) {
+                        // Allow moving to containers within reach of the area
+                    } else if (isNearPerimeter && botInside) {
+                        // Allow moving along perimeter edge
+                    } else {
+                        Vec3 center = area.getCenter();
+                        lookAtPos(new Vec3(center.x, center.y + this.getEyeHeight(), center.z));
+                        target = center;
+                    }
                 }
             }
         }
@@ -3856,25 +4116,121 @@ public class AiBotPlayer extends ServerPlayer {
         return path.contains(q);
     }
 
-    private @Nullable BlockPos findNearestContainerBlock(int radius) {
+    public @Nullable Container getContainerAt(BlockPos pos) {
+        BlockState state = this.level().getBlockState(pos);
+        if (state.getBlock() instanceof net.minecraft.world.level.block.ChestBlock chestBlock) {
+            Container c = net.minecraft.world.level.block.ChestBlock.getContainer(chestBlock, state, this.level(), pos, true);
+            if (c != null) return c;
+        }
+        BlockEntity be = this.level().getBlockEntity(pos);
+        if (be instanceof Container c) {
+            return c;
+        }
+        return null;
+    }
+
+    public boolean containerHasAnyFreeSpace(Container container) {
+        for (int i = 0; i < container.getContainerSize(); i++) {
+            ItemStack slot = container.getItem(i);
+            if (slot.isEmpty() || slot.getCount() < slot.getMaxStackSize()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public List<BlockPos> findAllNearbyContainers(int radius, boolean mustHaveSpace) {
         BlockPos origin = this.blockPosition();
-        BlockPos best = null;
-        double bestDist = Double.MAX_VALUE;
+        List<BlockPos> results = new ArrayList<>();
+        java.util.Set<BlockPos> seenDoubleChestHalves = new java.util.HashSet<>();
+
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dy = -4; dy <= 4; dy++) {
                 for (int dz = -radius; dz <= radius; dz++) {
                     BlockPos pos = origin.offset(dx, dy, dz);
-                    if (this.level().getBlockEntity(pos) instanceof Container) {
-                        double d = origin.distSqr(pos);
-                        if (d < bestDist) {
-                            bestDist = d;
-                            best = pos.immutable();
+                    Container c = getContainerAt(pos);
+                    if (c != null) {
+                        if (this.level().getBlockState(pos).getBlock() instanceof net.minecraft.world.level.block.ChestBlock) {
+                            boolean alreadySeen = false;
+                            for (BlockPos seen : seenDoubleChestHalves) {
+                                if (pos.distManhattan(seen) == 1 && getContainerAt(seen) == c) {
+                                    alreadySeen = true;
+                                    break;
+                                }
+                            }
+                            if (alreadySeen) continue;
+                            seenDoubleChestHalves.add(pos);
                         }
+
+                        if (mustHaveSpace && !containerHasAnyFreeSpace(c)) {
+                            continue;
+                        }
+                        results.add(pos.immutable());
                     }
                 }
             }
         }
-        return best;
+        results.sort(Comparator.comparingDouble(p -> this.distanceToSqr(Vec3.atCenterOf(p))));
+        return results;
+    }
+
+    private @Nullable BlockPos findNearestContainerBlock(int radius) {
+        List<BlockPos> list = findAllNearbyContainers(radius, false);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    private @Nullable BlockPos findNearestAvailableContainerBlock(int radius) {
+        List<BlockPos> list = findAllNearbyContainers(radius, true);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    public int depositFarmerCropsIntoChest(BlockPos chestPos) {
+        Container container = getContainerAt(chestPos);
+        if (container == null) return 0;
+        lookAtPos(Vec3.atCenterOf(chestPos));
+        int totalStored = 0;
+
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (s.isEmpty()) continue;
+            String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
+
+            // Reserve seeds and rations
+            if (id.contains("seed")) {
+                int seedCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("seed"));
+                if (seedCount <= 32) continue;
+            }
+            if (id.contains("bone_meal") || id.contains("bonemeal")) continue;
+            if (id.contains("carrot")) {
+                int cCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("carrot"));
+                if (cCount <= 16) continue;
+            }
+            if (id.contains("potato")) {
+                int pCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("potato"));
+                if (pCount <= 16) continue;
+            }
+
+            boolean isFarmProduce = id.contains("wheat") || id.contains("carrot") || id.contains("potato")
+                    || id.contains("beetroot") || id.contains("melon") || id.contains("pumpkin")
+                    || id.contains("seed");
+
+            if (isFarmProduce) {
+                int countBefore = s.getCount();
+                ItemStack remainder = insertIntoContainer(container, s.copy());
+                int inserted = countBefore - remainder.getCount();
+                if (inserted > 0) {
+                    s.shrink(inserted);
+                    totalStored += inserted;
+                }
+                if (!containerHasAnyFreeSpace(container)) {
+                    break;
+                }
+            }
+        }
+        if (totalStored > 0) {
+            sayInChat("Deposited " + totalStored + "x crops into the chest.");
+        }
+        return totalStored;
     }
 
     private boolean isMobReachableAndValid(LivingEntity target) {

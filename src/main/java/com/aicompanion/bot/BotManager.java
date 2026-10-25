@@ -337,6 +337,9 @@ public class BotManager {
             if (lower.startsWith("bot ") || lower.startsWith("bot,") || lower.startsWith("@bot") || lower.startsWith("hey bot")) {
                 AiBotPlayer nearest = findNearestBot(speaker, bots);
                 if (nearest != null) targets.add(nearest);
+            } else if (lower.contains("nickname") || lower.contains("rename") || lower.contains("call you") || lower.contains("name you")) {
+                AiBotPlayer nearest = findNearestBot(speaker, bots);
+                if (nearest != null) targets.add(nearest);
             } else if (bots.size() == 1 && BotConfig.LISTEN_ALL_WHEN_SINGLE_BOT.getAsBoolean()) {
                 targets.add(bots.iterator().next());
             }
@@ -347,7 +350,7 @@ public class BotManager {
         }
     }
 
-    private static @Nullable AiBotPlayer findNearestBot(ServerPlayer speaker, Collection<AiBotPlayer> bots) {
+    public static @Nullable AiBotPlayer findNearestBot(ServerPlayer speaker, Collection<AiBotPlayer> bots) {
         AiBotPlayer best = null;
         double bestDist = Double.MAX_VALUE;
         for (AiBotPlayer b : bots) {
@@ -404,12 +407,37 @@ public class BotManager {
             }
         }
 
-        boolean learnedNickname = bot.extractAndLearnNicknameFromPrompt(requestText);
+        // Check if player is assigning bot to farm a mapped area: "farm FarmZone", "harvest in Field1"
+        java.util.regex.Matcher farmAreaMatcher = java.util.regex.Pattern.compile(
+                "(?:farm|harvest|tend)\\s+(?:in\\s+|inside\\s+|the\\s+)?([a-zA-Z0-9_-]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(requestText);
+        if (farmAreaMatcher.find()) {
+            String candArea = farmAreaMatcher.group(1).trim();
+            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(candArea);
+            if (area != null) {
+                bot.configureFarmForSavedArea(area);
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+        }
+
+        if (bot.extractAndLearnNicknameFromPrompt(requestText)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.extractAndLearnFarmConfigFromPrompt(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
         boolean learnedAnchor = bot.extractAndLearnAnchorFromPrompt(requestText);
-        boolean learnedFarm = bot.extractAndLearnFarmConfigFromPrompt(requestText, speaker);
         boolean learnedHusbandry = bot.extractAndLearnHusbandryConfigFromPrompt(requestText, speaker);
         GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-        if (learnedNickname || learnedAnchor || learnedFarm || learnedHusbandry) {
+        if (learnedAnchor || learnedHusbandry) {
             BotPersistence.saveAll(server);
         }
 

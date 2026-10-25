@@ -145,21 +145,24 @@ Google provides free Gemini API access with **no credit card or billing required
 * **Reverse Mob A\* Pathfinding & Anti-Spin Targeting**: Companions utilize reverse pathfinding to navigate around cover toward mobs, vertical targeting is clamped within $\pm 6$ blocks with line-of-sight verification, and unreachable targets time out cleanly.
 
 ### 🌾 12. Autonomous Farmer Role (`farmer`)
-* **Assignable Farm Zones**: Tell your farmer where to work using natural chat (e.g. `"shawn, from this spot your farm is a 10x10 area"`).
+* **Surveyor Wand Mapped Area Farming**: Tell your farmer `"farm it"`, `"farm this area"`, `"farm the area"`, or `"farm <name>"` — they automatically link to the mapped zone and systematically tend 100% of the area (e.g. $149\text{ m}^2$ plots) without skipping outer corners.
+* **Assignable Dimensions**: Specify arbitrary dimensions in chat (e.g. `"shawn, from this spot your farm is a 10x10 area"`).
 * **Strict Maturity Harvesting**: Only harvests **100% fully mature crops**, leaving growing plants untouched.
 * **Instant Replanting & Open Farmland Seeding**: Automatically replants harvested spots and plants empty tilled soil from inventory.
 * **Hoe Ground Tilling**: Equips hoes, tills untilled dirt/grass into farmland inside the zone, and immediately plants seeds.
-* **Smart Chest Storage & Seed Reserves**: Deposits harvested crops into nearby chests while always maintaining seed reserves.
+* **Multi-Chest Storage Logistics**: Automatically locates nearby single chests, double chests, and barrels. If a chest fills up during deposit, the farmer seamlessly switches to the next available container with free space.
+* **Perimeter Access**: Freely reaches perimeter and boundary fence chests within 24 blocks of the farm without hitting perimeter boundaries.
 
 ### 🐄 13. Animal Husbandry & Ranching (`husbandry` / `rancher`)
 * **Autonomous Breeding**: Finds livestock in the ranch zone ready to mate and feeds them breeding food.
 * **Controlled Herd Culling**: Automatically manages animal populations when they exceed your stated limit without ever harming babies or dropping below your minimum threshold.
 * **Drop Collection**: Collects meat, leather, wool, and feathers and deposits them into storage chests.
 
-### 🚂 14. Train Conductor (`conductor` / `train`) (`miningtools` Integration)
+### 🚂 14. Train Conductor & Clean Dismount (`conductor` / `train`) (`miningtools` Integration)
 * **Locomotive Operation**: Automatically boards locomotives, manages fuel, controls throttle, and sounds whistles.
 * **Precision Distance Control**: Say `"move ahead 4 tiles"`, `"forward 10 blocks"`, or `"reverse 5 blocks"`.
 * **Rail Pathfinding**: Say `"come here"` or `"drive to me"` and the conductor rolls the train down tracks directly to you.
+* **Reliable Dismount & Anti-Reboard Protection**: Tell any companion riding a train to `"get out"`, `"dismount"`, `"get off"`, or `"exit"` — they cleanly dismount, cancel all train orders, restore their previous role, and step clear of tracks without any immediate re-boarding loops.
 * **Automated Freight Logistics**: Transports cargo between stations, loading and unloading chests autonomously.
 
 ### 🚜 15. Tractor Automation (`tractor`) (`janemoose` Integration)
@@ -191,7 +194,13 @@ You can speak to your companions directly in public chat:
 * **Areas & Guarding**:
   > *"guard Compound"*
   > *"stay inside Base and watch the perimeter"*
-* **Farming**:
+* **Nicknames & Renaming**:
+  > *"assign nickname Charlie"*
+  > *"set your nickname to Bob"*
+  > *"your nickname is now Steve"*
+* **Farming (Whole Mapped Areas & Custom Dimensions)**:
+  > *"farm the area"* / *"farm this area"* / *"farm it"* (automatically farms full Surveyor Wand mapped zone)
+  > *"farm FarmZone"*
   > *"shawn, from this spot ur farm land is 10x10 area, plant wheat and carrots, put ur harvest in the chest, only harvest 100% mature crop"*
 * **Husbandry**:
   > *"james, breed cows with wheat, kill adult cows when amount is over 10, only kill adults never have less then 5 cows at anytime."*
@@ -199,6 +208,7 @@ You can speak to your companions directly in public chat:
   > *"conductor, move ahead 10 blocks"*
   > *"drive to me"*
   > *"stop train"*
+  > *"get out"* / *"dismount"* / *"get off the train"*
 
 ---
 
@@ -207,6 +217,8 @@ You can speak to your companions directly in public chat:
 | Command | Description |
 | :--- | :--- |
 | `/bot spawn <name> [role]` | Spawn a new companion (`farmer`, `husbandry`, `guard`, `builder`, `miner`, `lumberjack`, `conductor`, `courier`) |
+| `/bot nickname [botName] <nickname>` | Assign an active nickname/alias to a companion (or nearest companion) |
+| `/bot rename [botName] <nickname>` | Alias for `/bot nickname` |
 | `/bot skin list` | List all detected skins in the `aicompanion/skins` folder and their model types |
 | `/bot skin reload` | Hot-reload all skin textures from disk in real-time |
 | `/bot skin set <botName> <skinName>` | Manually assign a specific skin to a companion (persisted across restarts) |

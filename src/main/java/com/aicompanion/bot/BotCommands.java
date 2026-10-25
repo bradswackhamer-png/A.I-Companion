@@ -98,6 +98,24 @@ public class BotCommands {
                 .then(Commands.literal("waypoint")
                         .then(Commands.argument("locationName", StringArgumentType.word())
                                 .executes(ctx -> saveWaypoint(ctx, StringArgumentType.getString(ctx, "locationName")))))
+                .then(Commands.literal("nickname")
+                        .then(Commands.argument("nickname", StringArgumentType.word())
+                                .executes(ctx -> setBotNicknameNearest(ctx, StringArgumentType.getString(ctx, "nickname"))))
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .then(Commands.argument("nickname", StringArgumentType.word())
+                                        .executes(ctx -> setBotNickname(ctx,
+                                                StringArgumentType.getString(ctx, "botName"),
+                                                StringArgumentType.getString(ctx, "nickname"))))))
+                .then(Commands.literal("rename")
+                        .then(Commands.argument("nickname", StringArgumentType.word())
+                                .executes(ctx -> setBotNicknameNearest(ctx, StringArgumentType.getString(ctx, "nickname"))))
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .then(Commands.argument("nickname", StringArgumentType.word())
+                                        .executes(ctx -> setBotNickname(ctx,
+                                                StringArgumentType.getString(ctx, "botName"),
+                                                StringArgumentType.getString(ctx, "nickname"))))))
                 .then(Commands.literal("wand")
                         .executes(BotCommands::giveWand))
                 .then(Commands.literal("area")
@@ -742,6 +760,40 @@ public class BotCommands {
 
         ctx.getSource().sendSuccess(() -> Component.literal("Updated " + bot.getBotName() + "'s skin to '" + skinName + "'!")
                 .withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int setBotNicknameNearest(CommandContext<CommandSourceStack> ctx, String nickname) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        AiBotPlayer nearest = null;
+        if (player != null) {
+            nearest = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        } else if (!BotManager.getActiveBots().isEmpty()) {
+            nearest = BotManager.getActiveBots().iterator().next();
+        }
+        if (nearest == null) {
+            ctx.getSource().sendFailure(Component.literal("No active companion bots found nearby."));
+            return 0;
+        }
+        return setBotNicknameDirect(ctx.getSource(), nearest, nickname);
+    }
+
+    private static int setBotNickname(CommandContext<CommandSourceStack> ctx, String botName, String nickname) {
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        return setBotNicknameDirect(ctx.getSource(), bot, nickname);
+    }
+
+    private static int setBotNicknameDirect(CommandSourceStack source, AiBotPlayer bot, String nickname) {
+        String clean = nickname.trim();
+        bot.addAlias(clean);
+        bot.sayInChat("My nickname is now '" + clean + "'! I will respond to this name.");
+        BotPersistence.saveAll(bot.level().getServer());
+        source.sendSuccess(() -> Component.literal("Set nickname for " + bot.getBotName() + " to '" + clean + "'!")
+                .withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 }

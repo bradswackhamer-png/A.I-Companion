@@ -4,6 +4,59 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.1] - 2026-10-25
+
+### 🚂 Train Dismount & Anti-Reboard Loop Fix
+- **Eliminated Immediate Reboarding Loop:**
+  - Fixed an issue where asking a companion or non-conductor bot to dismount or get out of a train caused them to step out for a split second and immediately reboard with the message *"Boarded the locomotive! Conductor ready on the rails."*
+  - Implemented `dismountFromTrain()`:
+    - Stops the locomotive and executes a vehicle dismount.
+    - Fully clears all active locomotive orders and follow targets (`conductorFollowingPlayer`, `conductorDestStation`, `conductorReturnStation`, `conductorTileTarget`, `conductorMoveStartPos`, and current action queue).
+    - Restores the companion's prior role (e.g. companion, guard, farmer) if they boarded temporarily.
+    - Applies a 5-second reboarding immunity cooldown (`trainBoardCooldownTicks = 100`) to prevent any accidental auto-mounting.
+    - Offsets the companion 1.2 blocks clear of the train tracks so they are not trapped inside the train's collision volume.
+  - Restricted `tickPassiveConductor` auto-boarding logic so it strictly applies only to companions currently assigned to the active conductor role with pending rail orders. Non-conductor bots will never auto-board locomotives.
+- **Expanded Natural Dismount Phrases:**
+  - Companions now recognize: `"get out"`, `"get out of the train"`, `"get off"`, `"get off the train"`, `"dismount"`, `"exit"`, `"exit the train"`, `"leave"`, `"leave the train"`, `"hop off"`, `"hop out"`, `"step out"`, and `"jump out"`.
+  - Added dedicated vehicle dismounting support to `"STOP"` and `"DISMOUNT"` action plans.
+
+### 🏷️ Interactive Nickname Assignment & Slash Commands
+- **Natural Language Nickname Recognition:**
+  - Fixed an issue where companions did not respond to nickname assignment requests in chat.
+  - Expanded verbal parsing in `extractAndLearnNicknameFromPrompt` to handle:
+    - `"assign nickname [to|is|:] <name>"`
+    - `"set nickname [to|is|:] <name>"`
+    - `"give you the nickname <name>"`
+    - `"your nickname is <name>"`
+    - `"nickname: <name>"`
+    - `"rename to <name>"` / `"change name to <name>"`
+    - `"call yourself <name>"` / `"name you <name>"`
+- **Instant Verbal Confirmation & Nearest-Bot Target Fallback:**
+  - Companions immediately confirm nickname changes in chat: *"Nickname set to '<name>'! I will now respond to this name."*
+  - If a player gives a nickname command without addressing a specific bot by name, chat routing automatically selects the nearest companion to the player.
+- **New In-Game Commands:**
+  - `/bot nickname <new_nickname>` — Assigns a nickname to the nearest companion.
+  - `/bot nickname <botName> <new_nickname>` — Assigns a nickname to a specific companion.
+  - `/bot rename <new_nickname>` — Alias for `/bot nickname`.
+  - `/bot rename <botName> <new_nickname>` — Alias for `/bot nickname`.
+
+### 🌾 Surveyor Wand Mapped Area Farming & Multi-Chest Logistics
+- **Whole Mapped Area Farming:**
+  - Fixed an issue where companions asked to farm a Surveyor Wand mapped area (e.g. $149\text{ m}^2$ plots) only worked a small 5-block radius and ignored the rest of the zone.
+  - Added `configureFarmForSavedArea(SavedArea area)`: when ordered to *"farm it"*, *"farm this area"*, *"farm the area"*, or *"farm <areaName>"*, companions detect the mapped area (by name, standing inside it, or nearest within range), adopt its exact perimeter bounds, and announce:
+    > *"Farm duty set to mapped area '<Name>' (~149 m²)! I will systematically tend, harvest, replant, and deposit crops across the entire mapped area."*
+  - Full-polygon iteration: `findNearestMatureCrop`, `findNearestBareFarmland`, and `findNearestTillableDirtInFarmBox` now scan the entire 3D bounding box of the `SavedArea`, ensuring 100% of the mapped zone is farmed, harvested, and replanted.
+  - `tickFarmAction` no longer terminates prematurely after a fixed crop count when working a mapped zone.
+- **Multi-Chest Storage Logistics:**
+  - Companions now detect single chests, double chests (`ChestBlock.getContainer`), and barrels within 24 blocks.
+  - When storing crops, `findNearestAvailableContainerBlock` actively skips full containers with no available slots.
+  - If chest #1 reaches capacity during deposit, the companion automatically locates the next available container with free space and deposits remaining produce sequentially across multiple chests.
+  - Alerts the player in chat if all nearby chests are full: *"My bags are full of crops and all nearby chests are full! Please place an empty chest."*
+- **Perimeter Boundary Leeway:**
+  - Allowed container access within 24 blocks of the farm perimeter so perimeter chests placed outside boundary fences can be accessed without triggering perimeter turnbacks.
+
+---
+
 ## [1.2.0] - 2026-10-24
 
 ### 🧠 New Feature: Intelligent Stuck Detection, Area Analysis & Dynamic Obstacle Bypass
