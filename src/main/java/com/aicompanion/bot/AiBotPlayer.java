@@ -117,6 +117,11 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.biome.Biome;
+import net.minecraft.core.Holder;
+import java.util.Queue;
+import java.util.ArrayDeque;
+import java.util.HashSet;
 import org.jspecify.annotations.Nullable;
 import com.aicompanion.bot.village.HouseBlueprint;
 import com.aicompanion.bot.village.CustomBlueprint;
@@ -183,6 +188,26 @@ public class AiBotPlayer extends ServerPlayer {
 
     public synchronized void setAssignedArea(@Nullable String areaName) {
         this.assignedAreaName = areaName;
+    }
+
+    // Lumberjack configuration
+    private @Nullable BlockPos lumberOriginPos = null;
+    private int lumberRadius = 32;
+    private boolean lumberjackAreaActive = false;
+    private boolean lumberStoreLogs = true;
+    private @Nullable BlockPos targetTreeBase = null;
+    private final List<BlockPos> targetTreeLogs = new ArrayList<>();
+
+    public @Nullable BlockPos getLumberOriginPos() { return this.lumberOriginPos; }
+    public int getLumberRadius() { return this.lumberRadius; }
+    public boolean isLumberjackAreaActive() { return this.lumberjackAreaActive; }
+    public boolean isLumberStoreLogs() { return this.lumberStoreLogs; }
+
+    public synchronized void setLumberjackConfig(@Nullable BlockPos origin, int radius, boolean areaActive, boolean storeLogs) {
+        this.lumberOriginPos = origin;
+        this.lumberRadius = Math.max(8, radius);
+        this.lumberjackAreaActive = areaActive;
+        this.lumberStoreLogs = storeLogs;
     }
 
     private final Deque<BotAction> actionQueue = new ArrayDeque<>();
@@ -533,6 +558,11 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized boolean extractAndLearnFarmConfigFromPrompt(String text, @Nullable ServerPlayer speaker) {
         if (text == null || text.isBlank()) return false;
         String lower = text.toLowerCase(Locale.ROOT);
+        if (lower.contains("tree") || lower.contains("trees") || lower.contains("wood") || lower.contains("log") || lower.contains("logs")
+                || lower.contains("chop") || lower.contains("timber") || lower.contains("lumber")
+                || lower.contains("not farm") || lower.contains("not \"farm")) {
+            return false;
+        }
         boolean mentionsFarm = lower.contains("farm") || lower.contains("harvest") || lower.contains("crop")
                 || lower.contains("plant") || lower.contains("replant") || lower.contains("till");
         if (!mentionsFarm) return false;
@@ -1365,6 +1395,12 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
+        // 6. Lumberjack: Automatically locate trees in lumber zone, fell whole trees, replant saplings, vacuum drops, and store in chest
+        if (r.contains("lumber") || r.contains("wood") || this.lumberjackAreaActive) {
+            tickPassiveLumberjack();
+            return;
+        }
+
         this.stopMovement();
         if (this.tickCount % 10 == 0) {
             Player nearest = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 8.0, p -> p != this);
@@ -1488,9 +1524,11 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         double distSq = this.position().distanceToSqr(targetVec);
-        if (distSq <= 4.5) {
+        boolean isOceanArrival = action.getPrimaryTarget() != null && action.getPrimaryTarget().equalsIgnoreCase("ocean") && this.isInWater();
+        if (distSq <= 16.0 || isOceanArrival) {
             stopMovement();
-            sayInChat("Arrived at destination!");
+            String destName = action.getPrimaryTarget() != null && !action.getPrimaryTarget().isBlank() ? action.getPrimaryTarget() : "destination";
+            sayInChat("Arrived at " + destName + " (" + this.getBlockX() + ", " + this.getBlockY() + ", " + this.getBlockZ() + ")!");
             return true;
         }
 
@@ -4271,8 +4309,8 @@ public class AiBotPlayer extends ServerPlayer {
         if (blockId.equals(q) || path.equals(q)) {
             return true;
         }
-        if (q.equals("wood") || q.equals("tree") || q.equals("trees") || q.equals("logs") || q.equals("log")) {
-            return path.contains("_log") || path.contains("_stem") || path.contains("_wood");
+        if (q.contains("log") || q.contains("tree") || q.contains("trees") || q.contains("wood") || q.contains("stem")) {
+            return path.contains("_log") || path.contains("_stem") || path.contains("_wood") || state.is(net.minecraft.tags.BlockTags.LOGS);
         }
         if (q.equals("stone") || q.equals("cobblestone") || q.equals("cobble")) {
             return path.equals("stone") || path.equals("cobblestone") || path.equals("deepslate")
@@ -4831,6 +4869,8 @@ public class AiBotPlayer extends ServerPlayer {
     public void respondToDistressCall(LivingEntity threat, AiBotPlayer caller) {
         sayInChat("Backup is on the way, " + caller.getBotName() + "! Engaging " + threat.getType().getDescription().getString() + "!");
         this.actionQueue.clear();
+        this.actionProgressCount = 0;
+        this.actionTicks = 0;
         this.currentAction = new BotAction("ATTACK", threat.getType().getDescription().getString(), null, 1);
         engageTarget(threat);
     }
@@ -4917,20 +4957,40 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        // 3. Hole / Pit excavation command: "dig a hole", "dig a hole here", "excavate here", "dig a 5x5 hole 4 deep here"
+        // 3. Hole / Pit / Box excavation command: "dig a hole", "dig a hole here", "excavate here", "dig a 10x10x2 box around us"
         boolean mentionsHole = lower.contains("hole") || lower.contains("pit") || lower.contains("trench") || lower.contains("quarry")
+                || lower.contains("box") || lower.contains("cube") || lower.contains("room")
                 || lower.contains("dig here") || lower.contains("excavate here") || lower.contains("dig right here")
-                || (lower.contains("dig") && (lower.contains("deep") || lower.contains("x") || lower.contains("by")));
+                || (lower.contains("dig") && (lower.contains("deep") || lower.contains("x") || lower.contains("by") || lower.contains("tiles") || lower.contains("blocks")));
 
         if (mentionsHole && !lower.contains("train") && !lower.contains("conductor")) {
             BlockPos startPos = resolveExcavationStartPos(speaker);
             net.minecraft.core.Direction facing = speaker != null ? speaker.getDirection() : this.getDirection();
+
+            // Check custom starting Y level: e.g. "starting y81", "starting at y 81", "y=81", "y 81", "y81"
+            java.util.regex.Matcher yMatcher = java.util.regex.Pattern.compile("(?:starting\\s+(?:at\\s+)?y|at\\s+y|y\\s*=|y)\\s*([+-]?\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+            if (yMatcher.find()) {
+                try {
+                    int customY = Integer.parseInt(yMatcher.group(1));
+                    startPos = new BlockPos(startPos.getX(), customY, startPos.getZ());
+                } catch (Exception ignored) {}
+            }
+
+            boolean isCentered = lower.contains("around us") || lower.contains("around me") || lower.contains("around here")
+                    || lower.contains("in each direction") || lower.contains("in all directions") || lower.contains("centered");
+            if (isCentered && speaker != null) {
+                startPos = new BlockPos(speaker.getBlockX(), startPos.getY(), speaker.getBlockZ());
+            }
+
+            boolean isUpwards = lower.contains("go up") || lower.contains("up ") || lower.contains("upwards")
+                    || lower.contains("above") || lower.contains("height") || lower.contains("tall") || lower.contains("raise");
+
             spawnExcavationParticles(startPos);
 
             int[] dims = parseExcavationDimensions(lower, false);
             if (dims != null) {
                 this.awaitingExcavationDimensions = false;
-                startBoxExcavation(startPos, facing, dims[0], dims[1], dims[2]);
+                startBoxExcavation(startPos, facing, dims[0], dims[1], dims[2], isUpwards, isCentered);
                 return true;
             } else {
                 this.pendingExcavationOrigin = startPos;
@@ -4947,45 +5007,77 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public void startBoxExcavation(BlockPos origin, net.minecraft.core.Direction facing, int width, int length, int depth) {
+        startBoxExcavation(origin, facing, width, length, depth, false, false);
+    }
+
+    public void startBoxExcavation(BlockPos origin, net.minecraft.core.Direction facing, int width, int length, int height, boolean isUpwards, boolean isCentered) {
         this.clearActions();
         this.activeExcavationQueue.clear();
 
         net.minecraft.core.Direction right = facing.getClockWise();
         int halfWidth = (width - 1) / 2;
+        int halfLength = (length - 1) / 2;
 
-        // Build top-down excavation queue (surface down to pit floor)
-        // First clear surface obstruction layer (dy = 1) if solid
-        for (int dz = 0; dz < length; dz++) {
-            for (int dx = -halfWidth; dx < width - halfWidth; dx++) {
-                BlockPos p = origin.relative(facing, dz).relative(right, dx).above(1);
-                BlockState s = this.level().getBlockState(p);
-                if (!s.isAir() && s.getDestroySpeed(this.level(), p) >= 0) {
-                    this.activeExcavationQueue.add(p);
+        if (isCentered) {
+            int minDy = isUpwards ? 0 : -(height - 1);
+            int maxDy = isUpwards ? (height - 1) : 0;
+
+            for (int dy = maxDy; dy >= minDy; dy--) {
+                for (int dz = -halfLength; dz <= (length - 1 - halfLength); dz++) {
+                    boolean serpentine = ((dz + halfLength) % 2 == 1);
+                    int startDx = serpentine ? (width - 1 - halfWidth) : -halfWidth;
+                    int endDx = serpentine ? -halfWidth : (width - 1 - halfWidth);
+                    int step = serpentine ? -1 : 1;
+
+                    for (int dx = startDx; serpentine ? (dx >= endDx) : (dx <= endDx); dx += step) {
+                        BlockPos p = origin.offset(dx, dy, dz);
+                        BlockState s = this.level().getBlockState(p);
+                        if (!s.isAir() && s.getDestroySpeed(this.level(), p) >= 0) {
+                            this.activeExcavationQueue.add(p);
+                        }
+                    }
                 }
             }
-        }
+        } else {
+            if (!isUpwards) {
+                for (int dz = 0; dz < length; dz++) {
+                    for (int dx = -halfWidth; dx < width - halfWidth; dx++) {
+                        BlockPos p = origin.relative(facing, dz).relative(right, dx).above(1);
+                        BlockState s = this.level().getBlockState(p);
+                        if (!s.isAir() && s.getDestroySpeed(this.level(), p) >= 0) {
+                            this.activeExcavationQueue.add(p);
+                        }
+                    }
+                }
+            }
 
-        // Layer-by-layer from surface (dy = 0) down to -(depth - 1)
-        for (int dy = 0; dy > -depth; dy--) {
-            for (int dz = 0; dz < length; dz++) {
-                boolean serpentine = (dz % 2 == 1);
-                int startDx = serpentine ? (width - 1 - halfWidth) : -halfWidth;
-                int endDx = serpentine ? -halfWidth : (width - 1 - halfWidth);
-                int step = serpentine ? -1 : 1;
+            int minDy = isUpwards ? 0 : -(height - 1);
+            int maxDy = isUpwards ? (height - 1) : 0;
 
-                for (int dx = startDx; serpentine ? (dx >= endDx) : (dx <= endDx); dx += step) {
-                    BlockPos p = origin.relative(facing, dz).relative(right, dx).offset(0, dy, 0);
-                    BlockState s = this.level().getBlockState(p);
-                    if (!s.isAir() && s.getDestroySpeed(this.level(), p) >= 0) {
-                        this.activeExcavationQueue.add(p);
+            for (int dy = maxDy; dy >= minDy; dy--) {
+                for (int dz = 0; dz < length; dz++) {
+                    boolean serpentine = (dz % 2 == 1);
+                    int startDx = serpentine ? (width - 1 - halfWidth) : -halfWidth;
+                    int endDx = serpentine ? -halfWidth : (width - 1 - halfWidth);
+                    int step = serpentine ? -1 : 1;
+
+                    for (int dx = startDx; serpentine ? (dx >= endDx) : (dx <= endDx); dx += step) {
+                        BlockPos p = origin.relative(facing, dz).relative(right, dx).offset(0, dy, 0);
+                        BlockState s = this.level().getBlockState(p);
+                        if (!s.isAir() && s.getDestroySpeed(this.level(), p) >= 0) {
+                            this.activeExcavationQueue.add(p);
+                        }
                     }
                 }
             }
         }
 
-        this.currentAction = new BotAction("EXCAVATE", width + "x" + length + " (" + depth + " deep)", null, this.activeExcavationQueue.size());
+        String modeDesc = isUpwards ? (height + " high upwards") : (height + " deep");
+        String centerDesc = isCentered ? " centered around (" : " from (";
+        this.currentAction = new BotAction("EXCAVATE", width + "x" + length + " (" + modeDesc + ")", null, this.activeExcavationQueue.size());
         this.actionProgressCount = 0;
-        sayInChat("Starting systematic excavation of " + width + "x" + length + " hole (" + depth + " deep) from ("
+        this.actionTicks = 0;
+        sayInChat("Starting systematic excavation of " + width + "x" + length + " box (" + modeDesc + ")" + centerDesc
                 + origin.getX() + ", " + origin.getY() + ", " + origin.getZ() + ")! (" + this.activeExcavationQueue.size() + " blocks to dig)");
     }
 
@@ -5110,6 +5202,9 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized boolean handleFarmerChatCommand(String text, @Nullable ServerPlayer speaker) {
         if (text == null || text.isBlank()) return false;
         String lower = text.toLowerCase(Locale.ROOT).trim();
+        if (lower.contains("tree") || lower.contains("wood") || lower.contains("log") || lower.contains("chop") || lower.contains("lumber")) {
+            return false;
+        }
 
         boolean mentionsWheat = lower.contains("wheat") || lower.contains("wheet");
         boolean mentionsHay = lower.contains("hay") || lower.contains("bale");
@@ -5231,6 +5326,459 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         return false;
+    }
+
+    public static boolean isTreeLog(BlockState state) {
+        if (state == null || state.isAir()) return false;
+        if (state.is(net.minecraft.tags.BlockTags.LOGS)) return true;
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase(Locale.ROOT);
+        return path.contains("_log") || path.contains("_stem") || path.contains("_wood");
+    }
+
+    public static boolean isTreeLeaves(BlockState state) {
+        if (state == null || state.isAir()) return false;
+        if (state.is(net.minecraft.tags.BlockTags.LEAVES)) return true;
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase(Locale.ROOT);
+        return path.contains("_leaves") || path.contains("wart_block");
+    }
+
+    public static boolean isTreeLogItem(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return false;
+        if (stack.is(net.minecraft.tags.ItemTags.LOGS)) return true;
+        String path = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase(Locale.ROOT);
+        return path.contains("_log") || path.contains("_stem") || path.contains("_wood");
+    }
+
+    public static Item getMatchingSaplingForLog(BlockState logState) {
+        String path = BuiltInRegistries.BLOCK.getKey(logState.getBlock()).getPath().toLowerCase(Locale.ROOT);
+        if (path.contains("spruce")) return Items.SPRUCE_SAPLING;
+        if (path.contains("birch")) return Items.BIRCH_SAPLING;
+        if (path.contains("jungle")) return Items.JUNGLE_SAPLING;
+        if (path.contains("acacia")) return Items.ACACIA_SAPLING;
+        if (path.contains("dark_oak")) return Items.DARK_OAK_SAPLING;
+        if (path.contains("cherry")) return Items.CHERRY_SAPLING;
+        if (path.contains("mangrove")) return Items.MANGROVE_PROPAGULE;
+        if (path.contains("crimson")) return Items.CRIMSON_FUNGUS;
+        if (path.contains("warped")) return Items.WARPED_FUNGUS;
+        return Items.OAK_SAPLING;
+    }
+
+    public List<BlockPos> findConnectedTreeLogs(BlockPos basePos) {
+        List<BlockPos> result = new ArrayList<>();
+        Set<BlockPos> visited = new HashSet<>();
+        Queue<BlockPos> queue = new ArrayDeque<>();
+
+        queue.add(basePos);
+        visited.add(basePos);
+
+        while (!queue.isEmpty() && result.size() < 64) {
+            BlockPos curr = queue.poll();
+            BlockState s = this.level().getBlockState(curr);
+            if (isTreeLog(s)) {
+                result.add(curr);
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dy = -1; dy <= 2; dy++) {
+                        for (int dz = -1; dz <= 1; dz++) {
+                            if (dx == 0 && dy == 0 && dz == 0) continue;
+                            BlockPos next = curr.offset(dx, dy, dz);
+                            if (visited.add(next)) {
+                                if (isTreeLog(this.level().getBlockState(next))) {
+                                    queue.add(next);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        result.sort(Comparator.comparingInt(net.minecraft.core.Vec3i::getY));
+        return result;
+    }
+
+    public @Nullable BlockPos findNearestTreeTrunk(BlockPos center, int radius) {
+        BlockPos best = null;
+        double bestDist = Double.MAX_VALUE;
+
+        for (int r = 1; r <= radius; r += 2) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (Math.abs(dx) != r && Math.abs(dz) != r && r > 2) continue;
+                    for (int dy = -6; dy <= 12; dy++) {
+                        BlockPos p = center.offset(dx, dy, dz);
+                        BlockState s = this.level().getBlockState(p);
+                        if (isTreeLog(s)) {
+                            BlockState below = this.level().getBlockState(p.below());
+                            if (!isTreeLog(below)) {
+                                double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                                if (d < bestDist) {
+                                    bestDist = d;
+                                    best = p;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (best != null) break;
+        }
+        return best;
+    }
+
+    public void startChoppingTree(BlockPos basePos, @Nullable ServerPlayer speaker) {
+        this.clearActions();
+        this.targetTreeBase = basePos;
+        this.targetTreeLogs.clear();
+        this.targetTreeLogs.addAll(findConnectedTreeLogs(basePos));
+        if (this.targetTreeLogs.isEmpty()) {
+            this.targetTreeLogs.add(basePos);
+        }
+        this.currentAction = new BotAction("CHOP_TREE", "tree (" + this.targetTreeLogs.size() + " logs)", null, this.targetTreeLogs.size());
+        this.actionProgressCount = 0;
+        this.actionTicks = 0;
+        sayInChat("Cutting down tree at (" + basePos.getX() + ", " + basePos.getY() + ", " + basePos.getZ() + ")! Queued " + this.targetTreeLogs.size() + " logs to chop and replant.");
+        chopNextTreeLog();
+    }
+
+    public void chopNextTreeLog() {
+        if (this.targetTreeLogs.isEmpty()) {
+            return;
+        }
+
+        while (!this.targetTreeLogs.isEmpty() && !isTreeLog(this.level().getBlockState(this.targetTreeLogs.get(0)))) {
+            this.targetTreeLogs.remove(0);
+        }
+
+        if (this.targetTreeLogs.isEmpty()) {
+            vacuumNearbyDrops();
+            this.currentAction = null;
+            if (!this.lumberjackAreaActive) {
+                sayInChat("Finished felling the tree! Replanted sapling and collected all wood.");
+            }
+            return;
+        }
+
+        BlockPos targetLog = this.targetTreeLogs.get(0);
+        Vec3 center = Vec3.atCenterOf(targetLog);
+        double distSq = this.distanceToSqr(center);
+
+        if (distSq > 16.0) {
+            moveTowards(center, distSq > 36.0);
+            return;
+        }
+
+        stopMovement();
+        lookAtPos(center);
+        BlockState state = this.level().getBlockState(targetLog);
+        equipBestToolFor(state);
+
+        this.level().destroyBlockProgress(this.getId(), targetLog, (this.miningTicks * 10) / 25);
+        this.miningTicks++;
+
+        if (this.miningTicks >= 12) {
+            this.level().destroyBlockProgress(this.getId(), targetLog, -1);
+            this.miningTicks = 0;
+            this.level().destroyBlock(targetLog, true, this);
+
+            if (this.targetTreeBase != null && targetLog.equals(this.targetTreeBase)) {
+                BlockState ground = this.level().getBlockState(targetLog.below());
+                if (ground.is(Blocks.DIRT) || ground.is(Blocks.GRASS_BLOCK) || ground.is(Blocks.PODZOL) || ground.is(Blocks.COARSE_DIRT) || ground.is(Blocks.MUD) || ground.is(Blocks.ROOTED_DIRT)) {
+                    Item saplingItem = getMatchingSaplingForLog(state);
+                    if (saplingItem instanceof BlockItem bi) {
+                        this.level().setBlockAndUpdate(targetLog, bi.getBlock().defaultBlockState());
+                    }
+                }
+            }
+
+            vacuumNearbyDrops();
+            this.actionProgressCount++;
+            this.targetTreeLogs.remove(0);
+            if (this.targetTreeLogs.isEmpty()) {
+                this.currentAction = null;
+                if (!this.lumberjackAreaActive) {
+                    sayInChat("Finished felling the tree! Replanted sapling and collected all wood.");
+                }
+            }
+        }
+    }
+
+    public int depositLumberDropsIntoChest(BlockPos chestPos) {
+        Container container = getContainerAt(chestPos);
+        if (container == null) return 0;
+        int deposited = 0;
+
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack stack = this.getInventory().getItem(i);
+            if (stack.isEmpty()) continue;
+            String path = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase(Locale.ROOT);
+            if (path.contains("_log") || path.contains("_stem") || path.contains("_wood") || path.equals("stick")) {
+                int count = stack.getCount();
+                ItemStack leftover = insertIntoContainer(container, stack);
+                int transferred = count - leftover.getCount();
+                if (transferred > 0) {
+                    this.getInventory().setItem(i, leftover);
+                    deposited += transferred;
+                }
+            }
+        }
+        return deposited;
+    }
+
+    private void tickPassiveLumberjack() {
+        if (this.tickCount % 20 != 0) return;
+
+        BlockPos origin = this.lumberOriginPos != null ? this.lumberOriginPos : this.blockPosition();
+        int radius = this.lumberRadius > 0 ? this.lumberRadius : 32;
+
+        int logCount = countMatching(s -> isTreeLogItem(s));
+        if ((logCount >= 64 || this.getInventory().getFreeSlot() == -1) && this.lumberStoreLogs) {
+            BlockPos chestPos = findNearestAvailableContainerBlock(32);
+            if (chestPos != null) {
+                double distSq = this.distanceToSqr(Vec3.atCenterOf(chestPos));
+                if (distSq > 9.0) {
+                    moveTowards(Vec3.atCenterOf(chestPos), true);
+                    return;
+                }
+                stopMovement();
+                lookAtPos(Vec3.atCenterOf(chestPos));
+                int stored = depositLumberDropsIntoChest(chestPos);
+                if (stored > 0) {
+                    sayInChat("Stored " + stored + "x logs & wood supplies into chest!");
+                }
+                return;
+            }
+        }
+
+        ItemEntity drop = findNearestDrop(8.0);
+        if (drop != null) {
+            moveTowards(drop.position(), false);
+            return;
+        }
+
+        if (!this.targetTreeLogs.isEmpty()) {
+            chopNextTreeLog();
+            return;
+        }
+
+        BlockPos treeBase = findNearestTreeTrunk(origin, radius);
+        if (treeBase != null) {
+            List<BlockPos> logs = findConnectedTreeLogs(treeBase);
+            if (!logs.isEmpty()) {
+                this.targetTreeBase = treeBase;
+                this.targetTreeLogs.clear();
+                this.targetTreeLogs.addAll(logs);
+                chopNextTreeLog();
+            }
+        }
+    }
+
+    public synchronized boolean handleLumberjackChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        boolean mentionsTree = lower.contains("tree") || lower.contains("trees") || lower.contains("wood")
+                || lower.contains("log") || lower.contains("logs") || lower.contains("timber") || lower.contains("lumber");
+
+        if (!mentionsTree && !lower.contains("lumberjack") && !lower.contains("chop")) {
+            return false;
+        }
+
+        // 1. Single-tree command: "cut this tree down", "chop this tree", "cut tree down", "fell this tree"
+        boolean isSingleTree = lower.contains("this tree") || lower.contains("the tree") || lower.contains("cut this")
+                || lower.contains("chop this") || lower.contains("cut tree") || lower.contains("chop tree")
+                || lower.equals("cut") || lower.equals("chop");
+
+        if (isSingleTree && !lower.contains("all") && !lower.contains("area") && !lower.contains("100")) {
+            BlockPos targetBase = null;
+            if (speaker != null) {
+                net.minecraft.world.phys.HitResult hit = speaker.pick(12.0, 0.0f, false);
+                if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK && hit instanceof net.minecraft.world.phys.BlockHitResult bhr) {
+                    BlockPos p = bhr.getBlockPos();
+                    BlockState s = this.level().getBlockState(p);
+                    if (isTreeLog(s) || isTreeLeaves(s)) {
+                        BlockPos curr = p;
+                        while (curr.getY() > this.level().getMinY()) {
+                            BlockState bState = this.level().getBlockState(curr.below());
+                            if (isTreeLog(bState)) {
+                                curr = curr.below();
+                            } else {
+                                break;
+                            }
+                        }
+                        if (isTreeLog(this.level().getBlockState(curr))) {
+                            targetBase = curr;
+                        }
+                    }
+                }
+            }
+
+            if (targetBase == null) {
+                BlockPos ref = speaker != null ? speaker.blockPosition() : this.blockPosition();
+                targetBase = findNearestTreeTrunk(ref, 32);
+            }
+
+            if (targetBase != null) {
+                this.botRole = "lumberjack";
+                this.lumberjackAreaActive = false;
+                startChoppingTree(targetBase, speaker);
+                return true;
+            } else {
+                sayInChat("I looked around but couldn't find any trees within 32 blocks.");
+                return true;
+            }
+        }
+
+        // 2. Area Lumberjack command
+        boolean isAreaLumber = lower.contains("all trees") || lower.contains("all the trees") || lower.contains("area")
+                || lower.contains("each direction") || lower.contains("note this spot") || lower.contains("bring back logs")
+                || lower.contains("save the logs") || lower.contains("clear trees") || lower.contains("chop trees")
+                || lower.contains("lumberjack");
+
+        if (isAreaLumber) {
+            int radius = 32;
+
+            java.util.regex.Matcher eachDir = java.util.regex.Pattern.compile("(\\d+)\\s*(?:blocks?|tiles?|m)?\\s*(?:in\\s+each\\s+direction)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+            if (eachDir.find()) {
+                try { radius = Math.min(128, Math.max(8, Integer.parseInt(eachDir.group(1)))); } catch (Exception ignored) {}
+            } else {
+                java.util.regex.Matcher areaMatch = java.util.regex.Pattern.compile("(\\d+)\\s*(?:x|by)\\s*(\\d+)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+                if (areaMatch.find()) {
+                    try {
+                        int w = Integer.parseInt(areaMatch.group(1));
+                        int l = Integer.parseInt(areaMatch.group(2));
+                        radius = Math.min(128, Math.max(8, Math.max(w, l) / 2));
+                    } catch (Exception ignored) {}
+                } else {
+                    java.util.regex.Matcher radMatch = java.util.regex.Pattern.compile("(\\d+)\\s*(?:blocks?|tiles?|m|radius|area)", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+                    if (radMatch.find()) {
+                        try { radius = Math.min(128, Math.max(8, Integer.parseInt(radMatch.group(1)))); } catch (Exception ignored) {}
+                    }
+                }
+            }
+
+            BlockPos origin = this.lumberOriginPos;
+            if (lower.contains("this spot") || lower.contains("from here") || lower.contains("note this spot") || origin == null) {
+                origin = speaker != null ? speaker.blockPosition() : this.blockPosition();
+            }
+
+            boolean returnLogs = lower.contains("bring back") || lower.contains("save the logs") || lower.contains("store") || lower.contains("chest");
+
+            this.botRole = "lumberjack";
+            this.lumberOriginPos = origin;
+            this.lumberRadius = radius;
+            this.lumberjackAreaActive = true;
+            this.lumberStoreLogs = returnLogs;
+
+            sayInChat("Lumberjack duty set! Working " + (radius * 2) + "x" + (radius * 2) + " area from ("
+                    + origin.getX() + ", " + origin.getY() + ", " + origin.getZ()
+                    + ")! I will systematically chop down all trees, replant saplings, vacuum up drops"
+                    + (returnLogs ? ", and store logs in chests." : "."));
+
+            BlockPos tree = findNearestTreeTrunk(origin, radius);
+            if (tree != null) {
+                startChoppingTree(tree, speaker);
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    public synchronized boolean handleExplorationChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "(?:find|locate|search\\s+for|where\\s+is|take\\s+us\\s+to|navigate\\s+to)\\s+(?:us\\s+)?(?:the\\s+)?(?:closest|nearest)?\\s*([a-zA-Z0-9_]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+
+        if (!m.find()) {
+            return false;
+        }
+
+        String rawQuery = m.group(1).trim().toLowerCase(Locale.ROOT);
+        String biomeQuery = null;
+        String prettyName = null;
+
+        if (rawQuery.contains("ocean") || rawQuery.contains("sea") || rawQuery.contains("water")) {
+            biomeQuery = "ocean";
+            prettyName = "Ocean";
+        } else if (rawQuery.contains("desert")) {
+            biomeQuery = "desert";
+            prettyName = "Desert";
+        } else if (rawQuery.contains("plains")) {
+            biomeQuery = "plains";
+            prettyName = "Plains";
+        } else if (rawQuery.contains("forest")) {
+            biomeQuery = "forest";
+            prettyName = "Forest";
+        } else if (rawQuery.contains("jungle")) {
+            biomeQuery = "jungle";
+            prettyName = "Jungle";
+        } else if (rawQuery.contains("swamp")) {
+            biomeQuery = "swamp";
+            prettyName = "Swamp";
+        } else if (rawQuery.contains("mountain") || rawQuery.contains("peak")) {
+            biomeQuery = "peaks";
+            prettyName = "Mountains";
+        } else if (rawQuery.contains("badlands") || rawQuery.contains("mesa")) {
+            biomeQuery = "badlands";
+            prettyName = "Badlands";
+        } else if (rawQuery.contains("cherry")) {
+            biomeQuery = "cherry";
+            prettyName = "Cherry Grove";
+        } else if (rawQuery.contains("taiga") || rawQuery.contains("snow")) {
+            biomeQuery = "taiga";
+            prettyName = "Taiga";
+        }
+
+        if (biomeQuery == null) {
+            return false;
+        }
+
+        final String targetKey = biomeQuery;
+        BlockPos ref = speaker != null ? speaker.blockPosition() : this.blockPosition();
+
+        if (this.level() instanceof ServerLevel sl) {
+            com.mojang.datafixers.util.Pair<BlockPos, net.minecraft.core.Holder<net.minecraft.world.level.biome.Biome>> found =
+                    sl.findClosestBiome3d(holder -> {
+                        String k = holder.unwrapKey().map(key -> key.identifier().getPath().toLowerCase(Locale.ROOT)).orElse("");
+                        return k.contains(targetKey);
+                    }, ref, 6400, 32, 64);
+
+            if (found != null) {
+                BlockPos targetPos = found.getFirst();
+                double dist = Math.sqrt(ref.distSqr(targetPos));
+                String cardinal = getCardinalDirection(targetPos.getX() - ref.getX(), targetPos.getZ() - ref.getZ());
+
+                BotPersistence.saveLocation(prettyName.toLowerCase(Locale.ROOT), targetPos, this.level().dimension().identifier().toString());
+                sayInChat("Found an " + prettyName + " ~" + (int) dist + " blocks away to the " + cardinal + " at ("
+                        + targetPos.getX() + ", ~, " + targetPos.getZ() + ")! Starting journey there now.");
+
+                this.clearActions();
+                this.currentAction = new BotAction("GOTO", prettyName, null, 1, targetPos.getX(), targetPos.getY(), targetPos.getZ());
+                this.actionProgressCount = 0;
+                this.actionTicks = 0;
+                return true;
+            } else {
+                sayInChat("I searched up to 6,400 blocks away but couldn't detect any " + prettyName + ".");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static String getCardinalDirection(double dx, double dz) {
+        double angle = Math.toDegrees(Math.atan2(-dx, dz));
+        if (angle < 0) angle += 360.0;
+        if (angle >= 337.5 || angle < 22.5) return "South";
+        if (angle >= 22.5 && angle < 67.5) return "South-West";
+        if (angle >= 67.5 && angle < 112.5) return "West";
+        if (angle >= 112.5 && angle < 157.5) return "North-West";
+        if (angle >= 157.5 && angle < 202.5) return "North";
+        if (angle >= 202.5 && angle < 247.5) return "North-East";
+        if (angle >= 247.5 && angle < 292.5) return "East";
+        return "South-East";
     }
 
     public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {

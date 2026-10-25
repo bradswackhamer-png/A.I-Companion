@@ -4,6 +4,45 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.4] - 2026-10-25
+
+### 🌲 Full Lumberjack Role & Tree Felling
+- **Lumberjack Intent Decoupling:**
+  - Resolved an issue where natural commands containing words like `"farm"` (e.g., *"farming all trees"* or *"your not 'farming' go chop all the trees down in your 100x100 area save the logs"*) were mistakenly captured by crop farming logic and assigned farm duty.
+  - Crop farming now strictly ignores tree, wood, log, chop, timber, and lumber requests.
+- **Single-Tree Felling (`"cut this tree down"` / `"chop this tree"`):**
+  - Raycasts the exact block the player is looking at (if log or leaf), traces down to the root base, and fells the entire tree trunk and branches.
+  - Auto-replants matching saplings (oak, birch, spruce, jungle, acacia, dark oak, cherry, mangrove, crimson/warped fungus) on dirt/grass.
+  - Vacuums up dropped logs, sticks, apples, and saplings automatically.
+- **Area Deforestation & Log Storing:**
+  - Recognizes prompts such as *"note this spot, travel up to 100 blocks in each direction from here farming all trees, bring back logs"* or *"chop all the trees down in your 100x100 area save the logs"*.
+  - Configures lumberjack duty with an origin anchor and custom radius (e.g. 100 blocks), continuously clears standing trees, and deposits all logs/wood into nearby chests.
+  - Broadened log block matching so bots recognize all vanilla and modded wood types without failing when encountering non-oak trees.
+- **Persistent Lumberjack Settings:**
+  - Saves and restores lumberjack origin, radius, active area mode, and container deposit settings in `bot_data.json`.
+
+### 🧭 Exploration & Native Biome Finder
+- **True Biome Locating (`findClosestBiome3d`):**
+  - Fixed an issue where explorer companions asked to find an ocean (*"explorer can you go find us the closest ocean"*) instantly reported "Arrived at destination!" due to empty GOTO targets.
+  - Implemented `handleExplorationChatCommand`: searches `ServerLevel` up to 6,400 blocks away for oceans, deserts, mountains, jungles, swamps, badlands, cherry groves, and forests.
+  - Reports exact compass direction and distance (e.g., *"Found an Ocean ~450 blocks away to the North-West at (-380, ~, 1420)! Starting journey there now."*), saves a named waypoint, and navigates there.
+
+### ⛏️ Advanced Excavation (Starting Y & Upward Room Clearance)
+- **Starting Y & Upwards Room Clearance:**
+  - Supports prompts like *"goku dig a 10x10x2 box around us. starting y81 go up 2 tiles and 10 in each direction"*.
+  - Explicitly parses starting Y coordinates (`starting y81`, `at y 81`, `y=81`).
+  - Parses centering (`around us`, `around me`, `in each direction`, `centered`) to center the box around the player.
+  - Parses upward room clearing (`go up 2 tiles`, `up 2`, `height 2`) to excavate layer-by-layer upwards from Y 81 instead of digging down into a pit.
+
+### ⚔️ Distress Call Progress Counter Fix
+- **Eliminated Instant Elimination Bug:**
+  - Fixed a bug where a companion responding to a distress call immediately announced *"Finished eliminating 16x Skeleton!"* on tick 0 because `actionProgressCount` wasn't reset to 0.
+
+### 📋 `/bot help` Command & Categorized Menu
+- Added `/bot help` (and bare `/bot` / `/aibot` command execution) displaying a clean, comprehensive command reference and natural chat voice command examples.
+
+---
+
 ## [1.2.3] - 2026-10-25
 
 ### 📖 Companion Training, Memory Books & Dynamic Recipe Learning

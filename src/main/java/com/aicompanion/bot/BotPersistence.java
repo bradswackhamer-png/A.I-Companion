@@ -119,6 +119,14 @@ public class BotPersistence {
         public int maxSeedsInChest = 64;
         public boolean autoCompostExcessSeeds = true;
 
+        // Lumberjack configuration
+        public Integer lumberOriginX = null;
+        public Integer lumberOriginY = null;
+        public Integer lumberOriginZ = null;
+        public int lumberRadius = 32;
+        public boolean lumberjackAreaActive = false;
+        public boolean lumberStoreLogs = true;
+
         // Rancher / Husbandry configuration
         public Integer ranchOriginX = null;
         public Integer ranchOriginY = null;
@@ -319,6 +327,15 @@ public class BotPersistence {
                 data.maxSeedsInChest = bot.getMaxSeedsInChest();
                 data.autoCompostExcessSeeds = bot.isAutoCompostExcessSeeds();
 
+                if (bot.getLumberOriginPos() != null) {
+                    data.lumberOriginX = bot.getLumberOriginPos().getX();
+                    data.lumberOriginY = bot.getLumberOriginPos().getY();
+                    data.lumberOriginZ = bot.getLumberOriginPos().getZ();
+                }
+                data.lumberRadius = bot.getLumberRadius();
+                data.lumberjackAreaActive = bot.isLumberjackAreaActive();
+                data.lumberStoreLogs = bot.isLumberStoreLogs();
+
                 if (bot.getRanchOriginPos() != null) {
                     data.ranchOriginX = bot.getRanchOriginPos().getX();
                     data.ranchOriginY = bot.getRanchOriginPos().getY();
@@ -485,6 +502,10 @@ public class BotPersistence {
                     bot.setMaxSeedsToKeepOnHand(data.maxSeedsToKeepOnHand > 0 ? data.maxSeedsToKeepOnHand : 32);
                     bot.setMaxSeedsInChest(data.maxSeedsInChest > 0 ? data.maxSeedsInChest : 64);
                     bot.setAutoCompostExcessSeeds(data.autoCompostExcessSeeds);
+                    if (data.lumberOriginX != null && data.lumberOriginY != null && data.lumberOriginZ != null) {
+                        bot.setLumberjackConfig(new BlockPos(data.lumberOriginX, data.lumberOriginY, data.lumberOriginZ),
+                                data.lumberRadius, data.lumberjackAreaActive, data.lumberStoreLogs);
+                    }
                     if (data.ranchOriginX != null && data.ranchOriginY != null && data.ranchOriginZ != null) {
                         bot.setRanchConfig(new BlockPos(data.ranchOriginX, data.ranchOriginY, data.ranchOriginZ),
                                 data.ranchRadius, data.ranchAnimal, data.ranchFood,

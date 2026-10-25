@@ -22,6 +22,13 @@ public class BotAction {
         this.count = Math.max(1, count);
     }
 
+    public BotAction(String type, String target, String item, int count, int x, int y, int z) {
+        this(type, target, item, count);
+        this.x = x;
+        this.y = y;
+        this.z = z;
+    }
+
     public String getNormalizedType() {
         return type != null ? type.toUpperCase().trim() : "";
     }

@@ -340,6 +340,16 @@ public class BotManager {
             } else if (lower.contains("nickname") || lower.contains("rename") || lower.contains("call you") || lower.contains("name you")) {
                 AiBotPlayer nearest = findNearestBot(speaker, bots);
                 if (nearest != null) targets.add(nearest);
+            } else if (lower.contains("tree") || lower.contains("trees") || lower.contains("wood") || lower.contains("log") || lower.contains("logs") || lower.contains("chop") || lower.contains("timber") || lower.contains("lumber")) {
+                AiBotPlayer nearestLumber = null;
+                for (AiBotPlayer b : bots) {
+                    if (b.getBotRole().toLowerCase().contains("lumber") || b.getBotRole().toLowerCase().contains("wood") || b.getBotName().toLowerCase().contains("lumber")) {
+                        nearestLumber = b;
+                        break;
+                    }
+                }
+                AiBotPlayer candidate = nearestLumber != null ? nearestLumber : findNearestBot(speaker, bots);
+                if (candidate != null) targets.add(candidate);
             } else if (lower.contains("wheat") || lower.contains("hay") || lower.contains("compost") || lower.contains("crop") || lower.contains("seed")) {
                 AiBotPlayer nearestFarmer = null;
                 for (AiBotPlayer b : bots) {
@@ -402,6 +412,18 @@ public class BotManager {
         }
 
         if (bot.handleExcavationAndMiningChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.handleLumberjackChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.handleExplorationChatCommand(requestText, speaker)) {
             GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
             BotPersistence.saveAll(server);
             return;

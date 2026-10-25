@@ -63,6 +63,9 @@ public class BotCommands {
 
     private static LiteralArgumentBuilder<CommandSourceStack> buildCommandTree(String rootLiteral) {
         return Commands.literal(rootLiteral)
+                .executes(BotCommands::showGeneralHelp)
+                .then(Commands.literal("help")
+                        .executes(BotCommands::showGeneralHelp))
                 .then(Commands.literal("spawn")
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .executes(ctx -> spawnBot(ctx, StringArgumentType.getString(ctx, "name"), "All-Around Survival Companion"))
@@ -1016,6 +1019,57 @@ public class BotCommands {
         BotConfig.setModel(modelName);
         ctx.getSource().sendSuccess(() -> Component.literal("Gemini model updated to: " + BotConfig.getModel())
                 .withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int showGeneralHelp(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack src = ctx.getSource();
+        src.sendSuccess(() -> Component.literal("==================== AI COMPANION COMMANDS ====================").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        src.sendSuccess(() -> Component.literal("/bot spawn <name> [role]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Spawn bot (farmer, lumberjack, miner, guard, builder, conductor, husbandry, courier)").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot list")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - List all active bots and current tasks").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot status [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - View bot health, hunger, inventory, farm/ranch zones").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot gui [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Open interactive Speedometer Dashboard & Inventory").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot stop <name|all>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Stop bot's current task and stand by").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot tp [all|<name>|to <name>]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Teleport nearest, all, or specific bot (cross-dimension)").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot rename [name] <nickname>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Set companion nickname or alias").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot train [name] <instruction>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Teach bot a custom recipe, rule, or guideline").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot memory book [global|<name>]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Export an in-game Written Book of recorded recipes & rules").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot wand")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Obtain Surveyor Wand to map farm, ranch, or base boundaries").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot area <list|height|show|remove>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Manage surveyed 3D compound areas").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot blueprint <capture|list|info|build>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Scan in-world buildings and order builders to remake them").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot skin <list|reload|set>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Manage custom player skins in /aicompanion/skins").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot apikey [key]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - View setup guide or configure personal Gemini API key").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("Voice Tip: ")
+                .withStyle(ChatFormatting.GOLD)
+                .append(Component.literal("Speak directly to bots in public chat! e.g. \"lumber chop all trees in this 100x100 area\", \"goku dig 10x10x2 box around us starting y81 go up 2\", \"explorer find ocean\".").withStyle(ChatFormatting.AQUA)), false);
         return 1;
     }
 

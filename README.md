@@ -204,7 +204,15 @@ You can speak to your companions directly in public chat:
 * **Excavation & Hole Digging**:
   > *"dig a hole here"* → Companion responds: *"Marked starting point at (X, Y, Z)! How big and how deep should I dig from there?"* → Reply: *"5x5 and 4 deep"*
   > *"dig a 4x4 hole 6 deep here"*
+  > *"goku dig a 10x10x2 box around us. starting y81 go up 2 tiles and 10 in each direction"* (clears 2-high room upwards from Y81 centered on player)
   > *"excavate here"*
+* **Lumberjack & Tree Felling**:
+  > *"cut this tree down"* / *"chop this tree"* (fells the entire tree you are looking at, replants matching sapling, and vacuums drops)
+  > *"lumber note this spot, travel up to 100 blocks in each direction from here farming all trees, bring back logs"*
+  > *"chop all the trees down in your 100x100 area save the logs"*
+* **Exploration & Biome Finding**:
+  > *"explorer can you go find us the closest ocean"* (scans world up to 6,400 blocks, reports compass heading & distance, saves waypoint, navigates there)
+  > *"find desert"* / *"find jungle"* / *"where is the nearest mountain"*
 * **Radius-Constrained Mining**:
   > *"mine all the stone in this 10 block area"*
   > *"mine all coal within 15 blocks"*
@@ -242,6 +250,7 @@ You can speak to your companions directly in public chat:
 | Command | Description |
 | :--- | :--- |
 | `/bot spawn <name> [role]` | Spawn a new companion (`farmer`, `husbandry`, `guard`, `builder`, `miner`, `lumberjack`, `conductor`, `courier`) |
+| `/bot help` | Display formatted categorized help guide and voice command examples |
 | `/bot nickname [botName] <nickname>` | Assign an active nickname/alias to a companion (or nearest companion) |
 | `/bot rename [botName] <nickname>` | Alias for `/bot nickname` |
 | `/bot skin list` | List all detected skins in the `aicompanion/skins` folder and their model types |
