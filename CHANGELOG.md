@@ -6,6 +6,27 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ## [1.2.0] - 2026-10-24
 
+### 🧠 New Feature: Intelligent Stuck Detection, Area Analysis & Dynamic Obstacle Bypass
+- **Goal-Distance Stagnation Tracking:**
+  - Companions actively measure progress toward their goal (`bestMoveTargetDistSq` and `moveNoProgressTicks`).
+  - If a companion is unable to reduce its distance to its target over 16 ticks (~0.8s) due to walls, fences, trenches, cliffs, or obstacles, it recognizes that it is stuck and immediately executes an intelligent area analysis plan.
+- **Immediate Environmental Analysis (`analyzeAndExecuteUnstuckPlan`):**
+  - **Hole & Trench Trap Analysis:**
+    - Accurately checks surrounding solid blocks at chest/head level on 3+ sides.
+    - Probes a $5 \times 5$ perimeter for natural exit ramps or steps within 2 blocks (`findNearbyExitStep`). If found, sets an intermediate waypoint to walk up and out.
+    - If trapped in a sheer vertical pit ($\ge 2$ blocks deep) with no ramp, checks ceiling clearance, equips the proper tool to destroy overhead obstructions, and executes a pillar jump (`executeHoleEscape()`).
+  - **Wall / Building / Cliff Bypass Probing:**
+    - When blocked by a solid wall or obstacle in front, the companion casts lateral rays to the left (`getCounterClockWise()`) and right (`getClockWise()`) up to 8 blocks away.
+    - Finds the nearest standable clearance leading around the obstacle and sets an intermediate **`activeBypassWaypoint`**.
+    - If facing low 1–2 block barriers (fences or low walls) with no lateral opening within 8 blocks, the bot cleanly pillars over the barrier.
+    - If facing a massive high wall in a dead end, backs up and disengages.
+  - **Chasm / Deep Pit Rim Search:**
+    - When facing a wide drop-off ahead with no bridging materials, companions probe left and right along the rim to find contiguous ground or safe natural crossings.
+- **Seamless Intermediate Waypoint Routing:**
+  - `moveTowards` navigates directly toward `activeBypassWaypoint` until reached (within 1.2 blocks) or timed out, then seamlessly resumes direct pathing to the original target.
+- **Eliminated Wall-Pillaring Bug:**
+  - Removed old logic that caused companions to place dirt pillars under their feet whenever they walked up to any building wall or stood in a 90-degree room corner.
+
 ### 🎭 New Feature: Custom Skin Folder & Role-Themed Auto-Assignment
 - **Drop-In Skins Folder (`/aicompanion/skins`):**
   - Simply drop standard **64×64** or **64×32** `.png` Minecraft skins into the `aicompanion/skins` folder (in your game instance directory or config folder)!
