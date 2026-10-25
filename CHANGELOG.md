@@ -7,6 +7,13 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 ## [1.2.0] - 2026-10-24
 
 ### 🧠 New Feature: Intelligent Stuck Detection, Area Analysis & Dynamic Obstacle Bypass
+- **Eliminated Erroneous 1-Block Drop Bridging:**
+  - Fixed a critical flaw in `isDeepPitAt` where any single 1-block drop down was erroneously evaluated as a "deep pit", causing companions to place dirt blocks to walk flat instead of simply walking/stepping down.
+  - Drops of 1, 2, or 3 blocks to solid ground deal zero fall damage in Minecraft and are now recognized as 100% safe to walk and step down.
+  - Pits and bridging are now strictly reserved for genuine 4+ block sheer drops (ravines, cliffs, void) or hazardous lava/fire.
+- **Descending Pathing Toward Lower Targets:**
+  - If the player or destination is at a lower elevation than the companion (`target.y < this.getY() - 0.2`, e.g. player is at Y=101 and companion jumped onto a block at Y=102), the companion will **never** bridge across the sky. Instead, they smoothly jump/step down off the block directly to the player.
+  - Ledge jump-ups are only triggered when the target is at or above the bot's elevation, or if physically colliding with an unavoidable block.
 - **Goal-Distance Stagnation Tracking:**
   - Companions actively measure progress toward their goal (`bestMoveTargetDistSq` and `moveNoProgressTicks`).
   - If a companion is unable to reduce its distance to its target over 16 ticks (~0.8s) due to walls, fences, trenches, cliffs, or obstacles, it recognizes that it is stuck and immediately executes an intelligent area analysis plan.
