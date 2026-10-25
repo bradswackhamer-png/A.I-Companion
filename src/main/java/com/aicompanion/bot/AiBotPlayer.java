@@ -103,11 +103,15 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.equipment.Equippable;
+import net.minecraft.tags.FluidTags;
+import net.minecraft.world.damagesource.DamageTypes;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.ComposterBlock;
 import net.minecraft.world.level.block.DoorBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
@@ -130,6 +134,10 @@ public class AiBotPlayer extends ServerPlayer {
     private int farmRadiusZ = 10;
     private final List<String> farmAllowedCrops = new ArrayList<>();
     private boolean farmAllowTill = true;
+    private boolean autoCompactWheatToHay = true;
+    private int maxSeedsToKeepOnHand = 32;
+    private int maxSeedsInChest = 64;
+    private boolean autoCompostExcessSeeds = true;
 
     // Husbandry / Rancher configuration
     private @Nullable BlockPos ranchOriginPos = null;
@@ -270,6 +278,14 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized int getFarmRadiusZ() { return this.farmRadiusZ; }
     public synchronized List<String> getFarmAllowedCrops() { return new ArrayList<>(this.farmAllowedCrops); }
     public synchronized boolean isFarmAllowTill() { return this.farmAllowTill; }
+    public synchronized boolean isAutoCompactWheatToHay() { return this.autoCompactWheatToHay; }
+    public synchronized void setAutoCompactWheatToHay(boolean autoCompact) { this.autoCompactWheatToHay = autoCompact; }
+    public synchronized int getMaxSeedsToKeepOnHand() { return this.maxSeedsToKeepOnHand; }
+    public synchronized void setMaxSeedsToKeepOnHand(int max) { this.maxSeedsToKeepOnHand = Math.max(0, max); }
+    public synchronized int getMaxSeedsInChest() { return this.maxSeedsInChest; }
+    public synchronized void setMaxSeedsInChest(int max) { this.maxSeedsInChest = Math.max(0, max); }
+    public synchronized boolean isAutoCompostExcessSeeds() { return this.autoCompostExcessSeeds; }
+    public synchronized void setAutoCompostExcessSeeds(boolean autoCompost) { this.autoCompostExcessSeeds = autoCompost; }
 
     public synchronized void setRanchConfig(@Nullable BlockPos origin, double radius, String animal, String food,
                                             int maxPop, int minPop, boolean autoBreed, boolean autoCull, boolean adultsOnly) {
@@ -1140,6 +1156,22 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
+        // Active Water Survival / Anti-Drowning & Lava Physics
+        if (this.isInWater()) {
+            this.setJumping(true);
+            Vec3 motion = this.getDeltaMovement();
+            if (this.isEyeInFluid(FluidTags.WATER) || motion.y < 0.04) {
+                this.setDeltaMovement(motion.x, Math.max(motion.y, 0.08), motion.z);
+            }
+            if (this.isEyeInFluid(FluidTags.WATER) || this.getAirSupply() < 200) {
+                escapeWaterToDryLand();
+            }
+        } else if (this.isInLava()) {
+            this.setJumping(true);
+            Vec3 motion = this.getDeltaMovement();
+            this.setDeltaMovement(motion.x, Math.max(motion.y, 0.15), motion.z);
+        }
+
         if (this.attackCooldown > 0) {
             this.attackCooldown--;
         }
@@ -1735,6 +1767,13 @@ public class AiBotPlayer extends ServerPlayer {
             }
             return false;
         }
+        if (query.contains("hay") || query.contains("bale")) {
+            if (consumeMatching(s -> s.is(Items.WHEAT), 9)) {
+                giveToSelf(new ItemStack(Items.HAY_BLOCK, 1));
+                return true;
+            }
+            return false;
+        }
         if (query.contains("shield")) {
             ensurePlanks(6);
             ensureIronIngots(1);
@@ -1867,6 +1906,22 @@ public class AiBotPlayer extends ServerPlayer {
                 break;
             }
         }
+    }
+
+    public int compactWheatInInventory() {
+        int wheatCount = countMatching(s -> s.is(Items.WHEAT));
+        int blocksToCraft = wheatCount / 9;
+        if (blocksToCraft <= 0) return 0;
+        int crafted = 0;
+        for (int i = 0; i < blocksToCraft; i++) {
+            if (consumeMatching(s -> s.is(Items.WHEAT), 9)) {
+                giveToSelf(new ItemStack(Items.HAY_BLOCK, 1));
+                crafted++;
+            } else {
+                break;
+            }
+        }
+        return crafted;
     }
 
     private boolean tickGiveAction(BotAction action) {
@@ -2730,7 +2785,7 @@ public class AiBotPlayer extends ServerPlayer {
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack s = this.getInventory().getItem(i);
             if (s.isEmpty()) continue;
-            if (s.is(Items.WHEAT) || s.is(Items.BEETROOT) || s.is(Items.MELON_SLICE) || s.is(Items.PUMPKIN)) {
+            if (s.is(Items.WHEAT) || s.is(Items.HAY_BLOCK) || s.is(Items.BEETROOT) || s.is(Items.MELON_SLICE) || s.is(Items.PUMPKIN)) {
                 depositable += s.getCount();
             } else if (s.is(Items.CARROT)) {
                 carrotCount += s.getCount();
@@ -2742,12 +2797,17 @@ public class AiBotPlayer extends ServerPlayer {
         }
         depositable += Math.max(0, carrotCount - 16);
         depositable += Math.max(0, potatoCount - 16);
-        depositable += Math.max(0, seedCount - 32);
+        depositable += Math.max(0, seedCount - this.maxSeedsToKeepOnHand);
         return depositable;
     }
 
     private void tickPassiveFarmer() {
         if (this.tickCount % 20 != 0) return;
+
+        // Auto-compact wheat to hay bales to save inventory and chest space
+        if (this.autoCompactWheatToHay && countMatching(s -> s.is(Items.WHEAT)) >= 9) {
+            compactWheatInInventory();
+        }
 
         // JaneMoose Tractor Integration
         if (TractorCompat.isAvailable()) {
@@ -2816,6 +2876,27 @@ public class AiBotPlayer extends ServerPlayer {
                 }
             } else if (this.tickCount % 200 == 0) {
                 sayInChat("My bags are full of crops and all nearby chests are full! Please place an empty chest.");
+            }
+        }
+
+        // 2. Compost surplus seeds if bot holds more than maxSeedsToKeepOnHand and composter is nearby
+        if (this.autoCompostExcessSeeds) {
+            int totalSeeds = countMatching(s -> BuiltInRegistries.ITEM.getKey(s.getItem()).toString().contains("seed"));
+            if (totalSeeds > this.maxSeedsToKeepOnHand) {
+                BlockPos composterPos = findNearestComposterBlock(24);
+                if (composterPos != null) {
+                    double distSq = this.distanceToSqr(Vec3.atCenterOf(composterPos));
+                    if (distSq > 9.0) {
+                        moveTowards(Vec3.atCenterOf(composterPos), false);
+                        return;
+                    } else {
+                        stopMovement();
+                        int composted = compostExcessSeeds(composterPos, this.maxSeedsToKeepOnHand);
+                        if (composted > 0) {
+                            return;
+                        }
+                    }
+                }
             }
         }
 
@@ -4188,17 +4269,44 @@ public class AiBotPlayer extends ServerPlayer {
         Container container = getContainerAt(chestPos);
         if (container == null) return 0;
         lookAtPos(Vec3.atCenterOf(chestPos));
+
+        // Auto-compact wheat to hay bales before storing to maximize chest space
+        if (this.autoCompactWheatToHay) {
+            compactWheatInInventory();
+        }
+
         int totalStored = 0;
 
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack s = this.getInventory().getItem(i);
             if (s.isEmpty()) continue;
-            String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
+            String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase(Locale.ROOT);
 
             // Reserve seeds and rations
             if (id.contains("seed")) {
                 int seedCount = countMatching(item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("seed"));
-                if (seedCount <= 32) continue;
+                if (seedCount <= this.maxSeedsToKeepOnHand) continue;
+
+                int seedsInChest = countItemsInContainer(container, item -> BuiltInRegistries.ITEM.getKey(item.getItem()).toString().contains("seed"));
+                int maxCanInsert = Math.max(0, this.maxSeedsInChest - seedsInChest);
+                if (maxCanInsert <= 0) continue; // Chest has reached max seeds! Excess seeds stay in inventory for composting.
+
+                int availableToDeposit = seedCount - this.maxSeedsToKeepOnHand;
+                int toDeposit = Math.min(s.getCount(), Math.min(maxCanInsert, availableToDeposit));
+                if (toDeposit <= 0) continue;
+
+                ItemStack toInsert = s.split(toDeposit);
+                int countBefore = toInsert.getCount();
+                ItemStack remainder = insertIntoContainer(container, toInsert);
+                int inserted = countBefore - remainder.getCount();
+                if (!remainder.isEmpty()) {
+                    s.grow(remainder.getCount());
+                }
+                totalStored += inserted;
+                if (!containerHasAnyFreeSpace(container)) {
+                    break;
+                }
+                continue;
             }
             if (id.contains("bone_meal") || id.contains("bonemeal")) continue;
             if (id.contains("carrot")) {
@@ -4210,9 +4318,8 @@ public class AiBotPlayer extends ServerPlayer {
                 if (pCount <= 16) continue;
             }
 
-            boolean isFarmProduce = id.contains("wheat") || id.contains("carrot") || id.contains("potato")
-                    || id.contains("beetroot") || id.contains("melon") || id.contains("pumpkin")
-                    || id.contains("seed");
+            boolean isFarmProduce = id.contains("wheat") || id.contains("hay") || id.contains("carrot") || id.contains("potato")
+                    || id.contains("beetroot") || id.contains("melon") || id.contains("pumpkin");
 
             if (isFarmProduce) {
                 int countBefore = s.getCount();
@@ -4228,9 +4335,97 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
         if (totalStored > 0) {
-            sayInChat("Deposited " + totalStored + "x crops into the chest.");
+            sayInChat("Deposited " + totalStored + "x farm items into the chest.");
         }
         return totalStored;
+    }
+
+    public static int countItemsInContainer(Container container, Predicate<ItemStack> predicate) {
+        if (container == null) return 0;
+        int total = 0;
+        for (int i = 0; i < container.getContainerSize(); i++) {
+            ItemStack slot = container.getItem(i);
+            if (!slot.isEmpty() && predicate.test(slot)) {
+                total += slot.getCount();
+            }
+        }
+        return total;
+    }
+
+    public @Nullable BlockPos findNearestComposterBlock(int radius) {
+        BlockPos origin = this.blockPosition();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                for (int dy = -4; dy <= 4; dy++) {
+                    BlockPos p = origin.offset(dx, dy, dz);
+                    if (this.level().getBlockState(p).is(Blocks.COMPOSTER)) {
+                        double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                        if (d < bestDistSq) {
+                            bestDistSq = d;
+                            best = p;
+                        }
+                    }
+                }
+            }
+        }
+        return best;
+    }
+
+    public int compostExcessSeeds(BlockPos composterPos, int maxSeedsToKeep) {
+        BlockState state = this.level().getBlockState(composterPos);
+        if (!state.is(Blocks.COMPOSTER)) return 0;
+
+        int composted = 0;
+        if (state.getValue(ComposterBlock.LEVEL) >= 8) {
+            state = ComposterBlock.extractProduce(this, state, this.level(), composterPos);
+            vacuumNearbyDrops();
+        }
+
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack stack = this.getInventory().getItem(i);
+            if (stack.isEmpty()) continue;
+            String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).toString().toLowerCase(Locale.ROOT);
+            if (!id.contains("seed")) continue;
+
+            while (!stack.isEmpty()) {
+                int totalSeeds = countMatching(s -> BuiltInRegistries.ITEM.getKey(s.getItem()).toString().contains("seed"));
+                if (totalSeeds <= maxSeedsToKeep) {
+                    break;
+                }
+
+                if (state.getValue(ComposterBlock.LEVEL) >= 8) {
+                    state = ComposterBlock.extractProduce(this, state, this.level(), composterPos);
+                    vacuumNearbyDrops();
+                }
+
+                int prevCount = stack.getCount();
+                state = ComposterBlock.insertItem(this, state, (ServerLevel) this.level(), stack, composterPos);
+                int used = prevCount - stack.getCount();
+                if (used > 0) {
+                    composted += used;
+                } else {
+                    break;
+                }
+            }
+
+            int totalSeeds = countMatching(s -> BuiltInRegistries.ITEM.getKey(s.getItem()).toString().contains("seed"));
+            if (totalSeeds <= maxSeedsToKeep) {
+                break;
+            }
+        }
+
+        if (state.getValue(ComposterBlock.LEVEL) >= 8) {
+            state = ComposterBlock.extractProduce(this, state, this.level(), composterPos);
+            vacuumNearbyDrops();
+        }
+
+        if (composted > 0) {
+            sayInChat("Composted " + composted + "x surplus seeds into the composter. Retaining " + maxSeedsToKeep + " seeds for planting!");
+        }
+        return composted;
     }
 
     private boolean isMobReachableAndValid(LivingEntity target) {
@@ -4369,17 +4564,134 @@ public class AiBotPlayer extends ServerPlayer {
     public void die(DamageSource source) {
         this.clearActions();
         this.dropAllDeathLoot(this.level(), source);
-        sayInChat("I died! Respawning near players...");
+        sayInChat("I died! Respawning safely on dry ground...");
         this.setHealth(this.getMaxHealth());
         this.getFoodData().setFoodLevel(20);
+        this.setAirSupply(this.getMaxAirSupply());
+        this.clearFire();
+        this.setInvulnerableTime(60);
+        this.setDeltaMovement(Vec3.ZERO);
+
+        ServerLevel sLevel = (ServerLevel) this.level();
+        BlockPos safePos = null;
+
+        // 1. Try near nearest player
         Player nearest = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 256.0, p -> p != this && !(p instanceof AiBotPlayer));
         if (nearest != null) {
-            this.teleportTo(nearest.getX() + 1.5, nearest.getY(), nearest.getZ() + 1.5);
+            safePos = findSafeDryRespawnPos(sLevel, nearest.blockPosition(), 8);
         }
+
+        // 2. Try near guard anchor or farm origin
+        if (safePos == null && this.guardAnchorPos != null) {
+            safePos = findSafeDryRespawnPos(sLevel, this.guardAnchorPos, 12);
+        }
+        if (safePos == null && this.farmOriginPos != null) {
+            safePos = findSafeDryRespawnPos(sLevel, this.farmOriginPos, 12);
+        }
+
+        // 3. Try near current position (within 24m)
+        if (safePos == null) {
+            safePos = findSafeDryRespawnPos(sLevel, this.blockPosition(), 24);
+        }
+
+        // 4. Fall back to world spawn
+        if (safePos == null) {
+            safePos = findSafeDryRespawnPos(sLevel, sLevel.getRespawnData().pos(), 16);
+        }
+
+        if (safePos != null) {
+            this.teleportTo(safePos.getX() + 0.5, safePos.getY() + 0.05, safePos.getZ() + 0.5);
+        } else if (nearest != null) {
+            this.teleportTo(nearest.getX() + 0.5, nearest.getY() + 0.1, nearest.getZ() + 0.5);
+        }
+    }
+
+    public void escapeWaterToDryLand() {
+        BlockPos current = this.blockPosition();
+        BlockPos nearestBank = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int dx = -10; dx <= 10; dx++) {
+            for (int dz = -10; dz <= 10; dz++) {
+                for (int dy = -2; dy <= 4; dy++) {
+                    BlockPos p = current.offset(dx, dy, dz);
+                    if (this.level().getFluidState(p).isEmpty() && !this.level().getBlockState(p).getCollisionShape(this.level(), p).isEmpty()) {
+                        BlockPos feet = p.above();
+                        BlockPos head = feet.above();
+                        if (this.level().getFluidState(feet).isEmpty() && this.level().getBlockState(feet).getCollisionShape(this.level(), feet).isEmpty()
+                                && this.level().getFluidState(head).isEmpty() && this.level().getBlockState(head).getCollisionShape(this.level(), head).isEmpty()) {
+                            double d = this.distanceToSqr(Vec3.atCenterOf(feet));
+                            if (d < bestDistSq) {
+                                bestDistSq = d;
+                                nearestBank = feet;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (nearestBank != null) {
+            Vec3 target = Vec3.atCenterOf(nearestBank);
+            lookAtPos(target);
+            this.setJumping(true);
+            Vec3 m = this.getDeltaMovement();
+            Vec3 dir = target.subtract(this.position()).normalize().scale(0.22);
+            this.setDeltaMovement(dir.x, Math.max(m.y, 0.15), dir.z);
+        } else {
+            this.setJumping(true);
+            Vec3 m = this.getDeltaMovement();
+            this.setDeltaMovement(m.x, Math.max(m.y, 0.18), m.z);
+        }
+    }
+
+    public static @Nullable BlockPos findSafeDryRespawnPos(ServerLevel level, BlockPos origin, int radius) {
+        if (origin == null || level == null) return null;
+
+        for (int r = 0; r <= radius; r++) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (Math.abs(dx) != r && Math.abs(dz) != r) continue;
+
+                    for (int dy = -4; dy <= 4; dy++) {
+                        BlockPos footPos = origin.offset(dx, dy, dz);
+                        BlockPos groundPos = footPos.below();
+                        BlockPos headPos = footPos.above();
+
+                        FluidState footFluid = level.getFluidState(footPos);
+                        FluidState headFluid = level.getFluidState(headPos);
+                        if (!footFluid.isEmpty() || !headFluid.isEmpty()) continue;
+
+                        BlockState footState = level.getBlockState(footPos);
+                        BlockState headState = level.getBlockState(headPos);
+                        if (!footState.getCollisionShape(level, footPos).isEmpty() || !headState.getCollisionShape(level, headPos).isEmpty()) continue;
+                        if (footState.is(Blocks.LAVA) || footState.is(Blocks.FIRE) || footState.is(Blocks.SWEET_BERRY_BUSH)
+                                || footState.is(Blocks.WITHER_ROSE) || footState.is(Blocks.POWDER_SNOW)) continue;
+
+                        FluidState groundFluid = level.getFluidState(groundPos);
+                        if (!groundFluid.isEmpty()) continue;
+
+                        BlockState groundState = level.getBlockState(groundPos);
+                        if (groundState.getCollisionShape(level, groundPos).isEmpty() && !groundState.isSolid()) continue;
+                        if (groundState.is(Blocks.LAVA) || groundState.is(Blocks.MAGMA_BLOCK)
+                                || groundState.is(Blocks.CAMPFIRE) || groundState.is(Blocks.CACTUS)) continue;
+
+                        return footPos;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     @Override
     public boolean hurtServer(ServerLevel level, DamageSource damageSource, float amount) {
+        if (damageSource.is(DamageTypes.DROWN)) {
+            this.setJumping(true);
+            Vec3 motion = this.getDeltaMovement();
+            this.setDeltaMovement(motion.x, Math.max(motion.y, 0.25), motion.z);
+            escapeWaterToDryLand();
+        }
         // Dynamic Shield Blocking: Check if bot is holding a shield and facing the attacker
         if (this.isBlocking()) {
             Entity directEntity = damageSource.getDirectEntity();
@@ -4693,6 +5005,81 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         return null;
+    }
+
+    public synchronized boolean handleFarmerChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        boolean mentionsWheat = lower.contains("wheat") || lower.contains("wheet");
+        boolean mentionsHay = lower.contains("hay") || lower.contains("bale");
+        boolean mentionsCompost = lower.contains("compost") || lower.contains("fertiliz");
+        boolean mentionsSeed = lower.contains("seed");
+        boolean mentionsCompact = lower.contains("combine") || lower.contains("craft") || lower.contains("turn")
+                || lower.contains("compact") || lower.contains("make") || lower.contains("compress");
+
+        boolean isHayCommand = (mentionsWheat && mentionsHay) || (mentionsHay && mentionsCompact)
+                || (mentionsWheat && lower.contains("space")) || lower.contains("combine wheat") || lower.contains("compact wheat")
+                || lower.contains("combine the wheat") || lower.contains("wheat into hay");
+        boolean isCompostCommand = mentionsCompost || (mentionsSeed && (lower.contains("keep") || lower.contains("chest") || lower.contains("hand") || lower.contains("only") || lower.contains("rest")));
+
+        if (!isHayCommand && !isCompostCommand) {
+            return false;
+        }
+
+        StringBuilder reply = new StringBuilder();
+
+        // 1. Process wheat to hay compaction request
+        if (isHayCommand) {
+            this.autoCompactWheatToHay = true;
+            int crafted = compactWheatInInventory();
+            reply.append("Understood! I will combine wheat into hay bales to save inventory and chest space.");
+            if (crafted > 0) {
+                reply.append(" Crafted ").append(crafted).append("x hay bales right now!");
+            }
+        }
+
+        // 2. Process seed limits & composting request
+        if (isCompostCommand) {
+            this.autoCompostExcessSeeds = true;
+
+            // Extract custom limits if numbers are provided
+            java.util.regex.Matcher handMatcher = java.util.regex.Pattern.compile("(?:keep|have|hold|leave)\\s+(\\d+)\\s+seeds?\\s+(?:on\\s+hand|in\\s+(?:hand|inventory))").matcher(lower);
+            if (handMatcher.find()) {
+                try {
+                    this.maxSeedsToKeepOnHand = Integer.parseInt(handMatcher.group(1));
+                } catch (NumberFormatException ignored) {}
+            }
+
+            java.util.regex.Matcher chestMatcher = java.util.regex.Pattern.compile("(?:keep|leave|store|have)\\s+(\\d+)\\s+seeds?\\s+in\\s+(?:the\\s+)?chest").matcher(lower);
+            if (chestMatcher.find()) {
+                try {
+                    this.maxSeedsInChest = Integer.parseInt(chestMatcher.group(1));
+                } catch (NumberFormatException ignored) {}
+            }
+
+            if (reply.length() > 0) reply.append(" ");
+            reply.append("Configured seed limits: keeping ").append(this.maxSeedsToKeepOnHand)
+                 .append(" seeds on hand and up to ").append(this.maxSeedsInChest)
+                 .append(" in chests, composting the rest.");
+
+            // Immediately compost any surplus seeds if a composter is nearby
+            BlockPos composter = findNearestComposterBlock(24);
+            if (composter != null) {
+                int totalSeeds = countMatching(s -> BuiltInRegistries.ITEM.getKey(s.getItem()).toString().contains("seed"));
+                if (totalSeeds > this.maxSeedsToKeepOnHand) {
+                    int composted = compostExcessSeeds(composter, this.maxSeedsToKeepOnHand);
+                    if (composted > 0) {
+                        reply.append(" Composted ").append(composted).append(" surplus seeds into bone meal right now!");
+                    }
+                }
+            } else {
+                reply.append(" (No composter within 24m yet. Place one nearby and I'll route all excess seeds into it!)");
+            }
+        }
+
+        sayInChat(reply.toString());
+        return true;
     }
 
     public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {

@@ -589,10 +589,11 @@ public class BotCommands {
         String invStr = inv.length() == 0 ? "Empty" : inv.toString();
         StringBuilder extra = new StringBuilder();
         if (bot.getFarmOriginPos() != null) {
-            extra.append(String.format("Farm Zone: (%d, %d, %d) %dx%d | Crops: %s\n",
+            extra.append(String.format("Farm Zone: (%d, %d, %d) %dx%d | Crops: %s | AutoHay: %b | SeedsOnHand: %d | ChestSeeds: %d | CompostExcess: %b\n",
                     bot.getFarmOriginPos().getX(), bot.getFarmOriginPos().getY(), bot.getFarmOriginPos().getZ(),
                     bot.getFarmRadiusX() * 2, bot.getFarmRadiusZ() * 2,
-                    bot.getFarmAllowedCrops().isEmpty() ? "all" : String.join(", ", bot.getFarmAllowedCrops())));
+                    bot.getFarmAllowedCrops().isEmpty() ? "all" : String.join(", ", bot.getFarmAllowedCrops()),
+                    bot.isAutoCompactWheatToHay(), bot.getMaxSeedsToKeepOnHand(), bot.getMaxSeedsInChest(), bot.isAutoCompostExcessSeeds()));
         }
         if (bot.getRanchOriginPos() != null || bot.getBotRole().toLowerCase().contains("husbandry") || bot.getBotRole().toLowerCase().contains("ranch")) {
             extra.append(String.format("Livestock: %s (Food: %s, Cap: %d, Min: %d, CullAdults: %b)\n",

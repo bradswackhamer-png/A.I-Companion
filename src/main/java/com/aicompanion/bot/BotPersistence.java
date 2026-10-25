@@ -112,6 +112,10 @@ public class BotPersistence {
         public int farmRadiusZ = 10;
         public List<String> farmAllowedCrops = new ArrayList<>();
         public boolean farmAllowTill = true;
+        public boolean autoCompactWheatToHay = true;
+        public int maxSeedsToKeepOnHand = 32;
+        public int maxSeedsInChest = 64;
+        public boolean autoCompostExcessSeeds = true;
 
         // Rancher / Husbandry configuration
         public Integer ranchOriginX = null;
@@ -304,6 +308,10 @@ public class BotPersistence {
                 data.farmRadiusZ = bot.getFarmRadiusZ();
                 data.farmAllowedCrops = bot.getFarmAllowedCrops();
                 data.farmAllowTill = bot.isFarmAllowTill();
+                data.autoCompactWheatToHay = bot.isAutoCompactWheatToHay();
+                data.maxSeedsToKeepOnHand = bot.getMaxSeedsToKeepOnHand();
+                data.maxSeedsInChest = bot.getMaxSeedsInChest();
+                data.autoCompostExcessSeeds = bot.isAutoCompostExcessSeeds();
 
                 if (bot.getRanchOriginPos() != null) {
                     data.ranchOriginX = bot.getRanchOriginPos().getX();
@@ -455,6 +463,10 @@ public class BotPersistence {
                         bot.setFarmArea(new BlockPos(data.farmOriginX, data.farmOriginY, data.farmOriginZ),
                                 data.farmRadiusX, data.farmRadiusZ, data.farmAllowedCrops, data.farmAllowTill);
                     }
+                    bot.setAutoCompactWheatToHay(data.autoCompactWheatToHay);
+                    bot.setMaxSeedsToKeepOnHand(data.maxSeedsToKeepOnHand > 0 ? data.maxSeedsToKeepOnHand : 32);
+                    bot.setMaxSeedsInChest(data.maxSeedsInChest > 0 ? data.maxSeedsInChest : 64);
+                    bot.setAutoCompostExcessSeeds(data.autoCompostExcessSeeds);
                     if (data.ranchOriginX != null && data.ranchOriginY != null && data.ranchOriginZ != null) {
                         bot.setRanchConfig(new BlockPos(data.ranchOriginX, data.ranchOriginY, data.ranchOriginZ),
                                 data.ranchRadius, data.ranchAnimal, data.ranchFood,

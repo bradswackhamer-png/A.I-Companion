@@ -340,6 +340,16 @@ public class BotManager {
             } else if (lower.contains("nickname") || lower.contains("rename") || lower.contains("call you") || lower.contains("name you")) {
                 AiBotPlayer nearest = findNearestBot(speaker, bots);
                 if (nearest != null) targets.add(nearest);
+            } else if (lower.contains("wheat") || lower.contains("hay") || lower.contains("compost") || lower.contains("crop") || lower.contains("seed")) {
+                AiBotPlayer nearestFarmer = null;
+                for (AiBotPlayer b : bots) {
+                    if (b.getBotRole().toLowerCase().contains("farm")) {
+                        nearestFarmer = b;
+                        break;
+                    }
+                }
+                AiBotPlayer candidate = nearestFarmer != null ? nearestFarmer : findNearestBot(speaker, bots);
+                if (candidate != null) targets.add(candidate);
             } else if (bots.size() == 1 && BotConfig.LISTEN_ALL_WHEN_SINGLE_BOT.getAsBoolean()) {
                 targets.add(bots.iterator().next());
             }
@@ -386,6 +396,12 @@ public class BotManager {
         }
 
         if (bot.handleExcavationAndMiningChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.handleFarmerChatCommand(requestText, speaker)) {
             GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
             BotPersistence.saveAll(server);
             return;

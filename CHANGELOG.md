@@ -4,6 +4,50 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.2] - 2026-10-25
+
+### 🌊 Water Buoyancy, Anti-Drowning Reflex & Safe Respawn Placement
+- **Anti-Drowning Buoyancy & Swimming Instincts:**
+  - Resolved an issue where companions standing in streams or water trenches (such as 2-tile-high waterways or farm irrigation canals) failed to tread water, submerged, and drowned repeatedly without moving.
+  - Companions in water now actively set jumping and receive buoyant upward momentum whenever submerged or sinking (`Math.max(motion.y, 0.08)`), keeping their head above the surface so oxygen automatically replenishes.
+  - Similar buoyant lift is applied in lava (`motion.y = 0.15`).
+- **Emergency Self-Rescue (`escapeWaterToDryLand`):**
+  - If a companion's head is submerged or air supply drops below 200 ticks (10 seconds), or when taking drowning damage, they immediately trigger an autonomous escape instinct.
+  - Scans up to a 10-block radius for the closest solid, dry bank with clear head clearance and powers towards it with horizontal velocity and leap momentum, scrambling out of trenches and waterways back onto dry land.
+- **Safe Dry Ground Respawning:**
+  - Fixed an issue where dying in a hazard or stream caused the companion to revive in the exact same water block in an infinite death loop.
+  - Implemented `findSafeDryRespawnPos`: scans outwards in concentric rings to locate solid, non-liquid ground with two clear air blocks above, strictly rejecting water, lava, fire, magma blocks, campfires, sweet berry bushes, wither roses, and powdered snow.
+  - On death, companions reset their air supply to maximum, heal to full, clear fire, gain a 3-second invulnerability shield (`setInvulnerableTime(60)`), zero their momentum, and teleport to safe dry ground near the player, their guard/farm anchor, or world spawn.
+
+### 🌾 Wheat-to-Hay Auto-Compaction
+- **Space-Saving Hay Bale Crafting:**
+  - Companions can now craft 9 wheat into 1 hay bale (`Items.HAY_BLOCK`) via recipe execution and smart verbal commands.
+  - Added `compactWheatInInventory()`: loops through inventory and packs all multiples of 9 wheat into compact hay blocks.
+  - Added persistent companion setting `autoCompactWheatToHay` (enabled by default for farmers). Whenever a farmer holds 9+ wheat, they compress it before inventory or chests can overflow.
+  - Hay blocks are now recognized as farm produce in `getFarmerDepositableCropCount()` and `depositFarmerCropsIntoChest()`, ensuring hay bales are neatly stored in chests.
+- **Verbal Command Recognition:**
+  - Companions recognize natural language phrases: `"combine the wheat into hay"`, `"combine wheat into hay to save space"`, `"craft wheat into hay"`, `"turn wheat into hay"`, `"compact wheat"`, and `"make hay"`.
+  - Companions instantly craft any wheat on hand into hay blocks, enable auto-compaction, and confirm in chat:
+    > *"Understood! I will combine wheat into hay bales to save inventory and chest space. Crafted 4x hay bales right now!"*
+
+### ♻️ Composter Integration & Seed Inventory Limits
+- **Active Composting Engine (`compostExcessSeeds`):**
+  - Companions now utilize vanilla Composters (`Blocks.COMPOSTER`) to convert surplus seeds into valuable bone meal!
+  - `compostExcessSeeds`: uses `ComposterBlock.insertItem` to fill composters and automatically invokes `ComposterBlock.extractProduce` to harvest and vacuum up bone meal whenever the composter reaches readiness level 8.
+- **Configurable Seed Caps (Hand & Chest):**
+  - Configurable persistent thresholds:
+    - `maxSeedsToKeepOnHand`: Preserves a set number of seeds on hand (default: 32) so the companion always has enough to replant harvested crops.
+    - `maxSeedsInChest`: Caps the number of seeds deposited into chests (default: 64) so storage chests are never cluttered with endless seed stacks.
+  - When depositing into chests, the companion only deposits seeds up to `maxSeedsInChest`. Any remaining seeds above `maxSeedsToKeepOnHand` stay in inventory and are routed to the nearest composter.
+  - In `tickPassiveFarmer`, once chests are stocked, the farmer paths to any nearby composter within 24m and deposits all excess seeds.
+- **Natural Language Parsing & Role Routing:**
+  - Companions recognize: `"only keep so many seeds in the chest and on hand, putting the rest in compost"`, `"compost excess seeds"`, `"put seeds in compost"`, and specific limits like `"keep 16 seeds on hand and 64 in the chest"`.
+  - Chat targeting automatically selects the nearest farmer companion if the player speaks about crops, wheat, hay, seeds, or compost without addressing the companion by name.
+- **Status Dashboard (`/bot status`):**
+  - Updated status display to show: `AutoHay: true | SeedsOnHand: 32 | ChestSeeds: 64 | CompostExcess: true`.
+
+---
+
 ## [1.2.1] - 2026-10-25
 
 ### 🚂 Train Dismount & Anti-Reboard Loop Fix

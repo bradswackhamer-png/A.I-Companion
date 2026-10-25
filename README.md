@@ -150,8 +150,15 @@ Google provides free Gemini API access with **no credit card or billing required
 * **Strict Maturity Harvesting**: Only harvests **100% fully mature crops**, leaving growing plants untouched.
 * **Instant Replanting & Open Farmland Seeding**: Automatically replants harvested spots and plants empty tilled soil from inventory.
 * **Hoe Ground Tilling**: Equips hoes, tills untilled dirt/grass into farmland inside the zone, and immediately plants seeds.
+* **Wheat-to-Hay Auto-Compaction**: Automatically packs 9 wheat into 1 hay bale (`Items.HAY_BLOCK`) to save inventory and chest space. Enable or trigger on demand via chat (*"combine wheat into hay to save space"*).
+* **Composter Integration & Seed Inventory Limits**: Farmers keep a set seed limit on hand (default: 32) and in chests (default: 64), proactively carrying all surplus seeds to nearby Composters (`Blocks.COMPOSTER`) to produce and harvest bone meal (*"only keep so many seeds in the chest and on hand, putting the rest in compost"*).
 * **Multi-Chest Storage Logistics**: Automatically locates nearby single chests, double chests, and barrels. If a chest fills up during deposit, the farmer seamlessly switches to the next available container with free space.
 * **Perimeter Access**: Freely reaches perimeter and boundary fence chests within 24 blocks of the farm without hitting perimeter boundaries.
+
+### 🏊 13. Water Buoyancy, Anti-Drowning Reflex & Safe Respawn Placement
+* **Active Water Buoyancy & Swimming Instincts**: Companions naturally tread water and swim up (`setJumping(true)` with upward lift), ensuring their eyes remain above the water level so air automatically regenerates in streams, canals, and waterways.
+* **Emergency Self-Rescue (`escapeWaterToDryLand`)**: When submerged, low on oxygen (< 10 seconds remaining), or taking drowning damage, companions automatically locate the nearest dry bank and propel themselves out of water ditches and trenches onto solid ground.
+* **Safe Dry Ground Respawn**: When killed, companions never respawn in water, lava, walls, or death traps. The system automatically searches for verified dry, solid, hazard-free ground near players, anchors, or world spawn, fully resets air and health, and grants 3 seconds of invulnerability.
 
 ### 🐄 13. Animal Husbandry & Ranching (`husbandry` / `rancher`)
 * **Autonomous Breeding**: Finds livestock in the ranch zone ready to mate and feeds them breeding food.
@@ -198,9 +205,11 @@ You can speak to your companions directly in public chat:
   > *"assign nickname Charlie"*
   > *"set your nickname to Bob"*
   > *"your nickname is now Steve"*
-* **Farming (Whole Mapped Areas & Custom Dimensions)**:
+* **Farming (Whole Mapped Areas, Compacting & Composting)**:
   > *"farm the area"* / *"farm this area"* / *"farm it"* (automatically farms full Surveyor Wand mapped zone)
   > *"farm FarmZone"*
+  > *"combine the wheat into hay to save space"*
+  > *"only keep so many seeds in the chest and on hand, putting the rest in compost"*
   > *"shawn, from this spot ur farm land is 10x10 area, plant wheat and carrots, put ur harvest in the chest, only harvest 100% mature crop"*
 * **Husbandry**:
   > *"james, breed cows with wheat, kill adult cows when amount is over 10, only kill adults never have less then 5 cows at anytime."*
