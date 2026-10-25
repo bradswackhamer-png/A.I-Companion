@@ -4,6 +4,53 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.0] - 2026-10-24
+
+### ⛏️ New Feature: Interactive Verbal Hole Digging & Systematic Excavation (`EXCAVATE`)
+- **Natural Conversational Follow-Up:**
+  - Tell your companion *"dig a hole"*, *"dig a hole here"*, *"excavate here"*, or *"dig here"*.
+  - The companion marks the exact ground block you are looking at (or standing on) with emerald villager and flame particles, walks over to the spot, and asks in chat:
+    > *"Marked starting point at (X, Y, Z)! How big and how deep should I dig from there? (e.g. '5x5 and 4 deep' or 'width 4 depth 6')"*
+  - Reply naturally without needing to repeat the bot's name (e.g., `"5x5 and 4 deep"`, `"4 by 4, 6 deep"`, `"width 4 depth 8"`, `"5x5"`, or `"4 deep"`).
+  - Say `"cancel"` to abort or `"start here"` to update the anchor point if you reposition.
+- **One-Shot Dimension Commands:**
+  - If dimensions are already included in your initial prompt (e.g. *"dig a 5x5 hole 4 deep here"*), the companion immediately locks onto the spot and begins digging.
+- **Systematic Serpentine Layer-by-Layer Excavation:**
+  - Companions dig the volume systematically from the surface level down layer-by-layer (`dy = 0` down to `-(depth - 1)`).
+  - Clears surface obstruction/foliage, automatically equips the optimal tool (shovel for dirt/gravel/sand, pickaxe for stone/ores), breaks blocks with true drops, and vacuums all excavated items directly into the companion's inventory.
+  - Temporarily bypasses pit-bridging and self-rescue pillar jumps so companions never fill in the hole they are actively excavating.
+
+### 🎯 New Feature: Radius-Constrained Block Type Mining
+- **Anchored Area Mining Commands:**
+  - Commands such as *"mine all the stone in this 10 block area"*, *"mine all coal within 15 blocks"*, *"clear all the dirt in this 8 block area"*, or *"mine all the stone here"*.
+  - Locks the mining zone to the player's anchor point with the specified block radius.
+- **Top-Down & Exposed-Block Prioritization:**
+  - Companions no longer dig random holes or wander off into dark caves.
+  - Mining systematically prioritizes **exposed surface blocks** and works from the **highest Y level down**, smoothly peeling blocks layer-by-layer.
+  - Distinguishes natural terrain (stone, deepslate, andesite, diorite, granite, tuff, dirt, ores) from player-placed building blocks (stone bricks, polished variants, masonry).
+
+### ⚔️ Enhanced Mob Targeting, Line-of-Sight & Anti-Spin Pathfinding
+- **Eliminated Underground Spinning:**
+  - Fixed issue where companions stood on the surface spinning in circles trying to reach unreachable mobs deep underground in caves.
+  - Clamped vertical target search to $\pm 6$ blocks and requires direct line of sight or valid navigation pathing.
+- **Reverse Mob A\* Pathfinding:**
+  - If a monster is around a corner or behind cover, companions query the mob's own vanilla navigation path in reverse to cleanly navigate around obstacles and corners.
+- **Target Unreachable Timeout & Blacklist:**
+  - If a companion cannot reach a combat target within 4 seconds (80 ticks), they disengage and place the entity on a temporary 10-second blacklist so they don't get stuck indefinitely.
+
+### 🌟 Fix: Shader Bloom on Companion Name Tags
+- **Iris & Complementary Shaders Bloom Fix:**
+  - Fixed an issue in Minecraft 26.3 where Iris + Complementary Shaders caused companion name tags to bloom into blinding solid white glowing rectangles.
+  - Added a client render event hook (`RenderNameTagEvent.DoRender`) to route nametag rendering through standard non-emissive buffers, matching human player nametags perfectly.
+
+### 📐 Subterranean Pit Support & Explicit Height Ranges for Saved Areas
+- **Negative Height Pit Excavation:**
+  - `/bot area height <name> <height>` (and `/bot area cube`) now accepts negative values (down to `-384`) to represent subterranean pits and underground quarries.
+- **Two-Number Explicit Y Ranges:**
+  - Added syntax `/bot area height <name> <minY> <maxY>` to define cuboid volumes between two explicit world Y levels.
+
+---
+
 ## [1.1.0] - 2026-10-24
 
 ### 📊 New Feature: Interactive Companion Dashboard & Speedometer HUD
