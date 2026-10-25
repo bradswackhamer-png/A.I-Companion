@@ -3062,9 +3062,32 @@ public class AiBotPlayer extends ServerPlayer {
     private boolean isDeepPitAt(BlockPos footCandidate) {
         BlockState footState = this.level().getBlockState(footCandidate);
         if (!footState.isAir() && !footState.canBeReplaced()) return false;
-        BlockState belowState = this.level().getBlockState(footCandidate.below());
-        // If 1 block below candidate foot is air/passable, stepping here causes a 2+ block fall!
-        return belowState.isAir() || belowState.canBeReplaced();
+
+        // In Minecraft, drops of 1, 2, or 3 blocks deal ZERO fall damage and are completely safe to step down.
+        // footCandidate is at candidate foot level.
+        // Check depths 1..4 below footCandidate:
+        // depth 1: flat ground (Y - 1)
+        // depth 2: 1-block drop down (Y - 2)
+        // depth 3: 2-block drop down (Y - 3)
+        // depth 4: 3-block drop down (Y - 4)
+        for (int depth = 1; depth <= 4; depth++) {
+            BlockPos groundCandidate = footCandidate.below(depth);
+            BlockState state = this.level().getBlockState(groundCandidate);
+            if (!state.isAir() && !state.canBeReplaced() && !isFenceOrWall(state)) {
+                // Hazardous surfaces (lava, magma, fire) are dangerous hazards
+                if (state.is(Blocks.LAVA) || state.is(Blocks.MAGMA_BLOCK) || state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE)) {
+                    return true;
+                }
+                // Solid walkable block found within 3-block drop: safe terrain to walk/drop down!
+                return false;
+            }
+            if (state.is(Blocks.LAVA) || state.is(Blocks.FIRE)) {
+                return true;
+            }
+        }
+
+        // 4+ block sheer drop or void: this is a hazardous pit / cliff / ravine!
+        return true;
     }
 
     private boolean isPassable(BlockPos pos) {
@@ -3423,9 +3446,20 @@ public class AiBotPlayer extends ServerPlayer {
 
         boolean isExcavating = this.currentAction != null && "EXCAVATE".equals(this.currentAction.getNormalizedType());
 
-        // Pit & Hazard Avoidance: Check if there is a 2+ block drop ahead (and target is not down in that pit)
-        if (!isExcavating && target.y >= this.getY() - 1.0 && (isDeepPitAt(frontPos) || this.learnedHazardPits.contains(frontPos))) {
-            this.learnedHazardPits.add(frontPos.immutable());
+        // Deep Pit & Hazard Avoidance: Only check for REAL dangerous drops (4+ block drop into ravine/void or lava/fire)
+        // Drops of 1, 2, or 3 blocks are completely safe to step or drop down, dealing zero damage.
+        if (!isExcavating && isDeepPitAt(frontPos)) {
+            // If target/player is below our elevation, NEVER bridge forward across the sky!
+            if (target.y < this.getY() - 0.2) {
+                // Steer along the edge or find a safe slope/staircase down toward the player
+                BlockPos leftPos = this.blockPosition().relative(dir.getCounterClockWise());
+                boolean leftSafe = !isDeepPitAt(leftPos);
+                this.zza = 0.2f;
+                this.xxa = leftSafe ? 0.9f : -0.9f;
+                return;
+            }
+
+            // Target is at our elevation or higher across the chasm:
             BlockPos twoAhead = frontPos.relative(dir);
             boolean canJumpGap = this.level().getBlockState(twoAhead).isAir()
                     && !this.level().getBlockState(twoAhead.below()).isAir();
@@ -3438,18 +3472,23 @@ public class AiBotPlayer extends ServerPlayer {
                     this.jumpFromGround();
                 }
                 return;
-            } else if (placeBuildingBlockAt(frontPos.below())) {
-                // Successfully bridged pit with a block!
-                this.zza = 0.5f;
-                this.xxa = 0.0f;
-                return;
             } else {
-                // Wide pit and no blocks to bridge: steer sideways around the pit instead of falling in
-                BlockPos leftPos = this.blockPosition().relative(dir.getCounterClockWise());
-                boolean leftSafe = !isDeepPitAt(leftPos);
-                this.zza = 0.2f;
-                this.xxa = leftSafe ? 0.9f : -0.9f;
-                return;
+                // Only place bridge blocks if crossing a narrow (1-2 block) gap toward target
+                boolean narrowGap = !this.level().getBlockState(twoAhead.below()).isAir()
+                        || !this.level().getBlockState(twoAhead.relative(dir).below()).isAir();
+                if (narrowGap && placeBuildingBlockAt(frontPos.below())) {
+                    // Successfully bridged narrow pit gap with a block!
+                    this.zza = 0.5f;
+                    this.xxa = 0.0f;
+                    return;
+                } else {
+                    // Wide ravine or no blocks: steer sideways around the pit instead of placing endless sky bridges
+                    BlockPos leftPos = this.blockPosition().relative(dir.getCounterClockWise());
+                    boolean leftSafe = !isDeepPitAt(leftPos);
+                    this.zza = 0.2f;
+                    this.xxa = leftSafe ? 0.9f : -0.9f;
+                    return;
+                }
             }
         }
 
@@ -3460,8 +3499,12 @@ public class AiBotPlayer extends ServerPlayer {
         boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier;
 
         // Jump over 1-block ledges or swim in water/lava (Never jump at 2-block tall solid walls!)
+        // Only jump onto an elevated block if target is at or above our elevation, or if physically obstructed
         boolean stepUpPossible = !frontState.isAir() && headState.isAir() && this.level().getBlockState(headFront.above()).isAir() && !isFenceBarrier;
-        boolean shouldJump = (stepUpPossible || (this.horizontalCollision && !isTallWall) || this.isInWater() || this.isInLava()) && !isFenceBarrier;
+        boolean wantsToAscend = target.y > this.getY() - 0.2;
+        boolean shouldJump = ((stepUpPossible && (wantsToAscend || this.horizontalCollision))
+                || (this.horizontalCollision && !isTallWall)
+                || this.isInWater() || this.isInLava()) && !isFenceBarrier;
         if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier) {
             shouldJump = true;
         }
