@@ -135,6 +135,7 @@ public class BotPersistence {
         public boolean tractorMode = false;
 
         public String assignedArea = "";
+        public String skinName = "";
 
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
@@ -280,6 +281,7 @@ public class BotPersistence {
                 data.role = bot.getBotRole();
                 data.dimension = bot.level().dimension().identifier().toString();
                 data.assignedArea = bot.getAssignedAreaName() != null ? bot.getAssignedAreaName() : "";
+                data.skinName = bot.getCustomSkinName();
                 data.x = bot.getX();
                 data.y = bot.getY();
                 data.z = bot.getZ();

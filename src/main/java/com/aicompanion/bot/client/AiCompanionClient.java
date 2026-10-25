@@ -28,8 +28,21 @@ public class AiCompanionClient {
     public static void init(IEventBus modEventBus) {
         modEventBus.addListener(AiCompanionClient::onRegisterMenuScreens);
         modEventBus.addListener(AiCompanionClient::onRegisterKeyMappings);
+        modEventBus.addListener(AiCompanionClient::onClientSetup);
+        modEventBus.addListener(AiCompanionClient::onRegisterClientPayloads);
+        modEventBus.addListener(BotClientSkinManager::onRegisterRenderStateModifiers);
         NeoForge.EVENT_BUS.addListener(AiCompanionClient::onClientTick);
         NeoForge.EVENT_BUS.addListener(AiCompanionClient::onRenderNameTag);
+    }
+
+    private static void onClientSetup(net.neoforged.fml.event.lifecycle.FMLClientSetupEvent event) {
+        event.enqueueWork(BotClientSkinManager::loadAllSkins);
+    }
+
+    private static void onRegisterClientPayloads(net.neoforged.neoforge.client.network.event.RegisterClientPayloadHandlersEvent event) {
+        event.register(com.aicompanion.bot.skin.SyncBotSkinPayload.TYPE, (payload, context) -> {
+            BotClientSkinManager.setBotSkin(payload.botUuid(), payload.skinName());
+        });
     }
 
     private static void onRenderNameTag(RenderNameTagEvent.DoRender event) {

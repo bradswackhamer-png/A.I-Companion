@@ -51,6 +51,7 @@ public class AiCompanionMod {
         MENUS.register(modEventBus);
         CREATIVE_MODE_TABS.register(modEventBus);
         modEventBus.addListener(this::addCreative);
+        modEventBus.addListener(this::registerPayloadHandlers);
         if (net.neoforged.fml.loading.FMLEnvironment.getDist().isClient()) {
             com.aicompanion.bot.client.AiCompanionClient.init(modEventBus);
         }
@@ -63,6 +64,11 @@ public class AiCompanionMod {
         if (event.getTabKey() == net.minecraft.world.item.CreativeModeTabs.TOOLS_AND_UTILITIES) {
             event.accept(SURVEYOR_WAND.get());
         }
+    }
+
+    private void registerPayloadHandlers(net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent event) {
+        event.registrar("1.2.0")
+                .playToClient(com.aicompanion.bot.skin.SyncBotSkinPayload.TYPE, com.aicompanion.bot.skin.SyncBotSkinPayload.STREAM_CODEC);
     }
 
     @SubscribeEvent

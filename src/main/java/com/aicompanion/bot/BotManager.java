@@ -79,10 +79,18 @@ public class BotManager {
         bot.getInventory().add(new ItemStack(Items.BREAD, 8));
         bot.applyRoleStarterKit();
 
+        String assignedSkin = com.aicompanion.bot.skin.BotSkinManager.determineSkinForBot(name, role, bot.getAliases(), bot.getUUID());
+        bot.setCustomSkinName(assignedSkin);
+
         BotPersistence.markBotCreated();
         registerBotInWorldAndPlayerList(level, bot);
         ACTIVE_BOTS.put(key, bot);
         level.setChunkForced(bot.blockPosition().getX() >> 4, bot.blockPosition().getZ() >> 4, true);
+
+        if (!bot.getCustomSkinName().isBlank()) {
+            net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), bot.getCustomSkinName()));
+        }
+
         BotPersistence.saveAll(level.getServer());
 
         if (BotConfig.getCandidateApiKeys(null).isEmpty()) {
@@ -134,6 +142,17 @@ public class BotManager {
         registerBotInWorldAndPlayerList(level, bot);
         ACTIVE_BOTS.put(key, bot);
         level.setChunkForced(bot.blockPosition().getX() >> 4, bot.blockPosition().getZ() >> 4, true);
+
+        if (data.skinName != null && !data.skinName.isBlank()) {
+            bot.setCustomSkinName(data.skinName);
+        } else {
+            String assignedSkin = com.aicompanion.bot.skin.BotSkinManager.determineSkinForBot(data.name, data.role, data.aliases, bot.getUUID());
+            bot.setCustomSkinName(assignedSkin);
+        }
+        if (!bot.getCustomSkinName().isBlank()) {
+            net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), bot.getCustomSkinName()));
+        }
+
         return bot;
     }
 
@@ -232,6 +251,12 @@ public class BotManager {
         List<ServerPlayer> botsAsPlayers = new ArrayList<>(ACTIVE_BOTS.values());
         ClientboundPlayerInfoUpdatePacket packet = ClientboundPlayerInfoUpdatePacket.createPlayerInitializing(botsAsPlayers);
         joiningPlayer.connection.send(packet);
+
+        for (AiBotPlayer bot : ACTIVE_BOTS.values()) {
+            if (!bot.getCustomSkinName().isBlank()) {
+                net.neoforged.neoforge.network.PacketDistributor.sendToPlayer(joiningPlayer, new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), bot.getCustomSkinName()));
+            }
+        }
 
         for (AiBotPlayer bot : ACTIVE_BOTS.values()) {
             if (bot.level() == joiningPlayer.level()) {

@@ -6,6 +6,24 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ## [1.2.0] - 2026-10-24
 
+### 🎭 New Feature: Custom Skin Folder & Role-Themed Auto-Assignment
+- **Drop-In Skins Folder (`/aicompanion/skins`):**
+  - Simply drop standard **64×64** or **64×32** `.png` Minecraft skins into the `aicompanion/skins` folder (in your game instance directory or config folder)!
+  - Auto-initializes the directory and generates a guide on first launch.
+- **Role Subfolder & Filename Tagging:**
+  - Organize skins into role subdirectories (e.g. `/guard/`, `/builder/`, `/lumberjack/`, `/rancher/`, `/miner/`, `/farmer/`, `/conductor/`) or name them with role prefixes (e.g. `guard_knight.png`).
+  - When companions spawn with a role, they automatically select a matching skin from that role's category, rotating across variations so each worker/guard looks distinct!
+- **Exact Name Match & Fallback Pool:**
+  - Name a skin file after a companion (e.g. `gemini.png` or `bob.png`) for instant 1:1 skin assignment.
+  - Any general or unassigned skins in the folder form an automatic fallback pool for companions.
+- **Dual Layering & Slim (Alex 3px) / Wide (Steve 4px) Support:**
+  - Full dual-layer rendering: outer accessory layers (hardhats, leather satchels, toolbelts, chaps, cowgirl braids, fleece vests) render in high fidelity.
+  - Automatically detects Alex 3px slim arm models via alpha transparency at `(55, 20)` or by naming files with `_slim` / `alex`.
+- **In-Game Skin Commands:**
+  - `/bot skin list` — Lists all detected skins in the folder along with their detected model types.
+  - `/bot skin reload` — Hot-reloads all skin textures from disk in real-time without restarting Minecraft.
+  - `/bot skin set <botName> <skinName>` — Assigns a specific skin to a companion and persists across world restarts.
+
 ### ⛏️ New Feature: Interactive Verbal Hole Digging & Systematic Excavation (`EXCAVATE`)
 - **Natural Conversational Follow-Up:**
   - Tell your companion *"dig a hole"*, *"dig a hole here"*, *"excavate here"*, or *"dig here"*.

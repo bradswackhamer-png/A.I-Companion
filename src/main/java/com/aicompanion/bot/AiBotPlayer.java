@@ -207,6 +207,17 @@ public class AiBotPlayer extends ServerPlayer {
     private @Nullable BlockPos mineZoneCenter = null;
     private int mineZoneRadius = 0;
 
+    // Custom Skin Assignment
+    private String customSkinName = "";
+
+    public synchronized String getCustomSkinName() {
+        return this.customSkinName;
+    }
+
+    public synchronized void setCustomSkinName(String skinName) {
+        this.customSkinName = skinName != null ? skinName.trim() : "";
+    }
+
     public synchronized boolean isAwaitingExcavationReply() {
         return this.awaitingExcavationDimensions && this.pendingExcavationOrigin != null;
     }

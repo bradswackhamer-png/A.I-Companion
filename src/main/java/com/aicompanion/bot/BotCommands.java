@@ -43,6 +43,11 @@ public class BotCommands {
         return SharedSuggestionProvider.suggest(names, builder);
     };
 
+    private static final SuggestionProvider<CommandSourceStack> SKIN_SUGGESTIONS = (ctx, builder) -> {
+        var skins = com.aicompanion.bot.skin.BotSkinManager.getAvailableSkinNames();
+        return SharedSuggestionProvider.suggest(skins, builder);
+    };
+
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(buildCommandTree("bot"));
         dispatcher.register(buildCommandTree("aibot"));
@@ -208,7 +213,20 @@ public class BotCommands {
                         .then(Commands.argument("botName", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
                                 .executes(ctx -> openBotGuiCmd(ctx, StringArgumentType.getString(ctx, "botName"))))
-                        .executes(BotCommands::openNearestBotGuiCmd));
+                        .executes(BotCommands::openNearestBotGuiCmd))
+                .then(Commands.literal("skin")
+                        .then(Commands.literal("list")
+                                .executes(BotCommands::listSkinsCmd))
+                        .then(Commands.literal("reload")
+                                .executes(BotCommands::reloadSkinsCmd))
+                        .then(Commands.literal("set")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .then(Commands.argument("skinName", StringArgumentType.string())
+                                                .suggests(SKIN_SUGGESTIONS)
+                                                .executes(ctx -> setBotSkinCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
+                                                        StringArgumentType.getString(ctx, "skinName")))))));
     }
 
     private static int openBotGuiCmd(CommandContext<CommandSourceStack> ctx, String botName) {
@@ -661,6 +679,69 @@ public class BotCommands {
                 .append(Component.literal("/bot apikey <your_key_here>\n\n").withStyle(ChatFormatting.GREEN))
                 .append(Component.literal("Note: Even with NO key, companions will still farm, breed, mine, guard, craft, and build offline!")
                         .withStyle(ChatFormatting.DARK_AQUA, ChatFormatting.ITALIC)), false);
+        return 1;
+    }
+
+    private static int listSkinsCmd(CommandContext<CommandSourceStack> ctx) {
+        com.aicompanion.bot.skin.BotSkinManager.ensureDirectoriesExist();
+        var skins = com.aicompanion.bot.skin.BotSkinManager.getAvailableSkinNames();
+        if (skins.isEmpty()) {
+            ctx.getSource().sendSuccess(() -> Component.literal("No custom skins found in /aicompanion/skins.\n")
+                    .withStyle(ChatFormatting.YELLOW)
+                    .append(Component.literal("Drop any 64x64 .png skin files into: " + com.aicompanion.bot.skin.BotSkinManager.getSkinsDirectory())
+                            .withStyle(ChatFormatting.GRAY)), false);
+            return 0;
+        }
+
+        ctx.getSource().sendSuccess(() -> Component.literal("=== AI Companion Custom Skins (" + skins.size() + " detected) ===\n")
+                .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        for (String s : skins) {
+            boolean isSlim = s.contains("slim") || s.contains("alex");
+            String model = isSlim ? "Slim (Alex 3px)" : "Wide (Steve 4px)";
+            ctx.getSource().sendSuccess(() -> Component.literal("• ").withStyle(ChatFormatting.DARK_GRAY)
+                    .append(Component.literal(s).withStyle(ChatFormatting.AQUA))
+                    .append(Component.literal(" [" + model + "]").withStyle(ChatFormatting.GRAY)), false);
+        }
+        return skins.size();
+    }
+
+    private static int reloadSkinsCmd(CommandContext<CommandSourceStack> ctx) {
+        com.aicompanion.bot.skin.BotSkinManager.ensureDirectoriesExist();
+        com.aicompanion.bot.skin.BotSkinManager.scanSkins();
+        int count = com.aicompanion.bot.skin.BotSkinManager.getAvailableSkinNames().size();
+
+        if (net.neoforged.fml.loading.FMLEnvironment.getDist().isClient()) {
+            com.aicompanion.bot.client.BotClientSkinManager.loadAllSkins();
+        }
+
+        for (AiBotPlayer bot : BotManager.getActiveBots()) {
+            if (bot.getCustomSkinName().isBlank()) {
+                String assigned = com.aicompanion.bot.skin.BotSkinManager.determineSkinForBot(bot.getBotName(), bot.getBotRole(), bot.getAliases(), bot.getUUID());
+                bot.setCustomSkinName(assigned);
+            }
+            if (!bot.getCustomSkinName().isBlank()) {
+                net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), bot.getCustomSkinName()));
+            }
+        }
+
+        ctx.getSource().sendSuccess(() -> Component.literal("Reloaded custom companion skins! Found " + count + " skins across role categories.")
+                .withStyle(ChatFormatting.GREEN), true);
+        return count;
+    }
+
+    private static int setBotSkinCmd(CommandContext<CommandSourceStack> ctx, String botName, String skinName) {
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("Companion '" + botName + "' not found."));
+            return 0;
+        }
+
+        bot.setCustomSkinName(skinName);
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), skinName));
+
+        ctx.getSource().sendSuccess(() -> Component.literal("Updated " + bot.getBotName() + "'s skin to '" + skinName + "'!")
+                .withStyle(ChatFormatting.GREEN), true);
         return 1;
     }
 }
