@@ -12,7 +12,9 @@ import net.neoforged.fml.common.Mod;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
 import net.neoforged.neoforge.client.event.RegisterMenuScreensEvent;
+import net.neoforged.neoforge.client.event.RenderNameTagEvent;
 import net.neoforged.neoforge.common.NeoForge;
+import net.minecraft.client.renderer.entity.state.EntityRenderState;
 
 public class AiCompanionClient {
 
@@ -27,6 +29,24 @@ public class AiCompanionClient {
         modEventBus.addListener(AiCompanionClient::onRegisterMenuScreens);
         modEventBus.addListener(AiCompanionClient::onRegisterKeyMappings);
         NeoForge.EVENT_BUS.addListener(AiCompanionClient::onClientTick);
+        NeoForge.EVENT_BUS.addListener(AiCompanionClient::onRenderNameTag);
+    }
+
+    private static void onRenderNameTag(RenderNameTagEvent.DoRender event) {
+        EntityRenderState state = event.getEntityRenderState();
+        if (state.nameTagAttachment != null && !state.isDiscrete) {
+            event.setCanceled(true);
+            int offset = (state instanceof net.minecraft.client.renderer.entity.state.AvatarRenderState avatarState && avatarState.showExtraEars) ? -10 : 0;
+            event.getSubmitNodeCollector().submitNameTag(
+                    event.getPoseStack(),
+                    state.nameTagAttachment,
+                    offset,
+                    event.getContent(),
+                    false, // Disable seeThrough emission pass so shaders don't bloom nametags into glowing white boxes
+                    state.lightCoords,
+                    event.getCameraRenderState()
+            );
+        }
     }
 
     private static void onRegisterMenuScreens(RegisterMenuScreensEvent event) {
