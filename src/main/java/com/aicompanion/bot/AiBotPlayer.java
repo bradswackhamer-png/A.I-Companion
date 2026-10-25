@@ -199,6 +199,18 @@ public class AiBotPlayer extends ServerPlayer {
     private int houseBuildCooldown = 0;
     private @Nullable BlockPos currentHouseOrigin = null;
 
+    // Interactive Verbal Excavation & Radius-Constrained Mining
+    private boolean awaitingExcavationDimensions = false;
+    private @Nullable BlockPos pendingExcavationOrigin = null;
+    private net.minecraft.core.Direction pendingExcavationFacing = net.minecraft.core.Direction.NORTH;
+    private final List<BlockPos> activeExcavationQueue = new ArrayList<>();
+    private @Nullable BlockPos mineZoneCenter = null;
+    private int mineZoneRadius = 0;
+
+    public synchronized boolean isAwaitingExcavationReply() {
+        return this.awaitingExcavationDimensions && this.pendingExcavationOrigin != null;
+    }
+
     public AiBotPlayer(ServerLevel level, GameProfile profile, String role) {
         super(level.getServer(), level, profile, ClientInformation.createDefault());
         this.botName = profile.name();
@@ -889,7 +901,8 @@ public class AiBotPlayer extends ServerPlayer {
         StringBuilder sb = new StringBuilder();
         if (currentAction != null) {
             sb.append(currentAction.toString());
-            if (currentAction.count > 1 && ("MINE".equals(currentAction.getNormalizedType()) || "ATTACK".equals(currentAction.getNormalizedType()))) {
+            String norm = currentAction.getNormalizedType();
+            if (currentAction.count > 1 && ("MINE".equals(norm) || "EXCAVATE".equals(norm) || "ATTACK".equals(norm))) {
                 sb.append(" [").append(actionProgressCount).append("/").append(currentAction.count).append("]");
             }
         }
@@ -934,6 +947,9 @@ public class AiBotPlayer extends ServerPlayer {
         this.actionProgressCount = 0;
         this.actionTicks = 0;
         this.miningTicks = 0;
+        this.activeExcavationQueue.clear();
+        this.mineZoneCenter = null;
+        this.mineZoneRadius = 0;
         this.conductorDestStation = "";
         this.conductorReturnStation = "";
         this.conductorTileTarget = 0;
@@ -1153,6 +1169,7 @@ public class AiBotPlayer extends ServerPlayer {
             case "GOTO" -> tickGotoAction(action);
             case "GUARD" -> tickGuardAction(action);
             case "MINE" -> tickMineAction(action);
+            case "EXCAVATE" -> tickExcavateAction(action);
             case "FARM" -> tickFarmAction(action);
             case "TILL" -> tickTillAction(action);
             case "BREED" -> tickBreedAction(action);
@@ -1166,7 +1183,7 @@ public class AiBotPlayer extends ServerPlayer {
                 yield true;
             }
             case "PLACE", "BUILD" -> executePlaceAction(action);
-            case "BUILD_HOUSE" -> tickHouseBuildingAction();
+            case "BUILD_HOUSE", "BUILD_BLUEPRINT" -> tickHouseBuildingAction();
             case "CHEST_STORE" -> tickChestAction(action, true);
             case "CHEST_TAKE" -> tickChestAction(action, false);
             case "CONDUCT_TRAIN", "DRIVE_TRAIN" -> {
@@ -1294,6 +1311,8 @@ public class AiBotPlayer extends ServerPlayer {
     private boolean tickMineAction(BotAction action) {
         if (this.actionProgressCount >= action.count) {
             stopMovement();
+            this.mineZoneCenter = null;
+            this.mineZoneRadius = 0;
             sayInChat("Finished mining " + this.actionProgressCount + "x " + action.getPrimaryTarget() + "!");
             return true;
         }
@@ -1319,13 +1338,16 @@ public class AiBotPlayer extends ServerPlayer {
 
         // Find next matching block if needed
         if (this.targetBlockPos == null) {
-            this.targetBlockPos = findNearestMatchingBlock(action.getPrimaryTarget(), BotConfig.SCAN_RADIUS.getAsInt());
+            int searchRad = (this.mineZoneCenter != null && this.mineZoneRadius > 0) ? this.mineZoneRadius : BotConfig.SCAN_RADIUS.getAsInt();
+            this.targetBlockPos = findNearestMatchingBlock(action.getPrimaryTarget(), searchRad);
             if (this.targetBlockPos == null) {
                 stopMovement();
+                this.mineZoneCenter = null;
+                this.mineZoneRadius = 0;
                 if (this.actionProgressCount > 0) {
-                    sayInChat("Mined " + this.actionProgressCount + "x " + action.getPrimaryTarget() + ", no more nearby.");
+                    sayInChat("Mined all " + this.actionProgressCount + "x " + action.getPrimaryTarget() + " in the area!");
                 } else {
-                    sayInChat("I couldn't find any " + action.getPrimaryTarget() + " within " + BotConfig.SCAN_RADIUS.getAsInt() + " blocks.");
+                    sayInChat("I couldn't find any " + action.getPrimaryTarget() + " within " + searchRad + " blocks.");
                 }
                 return true;
             }
@@ -1390,6 +1412,93 @@ public class AiBotPlayer extends ServerPlayer {
 
             // Immediately collect drops spawned at brokenPos
             AABB dropBox = new AABB(brokenPos).inflate(3.5);
+            for (ItemEntity itemEntity : this.level().getEntitiesOfClass(ItemEntity.class, dropBox)) {
+                if (itemEntity.isAlive()) {
+                    ItemStack stack = itemEntity.getItem();
+                    if (this.getInventory().add(stack)) {
+                        itemEntity.discard();
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private boolean tickExcavateAction(BotAction action) {
+        // Skip any already-air, liquid, or unbreakable blocks at the front of the queue
+        while (!this.activeExcavationQueue.isEmpty()) {
+            BlockPos next = this.activeExcavationQueue.get(0);
+            BlockState st = this.level().getBlockState(next);
+            if (st.isAir() || !st.getFluidState().isEmpty() || st.getDestroySpeed(this.level(), next) < 0) {
+                this.activeExcavationQueue.remove(0);
+                this.actionProgressCount++;
+                if (this.targetBlockPos != null && this.targetBlockPos.equals(next)) {
+                    this.level().destroyBlockProgress(this.getId(), this.targetBlockPos, -1);
+                    this.targetBlockPos = null;
+                    this.miningTicks = 0;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if (this.activeExcavationQueue.isEmpty()) {
+            if (this.targetBlockPos != null) {
+                this.level().destroyBlockProgress(this.getId(), this.targetBlockPos, -1);
+                this.targetBlockPos = null;
+            }
+            stopMovement();
+            vacuumNearbyDrops();
+            sayInChat("Finished digging the " + action.getPrimaryTarget() + "! All excavated blocks collected.");
+            return true;
+        }
+
+        this.targetBlockPos = this.activeExcavationQueue.get(0);
+        Vec3 blockCenter = Vec3.atCenterOf(this.targetBlockPos);
+        double hdx = blockCenter.x - this.getX();
+        double hdz = blockCenter.z - this.getZ();
+        double horizDistSq = hdx * hdx + hdz * hdz;
+
+        if (horizDistSq > 20.0) {
+            moveTowards(new Vec3(blockCenter.x, this.getY(), blockCenter.z), horizDistSq > 36.0);
+            if (this.actionTicks > 200) {
+                // Skip unreachable block so excavation never stalls
+                this.activeExcavationQueue.remove(0);
+                this.targetBlockPos = null;
+                this.actionTicks = 0;
+                this.miningTicks = 0;
+            }
+            return false;
+        }
+
+        stopMovement();
+        lookAtPos(blockCenter);
+        BlockState state = this.level().getBlockState(this.targetBlockPos);
+        equipBestToolFor(state);
+
+        this.miningTicks++;
+        if (this.miningTicks % 4 == 0) {
+            broadcastSwing();
+        }
+
+        float destroySpeed = Math.max(1.5f, this.getMainHandItem().getDestroySpeed(state));
+        float hardness = Math.max(0.4f, state.getDestroySpeed(this.level(), this.targetBlockPos));
+        int ticksRequired = Mth.clamp((int) ((hardness * 14.0f) / destroySpeed), 4, 24);
+
+        int stage = Mth.clamp((this.miningTicks * 10) / ticksRequired, 0, 9);
+        this.level().destroyBlockProgress(this.getId(), this.targetBlockPos, stage);
+
+        if (this.miningTicks >= ticksRequired) {
+            this.level().destroyBlockProgress(this.getId(), this.targetBlockPos, -1);
+            BlockPos brokenPos = this.targetBlockPos;
+            this.level().destroyBlock(brokenPos, true, this);
+            this.activeExcavationQueue.remove(0);
+            this.targetBlockPos = null;
+            this.miningTicks = 0;
+            this.actionTicks = 0;
+            this.actionProgressCount++;
+
+            AABB dropBox = new AABB(brokenPos).inflate(4.0);
             for (ItemEntity itemEntity : this.level().getEntitiesOfClass(ItemEntity.class, dropBox)) {
                 if (itemEntity.isAlive()) {
                     ItemStack stack = itemEntity.getItem();
@@ -3018,8 +3127,10 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        boolean isExcavating = this.currentAction != null && "EXCAVATE".equals(this.currentAction.getNormalizedType());
+
         // Pit & Hazard Avoidance: Check if there is a 2+ block drop ahead (and target is not down in that pit)
-        if (target.y >= this.getY() - 1.0 && (isDeepPitAt(frontPos) || this.learnedHazardPits.contains(frontPos))) {
+        if (!isExcavating && target.y >= this.getY() - 1.0 && (isDeepPitAt(frontPos) || this.learnedHazardPits.contains(frontPos))) {
             this.learnedHazardPits.add(frontPos.immutable());
             BlockPos twoAhead = frontPos.relative(dir);
             boolean canJumpGap = this.level().getBlockState(twoAhead).isAir()
@@ -3066,7 +3177,7 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         // 2+ Block Deep Hole / Trap Self-Rescue Engine: Pillar jump and build up!
-        if ((isTallWall || isEnclosedInHole()) && target.y >= this.getY() - 0.5) {
+        if (!isExcavating && (isTallWall || isEnclosedInHole()) && target.y >= this.getY() - 0.5) {
             this.holeEscapeTicks++;
             if (this.holeEscapeTicks >= 4) {
                 this.holeEscapeTicks = 0;
@@ -3354,20 +3465,35 @@ public class AiBotPlayer extends ServerPlayer {
         return null;
     }
 
-    private @Nullable BlockPos findNearestMatchingBlock(String query, int radius) {
-        BlockPos origin = this.blockPosition();
-        BlockPos best = null;
-        double bestDist = Double.MAX_VALUE;
+    private boolean isBlockExposedToAir(BlockPos p) {
+        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.values()) {
+            BlockPos neighbor = p.relative(d);
+            BlockState s = this.level().getBlockState(neighbor);
+            if (s.isAir() || s.canBeReplaced()) return true;
+        }
+        return false;
+    }
 
-        for (int dx = -radius; dx <= radius; dx++) {
-            for (int dy = -6; dy <= 10; dy++) {
-                for (int dz = -radius; dz <= radius; dz++) {
-                    BlockPos pos = origin.offset(dx, dy, dz);
+    private @Nullable BlockPos findNearestMatchingBlock(String query, int radius) {
+        BlockPos searchCenter = (this.mineZoneCenter != null && this.mineZoneRadius > 0) ? this.mineZoneCenter : this.blockPosition();
+        int r = (this.mineZoneCenter != null && this.mineZoneRadius > 0) ? this.mineZoneRadius : radius;
+
+        BlockPos best = null;
+        double bestScore = Double.MAX_VALUE;
+
+        for (int dy = 8; dy >= -8; dy--) {
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    BlockPos pos = searchCenter.offset(dx, dy, dz);
+                    if (this.mineZoneCenter != null && this.mineZoneCenter.distSqr(pos) > (r * r + 2)) continue;
+
                     BlockState state = this.level().getBlockState(pos);
                     if (!state.isAir() && matchesBlockQuery(state, query)) {
-                        double dist = origin.distSqr(pos);
-                        if (dist < bestDist) {
-                            bestDist = dist;
+                        boolean exposed = isBlockExposedToAir(pos);
+                        double distFromBot = this.distanceToSqr(Vec3.atCenterOf(pos));
+                        double score = distFromBot - (dy * 3.0) + (exposed ? 0.0 : 1000.0);
+                        if (score < bestScore) {
+                            bestScore = score;
                             best = pos.immutable();
                         }
                     }
@@ -3390,21 +3516,33 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        if (blockId.equals(q) || path.equals(q) || path.contains(q)) {
+        if (blockId.equals(q) || path.equals(q)) {
             return true;
         }
-        if ((q.equals("wood") || q.equals("tree") || q.equals("trees") || q.equals("logs")) && (path.contains("_log") || path.contains("_stem"))) {
-            return true;
+        if (q.equals("wood") || q.equals("tree") || q.equals("trees") || q.equals("logs") || q.equals("log")) {
+            return path.contains("_log") || path.contains("_stem") || path.contains("_wood");
         }
-        if ((q.equals("cobblestone") || q.equals("stone")) && (path.equals("stone") || path.equals("cobblestone") || path.equals("deepslate"))) {
-            return true;
+        if (q.equals("stone") || q.equals("cobblestone") || q.equals("cobble")) {
+            return path.equals("stone") || path.equals("cobblestone") || path.equals("deepslate")
+                    || path.equals("cobbled_deepslate") || path.equals("andesite") || path.equals("diorite")
+                    || path.equals("granite") || path.equals("tuff");
         }
-        if (q.equals("iron") && path.contains("iron_ore")) return true;
-        if (q.equals("coal") && path.contains("coal_ore")) return true;
-        if (q.equals("diamond") && path.contains("diamond_ore")) return true;
-        if (q.equals("gold") && path.contains("gold_ore")) return true;
-        if (q.equals("copper") && path.contains("copper_ore")) return true;
-        return false;
+        if (q.equals("dirt") || q.equals("grass")) {
+            return path.equals("dirt") || path.equals("grass_block") || path.equals("coarse_dirt")
+                    || path.equals("podzol") || path.equals("dirt_path") || path.equals("rooted_dirt");
+        }
+        if (q.equals("sand")) {
+            return path.equals("sand") || path.equals("red_sand");
+        }
+        if (q.equals("gravel")) {
+            return path.equals("gravel");
+        }
+        if (q.equals("iron") || q.contains("iron_ore")) return path.contains("iron_ore");
+        if (q.equals("coal") || q.contains("coal_ore")) return path.contains("coal_ore");
+        if (q.equals("diamond") || q.contains("diamond_ore")) return path.contains("diamond_ore");
+        if (q.equals("gold") || q.contains("gold_ore")) return path.contains("gold_ore");
+        if (q.equals("copper") || q.contains("copper_ore")) return path.contains("copper_ore");
+        return path.contains(q);
     }
 
     private @Nullable BlockPos findNearestContainerBlock(int radius) {
@@ -3554,8 +3692,8 @@ public class AiBotPlayer extends ServerPlayer {
         if ("FOLLOW".equals(t)) return 1;
         if ("GUARD".equals(t)) return 2;
         if ("FARM".equals(t)) return 3;
-        if ("MINE".equals(t)) return 4;
-        if ("BUILD".equals(t) || "BUILD_HOUSE".equals(t)) return 5;
+        if ("MINE".equals(t) || "EXCAVATE".equals(t)) return 4;
+        if ("BUILD".equals(t) || "BUILD_HOUSE".equals(t) || "BUILD_BLUEPRINT".equals(t)) return 5;
         if ("CONDUCT_TRAIN".equals(t)) return 6;
         return 0;
     }
@@ -3645,6 +3783,249 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
         return false;
+    }
+
+    public boolean handleExcavationAndMiningChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        // 1. Follow-up state when bot previously asked for hole dimensions
+        if (this.awaitingExcavationDimensions && this.pendingExcavationOrigin != null) {
+            if (lower.equals("cancel") || lower.contains("nevermind") || lower.contains("stop") || lower.contains("abort")) {
+                this.awaitingExcavationDimensions = false;
+                this.pendingExcavationOrigin = null;
+                sayInChat("Excavation cancelled.");
+                return true;
+            }
+
+            if (lower.contains("start here") || lower.contains("from here") || lower.contains("this spot") || lower.equals("here")) {
+                this.pendingExcavationOrigin = resolveExcavationStartPos(speaker);
+                this.pendingExcavationFacing = speaker != null ? speaker.getDirection() : this.getDirection();
+                spawnExcavationParticles(this.pendingExcavationOrigin);
+                int[] dims = parseExcavationDimensions(lower, false);
+                if (dims != null) {
+                    this.awaitingExcavationDimensions = false;
+                    startBoxExcavation(this.pendingExcavationOrigin, this.pendingExcavationFacing, dims[0], dims[1], dims[2]);
+                    return true;
+                }
+                sayInChat("Updated starting point to (" + this.pendingExcavationOrigin.getX() + ", " + this.pendingExcavationOrigin.getY() + ", " + this.pendingExcavationOrigin.getZ() + ")! How wide/long and how deep should I dig from here? (e.g. '5x5 and 4 deep')");
+                return true;
+            }
+
+            int[] dims = parseExcavationDimensions(lower, true);
+            if (dims != null) {
+                this.awaitingExcavationDimensions = false;
+                startBoxExcavation(this.pendingExcavationOrigin, this.pendingExcavationFacing, dims[0], dims[1], dims[2]);
+                return true;
+            }
+        }
+
+        // 2. Radius-constrained block type mining: e.g. "mine all the stone in this 10 block area"
+        java.util.regex.Matcher areaMineMatcher = java.util.regex.Pattern.compile(
+                "(?:mine|dig|clear|gather|harvest|break)\\s+(?:all\\s+)?(?:the\\s+)?([a-zA-Z0-9_ ]+?)\\s+(?:in|within|inside|around)\\s+(?:this\\s+|a\\s+|an\\s+)?(?:(\\d+)\\s*(?:blocks?|tiles?|meters?|m)?(?:\\s+(?:area|radius|zone|range|perimeter))?|(?:this|the)?\\s*(?:area|here|spot))",
+                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(lower);
+        if (areaMineMatcher.find()) {
+            String blockQuery = areaMineMatcher.group(1).trim();
+            if (!blockQuery.equalsIgnoreCase("hole") && !blockQuery.equalsIgnoreCase("pit") && !blockQuery.equalsIgnoreCase("trench")) {
+                int radius = 10;
+                String radGroup = areaMineMatcher.group(2);
+                if (radGroup != null && !radGroup.isBlank()) {
+                    try { radius = Math.min(64, Math.max(2, Integer.parseInt(radGroup.trim()))); } catch (Exception ignored) {}
+                }
+                BlockPos center = resolveExcavationStartPos(speaker);
+                startRadiusMining(center, radius, blockQuery);
+                return true;
+            }
+        }
+
+        // 3. Hole / Pit excavation command: "dig a hole", "dig a hole here", "excavate here", "dig a 5x5 hole 4 deep here"
+        boolean mentionsHole = lower.contains("hole") || lower.contains("pit") || lower.contains("trench") || lower.contains("quarry")
+                || lower.contains("dig here") || lower.contains("excavate here") || lower.contains("dig right here")
+                || (lower.contains("dig") && (lower.contains("deep") || lower.contains("x") || lower.contains("by")));
+
+        if (mentionsHole && !lower.contains("train") && !lower.contains("conductor")) {
+            BlockPos startPos = resolveExcavationStartPos(speaker);
+            net.minecraft.core.Direction facing = speaker != null ? speaker.getDirection() : this.getDirection();
+            spawnExcavationParticles(startPos);
+
+            int[] dims = parseExcavationDimensions(lower, false);
+            if (dims != null) {
+                this.awaitingExcavationDimensions = false;
+                startBoxExcavation(startPos, facing, dims[0], dims[1], dims[2]);
+                return true;
+            } else {
+                this.pendingExcavationOrigin = startPos;
+                this.pendingExcavationFacing = facing;
+                this.awaitingExcavationDimensions = true;
+                moveTowards(new Vec3(startPos.getX() + 0.5, startPos.getY() + 1.0, startPos.getZ() + 0.5), false);
+                sayInChat("Marked starting point at (" + startPos.getX() + ", " + startPos.getY() + ", " + startPos.getZ()
+                        + ")! How big and how deep should I dig from there? (e.g. '5x5 and 4 deep' or 'width 4 depth 6')");
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public void startBoxExcavation(BlockPos origin, net.minecraft.core.Direction facing, int width, int length, int depth) {
+        this.clearActions();
+        this.activeExcavationQueue.clear();
+
+        net.minecraft.core.Direction right = facing.getClockWise();
+        int halfWidth = (width - 1) / 2;
+
+        // Build top-down excavation queue (surface down to pit floor)
+        // First clear surface obstruction layer (dy = 1) if solid
+        for (int dz = 0; dz < length; dz++) {
+            for (int dx = -halfWidth; dx < width - halfWidth; dx++) {
+                BlockPos p = origin.relative(facing, dz).relative(right, dx).above(1);
+                BlockState s = this.level().getBlockState(p);
+                if (!s.isAir() && s.getDestroySpeed(this.level(), p) >= 0) {
+                    this.activeExcavationQueue.add(p);
+                }
+            }
+        }
+
+        // Layer-by-layer from surface (dy = 0) down to -(depth - 1)
+        for (int dy = 0; dy > -depth; dy--) {
+            for (int dz = 0; dz < length; dz++) {
+                boolean serpentine = (dz % 2 == 1);
+                int startDx = serpentine ? (width - 1 - halfWidth) : -halfWidth;
+                int endDx = serpentine ? -halfWidth : (width - 1 - halfWidth);
+                int step = serpentine ? -1 : 1;
+
+                for (int dx = startDx; serpentine ? (dx >= endDx) : (dx <= endDx); dx += step) {
+                    BlockPos p = origin.relative(facing, dz).relative(right, dx).offset(0, dy, 0);
+                    BlockState s = this.level().getBlockState(p);
+                    if (!s.isAir() && s.getDestroySpeed(this.level(), p) >= 0) {
+                        this.activeExcavationQueue.add(p);
+                    }
+                }
+            }
+        }
+
+        this.currentAction = new BotAction("EXCAVATE", width + "x" + length + " (" + depth + " deep)", null, this.activeExcavationQueue.size());
+        this.actionProgressCount = 0;
+        sayInChat("Starting systematic excavation of " + width + "x" + length + " hole (" + depth + " deep) from ("
+                + origin.getX() + ", " + origin.getY() + ", " + origin.getZ() + ")! (" + this.activeExcavationQueue.size() + " blocks to dig)");
+    }
+
+    public void startRadiusMining(BlockPos center, int radius, String blockQuery) {
+        this.clearActions();
+        this.mineZoneCenter = center;
+        this.mineZoneRadius = radius;
+
+        int totalFound = 0;
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dy = -8; dy <= 8; dy++) {
+                for (int dz = -radius; dz <= radius; dz++) {
+                    BlockPos p = center.offset(dx, dy, dz);
+                    BlockState s = this.level().getBlockState(p);
+                    if (!s.isAir() && matchesBlockQuery(s, blockQuery)) {
+                        totalFound++;
+                    }
+                }
+            }
+        }
+
+        if (totalFound == 0) {
+            this.mineZoneCenter = null;
+            this.mineZoneRadius = 0;
+            sayInChat("I scanned the " + radius + "-block area around (" + center.getX() + ", " + center.getY() + ", " + center.getZ()
+                    + "), but didn't find any '" + blockQuery + "' to mine.");
+            return;
+        }
+
+        this.currentAction = new BotAction("MINE", blockQuery, null, totalFound);
+        this.actionProgressCount = 0;
+        sayInChat("Locked onto " + radius + "-block area at (" + center.getX() + ", " + center.getY() + ", " + center.getZ()
+                + ")! Found " + totalFound + "x " + blockQuery + ". Mining every block in this zone!");
+    }
+
+    public BlockPos resolveExcavationStartPos(@Nullable ServerPlayer speaker) {
+        if (speaker != null) {
+            net.minecraft.world.phys.HitResult hit = speaker.pick(7.0, 0.0f, false);
+            if (hit.getType() == net.minecraft.world.phys.HitResult.Type.BLOCK && hit instanceof net.minecraft.world.phys.BlockHitResult bhr) {
+                return bhr.getBlockPos();
+            }
+            return speaker.blockPosition().relative(speaker.getDirection(), 1).below();
+        }
+        return this.blockPosition().relative(this.getDirection(), 1).below();
+    }
+
+    private void spawnExcavationParticles(BlockPos pos) {
+        if (this.level() instanceof ServerLevel sl) {
+            sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, pos.getX() + 0.5, pos.getY() + 1.2, pos.getZ() + 0.5, 8, 0.3, 0.3, 0.3, 0.05);
+            sl.sendParticles(ParticleTypes.FLAME, pos.getX() + 0.5, pos.getY() + 1.1, pos.getZ() + 0.5, 4, 0.2, 0.2, 0.2, 0.02);
+        }
+    }
+
+    public static int @Nullable [] parseExcavationDimensions(String text, boolean lenient) {
+        if (text == null || text.isBlank()) return null;
+        String s = text.toLowerCase(Locale.ROOT).trim();
+
+        // 1. WxLxD or W by L by D (e.g. "5x5x4" or "5 by 5 by 4")
+        java.util.regex.Matcher m3D = java.util.regex.Pattern.compile("(\\d+)\\s*(?:x|by)\\s*(\\d+)\\s*(?:x|by)\\s*(\\d+)").matcher(s);
+        if (m3D.find()) {
+            try {
+                int w = Integer.parseInt(m3D.group(1));
+                int l = Integer.parseInt(m3D.group(2));
+                int d = Integer.parseInt(m3D.group(3));
+                return new int[]{Mth.clamp(w, 1, 32), Mth.clamp(l, 1, 32), Mth.clamp(d, 1, 64)};
+            } catch (Exception ignored) {}
+        }
+
+        // 2. WxL or W by L with optional depth (e.g. "5x5 and 4 deep", "5 by 5, 4 deep", "5x5")
+        java.util.regex.Matcher m2D = java.util.regex.Pattern.compile(
+                "(\\d+)\\s*(?:x|by)\\s*(\\d+)(?:.*?(?:and\\s+|depth\\s+)?(\\d+)\\s*(?:blocks?|tiles?|m)?\\s*deep)?").matcher(s);
+        if (m2D.find()) {
+            try {
+                int w = Integer.parseInt(m2D.group(1));
+                int l = Integer.parseInt(m2D.group(2));
+                int d = 3;
+                if (m2D.group(3) != null) {
+                    d = Integer.parseInt(m2D.group(3));
+                }
+                return new int[]{Mth.clamp(w, 1, 32), Mth.clamp(l, 1, 32), Mth.clamp(d, 1, 64)};
+            } catch (Exception ignored) {}
+        }
+
+        // 3. Named components: width W, length L, depth D (e.g. "width 4 depth 6", "4 wide and 5 deep")
+        Integer w = null;
+        Integer l = null;
+        Integer d = null;
+
+        java.util.regex.Matcher wM = java.util.regex.Pattern.compile("(?:width\\s+|wide\\s+)?(\\d+)\\s*(?:wide|width)").matcher(s);
+        if (wM.find()) try { w = Integer.parseInt(wM.group(1)); } catch (Exception ignored) {}
+
+        java.util.regex.Matcher lM = java.util.regex.Pattern.compile("(?:length\\s+|long\\s+)?(\\d+)\\s*(?:long|length)").matcher(s);
+        if (lM.find()) try { l = Integer.parseInt(lM.group(1)); } catch (Exception ignored) {}
+
+        java.util.regex.Matcher dM = java.util.regex.Pattern.compile("(?:depth\\s+|deep\\s+)?(\\d+)\\s*(?:deep|depth|down|tall|height)").matcher(s);
+        if (dM.find()) try { d = Integer.parseInt(dM.group(1)); } catch (Exception ignored) {}
+
+        if (w != null || l != null || d != null) {
+            int finalW = w != null ? w : (l != null ? l : 3);
+            int finalL = l != null ? l : finalW;
+            int finalD = d != null ? d : 3;
+            return new int[]{Mth.clamp(finalW, 1, 32), Mth.clamp(finalL, 1, 32), Mth.clamp(finalD, 1, 64)};
+        }
+
+        // 4. If answering conversational prompt leniently: single number "5" or "4 deep"
+        if (lenient) {
+            java.util.regex.Matcher singleM = java.util.regex.Pattern.compile("\\b(\\d+)\\b").matcher(s);
+            if (singleM.find()) {
+                try {
+                    int val = Integer.parseInt(singleM.group(1));
+                    if (s.contains("deep")) {
+                        return new int[]{3, 3, Mth.clamp(val, 1, 64)};
+                    }
+                    return new int[]{Mth.clamp(val, 1, 32), Mth.clamp(val, 1, 32), Mth.clamp(val, 1, 64)};
+                } catch (Exception ignored) {}
+            }
+        }
+
+        return null;
     }
 
     public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {

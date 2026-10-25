@@ -46,6 +46,7 @@ public class BotAction {
             case "FOLLOW" -> "Follow " + getPrimaryTarget();
             case "GUARD" -> "Guard " + (getPrimaryTarget().isEmpty() ? "area" : getPrimaryTarget());
             case "MINE" -> "Mine " + count + "x " + getPrimaryTarget();
+            case "EXCAVATE" -> "Excavate " + getPrimaryTarget();
             case "ATTACK" -> "Attack " + count + "x " + (getPrimaryTarget().isEmpty() ? "hostiles" : getPrimaryTarget());
             case "CRAFT" -> "Craft " + count + "x " + getPrimaryTarget();
             case "GIVE" -> "Give " + count + "x " + (item != null && !item.isBlank() ? item : target) + " to " + target;

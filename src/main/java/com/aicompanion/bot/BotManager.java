@@ -301,6 +301,14 @@ public class BotManager {
         }
 
         if (targets.isEmpty()) {
+            for (AiBotPlayer bot : bots) {
+                if (bot.isAwaitingExcavationReply()) {
+                    targets.add(bot);
+                }
+            }
+        }
+
+        if (targets.isEmpty()) {
             if (lower.startsWith("bot ") || lower.startsWith("bot,") || lower.startsWith("@bot") || lower.startsWith("hey bot")) {
                 AiBotPlayer nearest = findNearestBot(speaker, bots);
                 if (nearest != null) targets.add(nearest);
@@ -344,6 +352,12 @@ public class BotManager {
         }
 
         if (bot.handleBuilderChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.handleExcavationAndMiningChatCommand(requestText, speaker)) {
             GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
             BotPersistence.saveAll(server);
             return;
