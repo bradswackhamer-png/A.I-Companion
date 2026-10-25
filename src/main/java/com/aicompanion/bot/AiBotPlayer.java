@@ -10,10 +10,13 @@ import java.util.Comparator;
 import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import com.aicompanion.bot.memory.BotMemoryManager;
+import com.aicompanion.bot.memory.LearnedRecipe;
 import net.minecraft.ChatFormatting;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.particles.ParticleTypes;
@@ -234,6 +237,51 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized void setCustomSkinName(String skinName) {
         this.customSkinName = skinName != null ? skinName.trim() : "";
     }
+
+    // Personal Training & Learned Knowledge
+    private final List<String> learnedMemories = new ArrayList<>();
+    private final List<LearnedRecipe> learnedRecipes = new ArrayList<>();
+
+    public synchronized List<String> getLearnedMemories() { return new ArrayList<>(this.learnedMemories); }
+    public synchronized void setLearnedMemories(List<String> memories) {
+        this.learnedMemories.clear();
+        if (memories != null) {
+            for (String m : memories) if (m != null && !m.isBlank()) this.learnedMemories.add(m.trim());
+        }
+    }
+    public synchronized boolean addLearnedMemory(String memory) {
+        if (memory == null || memory.isBlank()) return false;
+        String clean = memory.trim();
+        if (!this.learnedMemories.contains(clean)) {
+            this.learnedMemories.add(clean);
+            return true;
+        }
+        return false;
+    }
+    public synchronized boolean removeLearnedMemory(int index) {
+        if (index >= 0 && index < this.learnedMemories.size()) {
+            this.learnedMemories.remove(index);
+            return true;
+        }
+        return false;
+    }
+    public synchronized void clearLearnedMemories() { this.learnedMemories.clear(); }
+
+    public synchronized List<LearnedRecipe> getLearnedRecipes() { return new ArrayList<>(this.learnedRecipes); }
+    public synchronized void setLearnedRecipes(List<LearnedRecipe> recipes) {
+        this.learnedRecipes.clear();
+        if (recipes != null) this.learnedRecipes.addAll(recipes);
+    }
+    public synchronized void addLearnedRecipe(LearnedRecipe recipe) {
+        if (recipe == null || recipe.resultItemId.isBlank()) return;
+        this.learnedRecipes.removeIf(r -> r.matches(recipe.resultItemId) || r.name.equalsIgnoreCase(recipe.name));
+        this.learnedRecipes.add(recipe);
+    }
+    public synchronized boolean removeLearnedRecipe(String nameOrItem) {
+        if (nameOrItem == null || nameOrItem.isBlank()) return false;
+        return this.learnedRecipes.removeIf(r -> r.matches(nameOrItem));
+    }
+    public synchronized void clearLearnedRecipes() { this.learnedRecipes.clear(); }
 
     public synchronized boolean isAwaitingExcavationReply() {
         return this.awaitingExcavationDimensions && this.pendingExcavationOrigin != null;
@@ -1873,6 +1921,19 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        // Check personal and global learned recipes
+        List<LearnedRecipe> allKnownRecipes = new ArrayList<>(this.learnedRecipes);
+        allKnownRecipes.addAll(BotMemoryManager.getGlobalRecipes());
+
+        for (LearnedRecipe r : allKnownRecipes) {
+            if (r.matches(query)) {
+                if (canCraftLearnedRecipe(r)) {
+                    craftLearnedRecipe(r);
+                    return true;
+                }
+            }
+        }
+
         return false;
     }
 
@@ -1922,6 +1983,45 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
         return crafted;
+    }
+
+    public boolean canCraftLearnedRecipe(LearnedRecipe recipe) {
+        if (recipe == null || recipe.ingredients.isEmpty()) return false;
+        for (Map.Entry<String, Integer> ing : recipe.ingredients.entrySet()) {
+            int needed = ing.getValue();
+            int has = countMatching(s -> isMatchingIngredient(s, ing.getKey()));
+            if (has < needed) return false;
+        }
+        return true;
+    }
+
+    public void craftLearnedRecipe(LearnedRecipe recipe) {
+        if (recipe == null) return;
+        for (Map.Entry<String, Integer> ing : recipe.ingredients.entrySet()) {
+            consumeMatching(s -> isMatchingIngredient(s, ing.getKey()), ing.getValue());
+        }
+        ItemStack result = recipe.createResult();
+        if (result != null && !result.isEmpty()) {
+            giveToSelf(result);
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                    SoundEvents.ITEM_PICKUP, SoundSource.PLAYERS, 1.0f, 1.0f);
+        }
+    }
+
+    private boolean isMatchingIngredient(ItemStack stack, String ingredientQuery) {
+        if (stack == null || stack.isEmpty() || ingredientQuery == null) return false;
+        String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase(Locale.ROOT);
+        String clean = ingredientQuery.toLowerCase(Locale.ROOT).replace("minecraft:", "").replace(" ", "_");
+        if (id.equals(clean)) return true;
+        if (clean.equals("wheat") && id.contains("wheat")) return true;
+        if (clean.equals("plank") || clean.equals("planks") || clean.equals("wood")) return isPlank(stack);
+        if (clean.equals("stick") && stack.is(Items.STICK)) return true;
+        if (clean.equals("iron") || clean.equals("iron_ingot")) return stack.is(Items.IRON_INGOT);
+        if (clean.equals("gold") || clean.equals("gold_ingot")) return stack.is(Items.GOLD_INGOT);
+        if (clean.equals("diamond") || clean.equals("diamonds")) return stack.is(Items.DIAMOND);
+        if (clean.equals("stone") || clean.equals("cobblestone")) return isCobble(stack) || stack.is(Items.STONE);
+        if (clean.equals("coal")) return stack.is(Items.COAL) || stack.is(Items.CHARCOAL);
+        return id.contains(clean) || clean.contains(id);
     }
 
     private boolean tickGiveAction(BotAction action) {
@@ -5080,6 +5180,57 @@ public class AiBotPlayer extends ServerPlayer {
 
         sayInChat(reply.toString());
         return true;
+    }
+
+    public synchronized boolean handleTrainingChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        // Check training intent keywords
+        boolean mentionsLearn = lower.contains("learn") || lower.contains("teach") || lower.contains("remember")
+                || lower.contains("train") || lower.contains("memorize") || lower.startsWith("rule:") || lower.startsWith("recipe:");
+        boolean mentionsRecipe = lower.contains("recipe") || (lower.contains("craft") && (lower.contains("wheat") || lower.contains("using") || lower.contains("with") || lower.contains("table") || lower.contains("spot")));
+
+        if (!mentionsLearn && !mentionsRecipe) {
+            return false;
+        }
+
+        boolean isGlobal = lower.contains("global") || lower.contains("for all") || lower.contains("everyone") || lower.contains("all bots");
+
+        // Try parsing recipe first
+        LearnedRecipe recipe = BotMemoryManager.parseRecipeFromText(text, isGlobal);
+        if (recipe != null) {
+            if (isGlobal) {
+                BotMemoryManager.addGlobalRecipe(recipe);
+            } else {
+                this.addLearnedRecipe(recipe);
+            }
+
+            // If it's wheat into hay, enable autoCompactWheatToHay automatically
+            if (recipe.resultItemId.contains("hay") && recipe.ingredients.containsKey("wheat")) {
+                this.autoCompactWheatToHay = true;
+                compactWheatInInventory();
+            }
+
+            sayInChat("Learned new recipe for '" + recipe.resultItemId + "' (" + recipe.toString() + ")! I will know how to craft this next time (" + (isGlobal ? "Global" : "Personal") + ").");
+            return true;
+        }
+
+        // If not a recipe, process as a behavioral guideline / memory
+        if (mentionsLearn || lower.startsWith("rule:") || lower.startsWith("remember:")) {
+            String clean = text.replaceAll("(?i)^(?:bot[,:]?\\s+)?(?:please\\s+)?(?:learn\\s+(?:this[:]?\\s+)?|remember\\s+(?:this[:]?\\s+)?|teach\\s+(?:you[:]?\\s+)?|train\\s+(?:global[:]?\\s+)?|rule[:]?\\s+)", "").trim();
+            if (!clean.isBlank()) {
+                if (isGlobal) {
+                    BotMemoryManager.addGlobalMemory(clean);
+                } else {
+                    this.addLearnedMemory(clean);
+                }
+                sayInChat("Recorded to my " + (isGlobal ? "global team" : "personal") + " memory: '" + clean + "'. I'll follow this guideline!");
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public void startHouseConstruction(BlockPos origin, net.minecraft.core.Direction facing) {

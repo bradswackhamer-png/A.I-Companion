@@ -4,6 +4,42 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.3] - 2026-10-25
+
+### 📖 Companion Training, Memory Books & Dynamic Recipe Learning
+- **Trainable Custom Recipes & Dynamic Workflows:**
+  - Companions can now be taught new crafting recipes and workflows dynamically through in-game chat, commands, or training books (e.g., *"place 9 wheat in the crafting table, 1 in each spot. Craft a hay bale"*).
+  - Implemented `LearnedRecipe`: dynamically maps item outputs, counts, and ingredient ratios parsed directly from plain English instructions or books.
+  - Integrated with `craftSingleItemSmart`: companions check personal and global learned recipes before standard recipes, autonomously crafting learned items on demand.
+- **Physical Memory Books & Interactive Training:**
+  - **In-Game Book Studying:** Right-clicking any companion while holding a Written Book (`Items.WRITTEN_BOOK`) or Book & Quill (`Items.WRITABLE_BOOK`) makes the bot study the book, parsing every page into persistent rules and recipes. Sneak/shift right-clicking or titling the book with "Global" applies the training to all companions worldwide.
+  - **Memory Book Export (`/bot memory book [botName|global]`):** Generates and hands the player an authentic in-game Minecraft Written Book containing formatted chapters of learned recipes, ingredients, and operational rules.
+- **Global & Personal Memory Architecture:**
+  - **Global Memory:** Team-wide directives and recipes applied across all companion bots simultaneously.
+  - **Personal Memory:** Dedicated memory banks tailored to individual companions and roles.
+  - **LLM Context Injection:** Memory guidelines and learned recipes are injected into Gemini system prompt telemetry so AI decision-making strictly adheres to player training.
+  - **Full Persistence:** All learned recipes and memories are serialized to `bot_data.json` across server restarts.
+
+### ⚡ Teleportation Upgrades (`/bot tp`)
+- **Fixed `/bot tp` Command:**
+  - `/bot tp`: Teleports the nearest companion directly to the player (resolving the previous syntax exception when called with no arguments).
+  - `/bot tp all`: Teleports all active companions to the caller's position.
+  - `/bot tp <botName>`: Teleports the specified companion to the caller.
+  - `/bot tp to <botName>`: Teleports the player to the specified companion's location.
+- **Cross-Dimension Teleportation:**
+  - Teleportation now properly switches dimensions (`ServerLevel`) and loads target chunks using `teleportTo(destLevel, x, y, z, Set.of(), yRot, xRot, true)`, enabling smooth inter-dimensional travel across the Overworld, Nether, and End.
+
+### 🛠️ New Commands
+- `/bot train <instruction>`: Trains the nearest companion on a new rule or recipe.
+- `/bot train global <instruction>`: Trains all companions globally on a team rule or recipe.
+- `/bot train <botName> <instruction>`: Trains a specific companion.
+- `/bot train book [global|<botName>]`: Studies the held Written Book or Book & Quill.
+- `/bot memory list [global|<botName>]`: Displays all active personal and global memories and custom recipes in chat.
+- `/bot memory book [global|<botName>]`: Gives the player a physical in-game Written Book of memories and recipes.
+- `/bot memory clear [global|<botName>]`: Clears personal or global memories and custom recipes.
+
+---
+
 ## [1.2.2] - 2026-10-25
 
 ### 🌊 Water Buoyancy, Anti-Drowning Reflex & Safe Respawn Placement

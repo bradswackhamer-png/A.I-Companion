@@ -37,7 +37,23 @@ Google provides free Gemini API access with **no credit card or billing required
 
 ## 🌟 Key Features
 
-### 🎭 1. Custom Skin Folder & Role-Themed Auto-Assignment *(New in v1.2)*
+### 📖 1. Dynamic Recipe Learning, Training & Physical Memory Books *(New in v1.2.3)*
+* **Natural Dynamic Recipe Learning**:
+  * Teach companions completely new crafting workflows verbally in chat or via commands (e.g. *"place 9 wheat in the crafting table, 1 in each spot. Craft a hay bale"*, or *"to craft a chest use 8 oak planks"*).
+  * The companion intelligently parses the target output, quantity, and ingredients into a structured recipe (`LearnedRecipe`).
+  * Autonomously crafts learned recipes through `craftSingleItemSmart` during idle or work cycles without needing hardcoded recipes!
+* **Written Book & Book & Quill Training**:
+  * Right-click any companion with a **Written Book** (`Items.WRITTEN_BOOK`) or **Book & Quill** (`Items.WRITABLE_BOOK`) — the companion studies the pages, extracts custom recipes and operational guidelines, and acknowledges what they learned in chat!
+  * **Sneak + Right-Click** (or titling the book "Global...") teaches the book's contents to **all companions globally**.
+* **Physical Memory Book Export (`/bot memory book [global|botName]`)**:
+  * Hands the player an authentic in-game Minecraft Written Book containing formatted chapters of all learned custom recipes, ingredient formulas, and behavioral rules.
+* **Global & Personal Memory Banks**:
+  * **Global Memories & Team Manual**: Directives and recipes shared across every bot on the server.
+  * **Personal Memories**: Individual instructions stored per companion.
+  * **AI Telemetry Injection**: All rules and recipes are injected directly into Gemini LLM prompt telemetry for real-time compliance.
+  * **Persistent Storage**: All memories and learned recipes save cleanly to disk across server reboots.
+
+### 🎭 2. Custom Skin Folder & Role-Themed Auto-Assignment *(v1.2)*
 * **Drop-In Skins Folder (`/aicompanion/skins`)**:
   * Simply drop standard **64×64** or **64×32** `.png` Minecraft skins into the `aicompanion/skins` folder (in your game instance directory or config folder)!
   * Auto-initializes the directory and generates a guide on first launch.
@@ -247,7 +263,16 @@ You can speak to your companions directly in public chat:
 | `/bot list` | List all active companions and their current tasks |
 | `/bot status <name>` | View HP, hunger, farm/ranch zones, and inventory |
 | `/bot stop <name\|all>` | Stop all active bot tasks immediately |
-| `/bot tp <name>` | Teleport companion to your position |
+| `/bot tp` | Teleport nearest companion to your position |
+| `/bot tp all` | Teleport all active companions to your position across all dimensions |
+| `/bot tp <name>` | Teleport specific companion to your position |
+| `/bot tp to <botName>` | Teleport player directly to the specified companion's location |
+| `/bot train [botName] <instruction>` | Train a companion on a custom recipe or behavioral guideline |
+| `/bot train global <instruction>` | Train all companions on a global team rule or custom recipe |
+| `/bot train book [global\|botName]` | Study held Written Book or Book & Quill to learn recipes and guidelines |
+| `/bot memory list [global\|botName]` | Display active personal and global memories and custom learned recipes |
+| `/bot memory book [global\|botName]` | Give player an authentic physical Minecraft Written Book of recorded memories |
+| `/bot memory clear <global\|botName>` | Clear recorded personal or global memories and recipes |
 | `/bot ask <name> <request>` | Send a direct task/question to a companion |
 | `/bot apikey [key]` | View API key status or set your personal/server Gemini key |
 | `/bot waypoint <name>` | Save your current coordinates as a named bot waypoint |

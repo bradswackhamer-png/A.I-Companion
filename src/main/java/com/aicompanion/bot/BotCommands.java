@@ -7,6 +7,8 @@ import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.SuggestionProvider;
 import java.util.Collection;
+import java.util.List;
+import java.util.Set;
 import net.minecraft.ChatFormatting;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
@@ -15,9 +17,15 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.Relative;
+import net.minecraft.world.entity.item.ItemEntity;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
+import org.jspecify.annotations.Nullable;
 import com.aicompanion.bot.area.SavedArea;
+import com.aicompanion.bot.memory.BotMemoryManager;
+import com.aicompanion.bot.memory.LearnedRecipe;
 import com.aicompanion.bot.village.CustomBlueprint;
 
 public class BotCommands {
@@ -78,6 +86,13 @@ public class BotCommands {
                                 .suggests(BOT_NAME_SUGGESTIONS)
                                 .executes(ctx -> stopBot(ctx, StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("tp")
+                        .executes(BotCommands::tpNearestBot)
+                        .then(Commands.literal("all")
+                                .executes(BotCommands::tpAllBots))
+                        .then(Commands.literal("to")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> tpPlayerToBot(ctx, StringArgumentType.getString(ctx, "botName")))))
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
                                 .executes(ctx -> tpBot(ctx, StringArgumentType.getString(ctx, "name")))))
@@ -244,7 +259,43 @@ public class BotCommands {
                                                 .suggests(SKIN_SUGGESTIONS)
                                                 .executes(ctx -> setBotSkinCmd(ctx,
                                                         StringArgumentType.getString(ctx, "botName"),
-                                                        StringArgumentType.getString(ctx, "skinName")))))));
+                                                        StringArgumentType.getString(ctx, "skinName")))))))
+                .then(Commands.literal("train")
+                        .then(Commands.literal("book")
+                                .executes(ctx -> trainFromHeldBook(ctx, null, false))
+                                .then(Commands.literal("global")
+                                        .executes(ctx -> trainFromHeldBook(ctx, null, true)))
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> trainFromHeldBook(ctx, StringArgumentType.getString(ctx, "botName"), false))))
+                        .then(Commands.literal("global")
+                                .then(Commands.argument("instruction", StringArgumentType.greedyString())
+                                        .executes(ctx -> trainGlobal(ctx, StringArgumentType.getString(ctx, "instruction")))))
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .then(Commands.argument("instruction", StringArgumentType.greedyString())
+                                        .executes(ctx -> trainBot(ctx, StringArgumentType.getString(ctx, "botName"), StringArgumentType.getString(ctx, "instruction"))))))
+                .then(Commands.literal("memory")
+                        .then(Commands.literal("list")
+                                .executes(ctx -> listMemory(ctx, null))
+                                .then(Commands.literal("global")
+                                        .executes(ctx -> listMemory(ctx, "global")))
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> listMemory(ctx, StringArgumentType.getString(ctx, "botName")))))
+                        .then(Commands.literal("book")
+                                .executes(ctx -> giveMemoryBook(ctx, null))
+                                .then(Commands.literal("global")
+                                        .executes(ctx -> giveMemoryBook(ctx, "global")))
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> giveMemoryBook(ctx, StringArgumentType.getString(ctx, "botName")))))
+                        .then(Commands.literal("clear")
+                                .then(Commands.literal("global")
+                                        .executes(ctx -> clearMemory(ctx, "global")))
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> clearMemory(ctx, StringArgumentType.getString(ctx, "botName"))))));
     }
 
     private static int openBotGuiCmd(CommandContext<CommandSourceStack> ctx, String botName) {
@@ -630,15 +681,303 @@ public class BotCommands {
         return 1;
     }
 
+    private static void teleportBotToSource(AiBotPlayer bot, CommandSourceStack source) {
+        ServerLevel targetLevel = source.getLevel();
+        Vec3 pos = source.getPosition();
+        if (bot.level() != targetLevel) {
+            bot.teleportTo(targetLevel, pos.x + 0.5, pos.y + 0.1, pos.z + 0.5, java.util.Set.of(), bot.getYRot(), bot.getXRot(), true);
+        } else {
+            bot.teleportTo(pos.x + 0.5, pos.y + 0.1, pos.z + 0.5);
+        }
+    }
+
+    private static int tpNearestBot(CommandContext<CommandSourceStack> ctx) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        AiBotPlayer nearest = null;
+        double nearestDistSq = Double.MAX_VALUE;
+        Vec3 pos = ctx.getSource().getPosition();
+
+        for (AiBotPlayer bot : BotManager.getActiveBots()) {
+            if (player != null && bot.level() == player.level()) {
+                double distSq = bot.distanceToSqr(pos.x, pos.y, pos.z);
+                if (distSq < nearestDistSq) {
+                    nearestDistSq = distSq;
+                    nearest = bot;
+                }
+            } else if (nearest == null) {
+                nearest = bot;
+            }
+        }
+
+        if (nearest == null) {
+            ctx.getSource().sendFailure(Component.literal("No active bots found to teleport."));
+            return 0;
+        }
+
+        teleportBotToSource(nearest, ctx.getSource());
+        nearest.sayInChat("Teleported to your location!");
+        return 1;
+    }
+
+    private static int tpAllBots(CommandContext<CommandSourceStack> ctx) {
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            ctx.getSource().sendFailure(Component.literal("No active bots found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            teleportBotToSource(bot, ctx.getSource());
+            bot.sayInChat("Teleported to your location!");
+        }
+        ctx.getSource().sendSuccess(() -> Component.literal("Teleported " + bots.size() + " bots to your location!").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int tpPlayerToBot(CommandContext<CommandSourceStack> ctx, String botName) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.literal("Only players can teleport to a bot."));
+            return 0;
+        }
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        ServerLevel botLevel = (ServerLevel) bot.level();
+        if (player.level() != botLevel) {
+            player.teleportTo(botLevel, bot.getX(), bot.getY(), bot.getZ(), java.util.Set.of(), player.getYRot(), player.getXRot(), true);
+        } else {
+            player.teleportTo(bot.getX(), bot.getY(), bot.getZ());
+        }
+        ctx.getSource().sendSuccess(() -> Component.literal("Teleported to bot '" + bot.getBotName() + "'!").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
     private static int tpBot(CommandContext<CommandSourceStack> ctx, String name) {
+        if ("all".equalsIgnoreCase(name)) {
+            return tpAllBots(ctx);
+        }
         AiBotPlayer bot = BotManager.getBot(name);
         if (bot == null) {
             ctx.getSource().sendFailure(Component.literal("No active bot named '" + name + "' found."));
             return 0;
         }
-        Vec3 pos = ctx.getSource().getPosition();
-        bot.teleportTo(pos.x + 1.0, pos.y, pos.z + 1.0);
+        teleportBotToSource(bot, ctx.getSource());
         bot.sayInChat("Teleported to your location!");
+        return 1;
+    }
+
+    private static int trainGlobal(CommandContext<CommandSourceStack> ctx, String instruction) {
+        LearnedRecipe recipe = BotMemoryManager.parseRecipeFromText(instruction);
+        if (recipe != null) {
+            BotMemoryManager.addGlobalRecipe(recipe);
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            ctx.getSource().sendSuccess(() -> Component.literal("[Global Training] Learned new recipe: " + recipe.getSummary())
+                    .withStyle(ChatFormatting.GREEN), true);
+            for (AiBotPlayer bot : BotManager.getActiveBots()) {
+                bot.sayInChat("I have updated my global memory with the new recipe: " + recipe.getSummary());
+            }
+            return 1;
+        }
+
+        BotMemoryManager.addGlobalMemory(instruction);
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        ctx.getSource().sendSuccess(() -> Component.literal("[Global Training] Added global memory rule: " + instruction)
+                .withStyle(ChatFormatting.GREEN), true);
+        for (AiBotPlayer bot : BotManager.getActiveBots()) {
+            bot.sayInChat("Understood! I have adopted this team rule into my memory: \"" + instruction + "\"");
+        }
+        return 1;
+    }
+
+    private static int trainBot(CommandContext<CommandSourceStack> ctx, @Nullable String botName, String instruction) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        AiBotPlayer target = null;
+        if (botName != null && !botName.isEmpty()) {
+            target = BotManager.getBot(botName);
+            if (target == null) {
+                ctx.getSource().sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+                return 0;
+            }
+        } else if (player != null) {
+            target = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        }
+
+        if (target == null) {
+            ctx.getSource().sendFailure(Component.literal("No bot found to train."));
+            return 0;
+        }
+
+        boolean handled = target.handleTrainingChatCommand(instruction, player);
+        if (!handled) {
+            target.addLearnedMemory(instruction);
+            target.sayInChat("Understood! I have recorded this personal instruction in my memory: \"" + instruction + "\"");
+        }
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        return 1;
+    }
+
+    private static int trainFromHeldBook(CommandContext<CommandSourceStack> ctx, @Nullable String botName, boolean isGlobal) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.literal("Only players can train bots from a held book."));
+            return 0;
+        }
+
+        ItemStack held = player.getMainHandItem();
+        if (!held.is(Items.WRITTEN_BOOK) && !held.is(Items.WRITABLE_BOOK)) {
+            held = player.getOffhandItem();
+        }
+        if (!held.is(Items.WRITTEN_BOOK) && !held.is(Items.WRITABLE_BOOK)) {
+            ctx.getSource().sendFailure(Component.literal("Please hold a Written Book or Book & Quill in your hand to train.")
+                    .withStyle(ChatFormatting.RED));
+            return 0;
+        }
+
+        AiBotPlayer targetBot = null;
+        if (!isGlobal) {
+            if (botName != null && !botName.isEmpty()) {
+                targetBot = BotManager.getBot(botName);
+                if (targetBot == null) {
+                    ctx.getSource().sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+                    return 0;
+                }
+            } else {
+                targetBot = BotManager.findNearestBot(player, BotManager.getActiveBots());
+            }
+        }
+
+        BotMemoryManager.StudyResult res = BotMemoryManager.studyTrainingBook(held, targetBot, isGlobal);
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        ctx.getSource().sendSuccess(() -> Component.literal("Studied training book '" + res.title() + "'! Learned "
+                + res.newGuidelines() + " guidelines and " + res.newRecipes() + " recipes (" + (res.global() ? "Global" : "Personal") + ").")
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int listMemory(CommandContext<CommandSourceStack> ctx, @Nullable String targetName) {
+        if ("global".equalsIgnoreCase(targetName)) {
+            List<String> mems = BotMemoryManager.getGlobalMemories();
+            List<LearnedRecipe> recipes = BotMemoryManager.getGlobalRecipes();
+            ctx.getSource().sendSuccess(() -> Component.literal("=== Global Team Memories (" + mems.size() + ") ===")
+                    .withStyle(ChatFormatting.GOLD), false);
+            for (int i = 0; i < mems.size(); i++) {
+                final int idx = i + 1;
+                final String m = mems.get(i);
+                ctx.getSource().sendSuccess(() -> Component.literal(idx + ". " + m).withStyle(ChatFormatting.YELLOW), false);
+            }
+            ctx.getSource().sendSuccess(() -> Component.literal("=== Global Custom Recipes (" + recipes.size() + ") ===")
+                    .withStyle(ChatFormatting.GOLD), false);
+            for (LearnedRecipe r : recipes) {
+                ctx.getSource().sendSuccess(() -> Component.literal("- " + r.getSummary()).withStyle(ChatFormatting.AQUA), false);
+            }
+            return 1;
+        }
+
+        AiBotPlayer bot = null;
+        if (targetName != null && !targetName.isEmpty()) {
+            bot = BotManager.getBot(targetName);
+            if (bot == null) {
+                ctx.getSource().sendFailure(Component.literal("No active bot named '" + targetName + "' found."));
+                return 0;
+            }
+        } else {
+            ServerPlayer player = ctx.getSource().getPlayer();
+            if (player != null) {
+                bot = BotManager.findNearestBot(player, BotManager.getActiveBots());
+            }
+        }
+
+        if (bot != null) {
+            final AiBotPlayer targetBot = bot;
+            List<String> mems = targetBot.getLearnedMemories();
+            List<LearnedRecipe> recipes = targetBot.getLearnedRecipes();
+            ctx.getSource().sendSuccess(() -> Component.literal("=== " + targetBot.getBotName() + "'s Personal Memories (" + mems.size() + ") ===")
+                    .withStyle(ChatFormatting.GREEN), false);
+            for (int i = 0; i < mems.size(); i++) {
+                final int idx = i + 1;
+                final String m = mems.get(i);
+                ctx.getSource().sendSuccess(() -> Component.literal(idx + ". " + m).withStyle(ChatFormatting.WHITE), false);
+            }
+            ctx.getSource().sendSuccess(() -> Component.literal("=== " + targetBot.getBotName() + "'s Custom Recipes (" + recipes.size() + ") ===")
+                    .withStyle(ChatFormatting.GREEN), false);
+            for (LearnedRecipe r : recipes) {
+                ctx.getSource().sendSuccess(() -> Component.literal("- " + r.getSummary()).withStyle(ChatFormatting.AQUA), false);
+            }
+        }
+
+        List<String> gMems = BotMemoryManager.getGlobalMemories();
+        List<LearnedRecipe> gRecipes = BotMemoryManager.getGlobalRecipes();
+        ctx.getSource().sendSuccess(() -> Component.literal("=== Global Team Memories (" + gMems.size() + ") & Recipes (" + gRecipes.size() + ") ===")
+                .withStyle(ChatFormatting.GOLD), false);
+        for (LearnedRecipe r : gRecipes) {
+            ctx.getSource().sendSuccess(() -> Component.literal("- " + r.getSummary()).withStyle(ChatFormatting.AQUA), false);
+        }
+        return 1;
+    }
+
+    private static int giveMemoryBook(CommandContext<CommandSourceStack> ctx, @Nullable String targetName) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.literal("Only players can receive memory books."));
+            return 0;
+        }
+
+        ItemStack book;
+        if ("global".equalsIgnoreCase(targetName)) {
+            book = BotMemoryManager.createPhysicalMemoryBook(null, "Global Training Manual", "Team Admin");
+        } else {
+            AiBotPlayer bot = null;
+            if (targetName != null && !targetName.isEmpty()) {
+                bot = BotManager.getBot(targetName);
+                if (bot == null) {
+                    ctx.getSource().sendFailure(Component.literal("No active bot named '" + targetName + "' found."));
+                    return 0;
+                }
+            } else {
+                bot = BotManager.findNearestBot(player, BotManager.getActiveBots());
+            }
+
+            if (bot == null) {
+                book = BotMemoryManager.createPhysicalMemoryBook(null, "Global Training Manual", "Team Admin");
+            } else {
+                book = BotMemoryManager.createPhysicalMemoryBook(bot, bot.getBotName() + "'s Memory Book", bot.getBotName());
+            }
+        }
+
+        if (!player.getInventory().add(book)) {
+            ItemEntity drop = new ItemEntity(player.level(), player.getX(), player.getY(), player.getZ(), book);
+            drop.setDefaultPickUpDelay();
+            player.level().addFreshEntity(drop);
+        }
+        ctx.getSource().sendSuccess(() -> Component.literal("Given Memory Book into your inventory! Read or edit it anytime.")
+                .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int clearMemory(CommandContext<CommandSourceStack> ctx, String targetName) {
+        if ("global".equalsIgnoreCase(targetName)) {
+            BotMemoryManager.getGlobalMemories().clear();
+            BotMemoryManager.getGlobalRecipes().clear();
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            ctx.getSource().sendSuccess(() -> Component.literal("Cleared all global memories and custom recipes.")
+                    .withStyle(ChatFormatting.YELLOW), true);
+            return 1;
+        }
+
+        AiBotPlayer bot = BotManager.getBot(targetName);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("No active bot named '" + targetName + "' found."));
+            return 0;
+        }
+
+        bot.getLearnedMemories().clear();
+        bot.getLearnedRecipes().clear();
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        bot.sayInChat("My personal memory and custom recipes have been reset.");
+        ctx.getSource().sendSuccess(() -> Component.literal("Cleared personal memory for '" + targetName + "'.")
+                .withStyle(ChatFormatting.YELLOW), false);
         return 1;
     }
 

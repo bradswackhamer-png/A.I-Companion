@@ -2,6 +2,8 @@ package com.aicompanion.bot;
 
 import com.aicompanion.bot.compat.TractorCompat;
 import com.aicompanion.bot.compat.TrainCompat;
+import com.aicompanion.bot.memory.BotMemoryManager;
+import com.aicompanion.bot.memory.LearnedRecipe;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
@@ -316,6 +318,32 @@ public class GeminiService {
             sb.append("\n=== RECENT CONVERSATION & TASK MEMORY ===\n");
             for (String m : mem) {
                 sb.append(m).append("\n");
+            }
+        }
+
+        // Global Training Manual & Rules (All Bots)
+        List<String> globalMem = BotMemoryManager.getGlobalMemories();
+        List<LearnedRecipe> globalRecipes = BotMemoryManager.getGlobalRecipes();
+        if (!globalMem.isEmpty() || !globalRecipes.isEmpty()) {
+            sb.append("\n=== GLOBAL TRAINING MANUAL & TEAM RULES (ALL BOTS MUST FOLLOW) ===\n");
+            for (String g : globalMem) {
+                sb.append("• ").append(g).append("\n");
+            }
+            for (LearnedRecipe r : globalRecipes) {
+                sb.append("• Learned Recipe: ").append(r.toString()).append("\n");
+            }
+        }
+
+        // Local Personal Training & Learned Recipes
+        List<String> localMem = bot.getLearnedMemories();
+        List<LearnedRecipe> localRecipes = bot.getLearnedRecipes();
+        if (!localMem.isEmpty() || !localRecipes.isEmpty()) {
+            sb.append("\n=== PERSONAL TRAINING & GUIDELINES FOR ").append(bot.getBotName()).append(" ===\n");
+            for (String l : localMem) {
+                sb.append("• ").append(l).append("\n");
+            }
+            for (LearnedRecipe r : localRecipes) {
+                sb.append("• Learned Recipe: ").append(r.toString()).append("\n");
             }
         }
 

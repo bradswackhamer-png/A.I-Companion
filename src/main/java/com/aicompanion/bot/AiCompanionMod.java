@@ -80,6 +80,18 @@ public class AiCompanionMod {
     public void onEntityInteract(net.neoforged.neoforge.event.entity.player.PlayerInteractEvent.EntityInteract event) {
         if (event.getTarget() instanceof AiBotPlayer bot && event.getEntity() instanceof ServerPlayer player) {
             if (!player.level().isClientSide()) {
+                net.minecraft.world.item.ItemStack held = player.getItemInHand(event.getHand());
+                if (held.is(net.minecraft.world.item.Items.WRITTEN_BOOK) || held.is(net.minecraft.world.item.Items.WRITABLE_BOOK)) {
+                    boolean isGlobal = player.isShiftKeyDown();
+                    com.aicompanion.bot.memory.BotMemoryManager.StudyResult res =
+                            com.aicompanion.bot.memory.BotMemoryManager.studyTrainingBook(held, bot, isGlobal);
+                    bot.sayInChat("Studied your training book '" + res.title() + "'! Learned "
+                            + res.newGuidelines() + " guidelines and " + res.newRecipes() + " recipes (" + (res.global() ? "Global" : "Personal") + ").");
+                    BotPersistence.saveAll(player.level().getServer());
+                    event.setCanceled(true);
+                    event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+                    return;
+                }
                 bot.openCompanionGui(player);
             }
             event.setCanceled(true);

@@ -1,6 +1,8 @@
 package com.aicompanion.bot;
 
 import com.aicompanion.bot.area.SavedArea;
+import com.aicompanion.bot.memory.BotMemoryManager;
+import com.aicompanion.bot.memory.LearnedRecipe;
 import com.aicompanion.bot.village.CustomBlueprint;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
@@ -143,6 +145,8 @@ public class BotPersistence {
 
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
+        public List<String> learnedMemories = new ArrayList<>();
+        public List<LearnedRecipe> learnedRecipes = new ArrayList<>();
         public List<BotAction> activeActions = new ArrayList<>();
     }
 
@@ -151,6 +155,8 @@ public class BotPersistence {
         public Map<String, SavedLocation> locations = new LinkedHashMap<>();
         public Map<String, SavedArea> areas = new LinkedHashMap<>();
         public Map<String, CustomBlueprint> blueprints = new LinkedHashMap<>();
+        public List<String> globalMemories = new ArrayList<>();
+        public List<LearnedRecipe> globalRecipes = new ArrayList<>();
     }
 
     // Persistent custom architectural blueprints captured from world
@@ -333,6 +339,8 @@ public class BotPersistence {
                 data.conductorReturning = bot.isConductorReturning();
                 data.tractorMode = bot.isTractorMode();
                 data.memory = GeminiService.getMemory(bot.getBotName());
+                data.learnedMemories = bot.getLearnedMemories();
+                data.learnedRecipes = bot.getLearnedRecipes();
                 data.activeActions = bot.getRemainingActionsSnapshot();
 
                 for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
@@ -351,6 +359,9 @@ public class BotPersistence {
                 }
                 store.bots.add(data);
             }
+
+            store.globalMemories = BotMemoryManager.getGlobalMemories();
+            store.globalRecipes = BotMemoryManager.getGlobalRecipes();
 
             File file = getSaveFile(server);
             File bakFile = new File(file.getParentFile(), "aicompanion_memory.json.bak");
@@ -436,6 +447,13 @@ public class BotPersistence {
                 SAVED_BLUEPRINTS.putAll(store.blueprints);
             }
 
+            if (store.globalMemories != null) {
+                BotMemoryManager.setGlobalMemories(store.globalMemories);
+            }
+            if (store.globalRecipes != null) {
+                BotMemoryManager.setGlobalRecipes(store.globalRecipes);
+            }
+
             if (store.bots != null) {
                 for (SavedBotData data : store.bots) {
                     if (data.name == null || data.name.isBlank()) continue;
@@ -482,6 +500,12 @@ public class BotPersistence {
                                 bot.extractAndLearnNicknameFromPrompt(memLine);
                             }
                         }
+                    }
+                    if (data.learnedMemories != null) {
+                        bot.setLearnedMemories(data.learnedMemories);
+                    }
+                    if (data.learnedRecipes != null) {
+                        bot.setLearnedRecipes(data.learnedRecipes);
                     }
                     if (data.activeActions != null && !data.activeActions.isEmpty()) {
                         bot.setActionPlan(data.activeActions);
