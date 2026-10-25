@@ -186,6 +186,13 @@ public class AiBotPlayer extends ServerPlayer {
     private double bestGoalDistSq = Double.MAX_VALUE;
     private int noProgressTicks = 0;
 
+    // Intelligent Navigation & Dynamic Path Analysis
+    private @Nullable Vec3 activeBypassWaypoint = null;
+    private int bypassWaypointTicks = 0;
+    private @Nullable Vec3 lastMoveTarget = null;
+    private double bestMoveTargetDistSq = Double.MAX_VALUE;
+    private int moveNoProgressTicks = 0;
+
     // Tactical Combat & Defense
     private int shieldBlockTicks = 0;
     private int lastDistressTick = 0;
@@ -986,6 +993,8 @@ public class AiBotPlayer extends ServerPlayer {
         this.actionTicks = 0;
         this.miningTicks = 0;
         this.stuckTicks = 0;
+        this.moveNoProgressTicks = 0;
+        this.bestMoveTargetDistSq = Double.MAX_VALUE;
         this.bestGoalDistSq = Double.MAX_VALUE;
         this.noProgressTicks = 0;
     }
@@ -3058,17 +3067,79 @@ public class AiBotPlayer extends ServerPlayer {
         return belowState.isAir() || belowState.canBeReplaced();
     }
 
-    private boolean isEnclosedInHole() {
-        BlockPos feet = this.blockPosition();
-        int solidWalls = 0;
-        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
-            BlockPos wallPos = feet.relative(d).above();
-            BlockState s = this.level().getBlockState(wallPos);
-            if (!s.isAir() && !s.canBeReplaced() && !isFenceOrWall(s)) {
-                solidWalls++;
+    private boolean isPassable(BlockPos pos) {
+        BlockState state = this.level().getBlockState(pos);
+        return state.isAir() || state.canBeReplaced();
+    }
+
+    private boolean isStandable(BlockPos pos) {
+        BlockState belowState = this.level().getBlockState(pos.below());
+        boolean hasFloor = !belowState.isAir() && !belowState.canBeReplaced() && !isFenceOrWall(belowState);
+        return hasFloor && isPassable(pos) && isPassable(pos.above()) && !isDeepPitAt(pos);
+    }
+
+    private @Nullable BlockPos findClearBypassAtLateral(BlockPos lateralPos, net.minecraft.core.Direction forwardDir) {
+        for (int dy : new int[]{0, 1, -1}) {
+            BlockPos p = lateralPos.above(dy);
+            if (isStandable(p)) {
+                BlockPos forward = p.relative(forwardDir);
+                for (int fdy : new int[]{0, 1, -1}) {
+                    BlockPos fp = forward.above(fdy);
+                    if (isStandable(fp)) {
+                        return fp;
+                    }
+                }
             }
         }
-        return solidWalls >= 2;
+        return null;
+    }
+
+    private @Nullable BlockPos findNearbyExitStep(BlockPos feetPos, Vec3 goal) {
+        BlockPos bestStep = null;
+        double bestDist = Double.MAX_VALUE;
+        for (int dx = -2; dx <= 2; dx++) {
+            for (int dz = -2; dz <= 2; dz++) {
+                if (dx == 0 && dz == 0) continue;
+                for (int dy = 0; dy <= 1; dy++) {
+                    BlockPos p = feetPos.offset(dx, dy, dz);
+                    if (isStandable(p)) {
+                        int wallCount = 0;
+                        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+                            if (!isPassable(p.relative(d).above())) {
+                                wallCount++;
+                            }
+                        }
+                        if (wallCount < 2) {
+                            double d = Vec3.atCenterOf(p).distanceToSqr(goal);
+                            if (d < bestDist) {
+                                bestDist = d;
+                                bestStep = p;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return bestStep;
+    }
+
+    private boolean isEnclosedInHole() {
+        BlockPos feet = this.blockPosition();
+        int solidHeadNeighbors = 0;
+        int solidFeetNeighbors = 0;
+        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            BlockPos wallHead = feet.relative(d).above();
+            BlockState hs = this.level().getBlockState(wallHead);
+            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs)) {
+                solidHeadNeighbors++;
+            }
+            BlockPos wallFeet = feet.relative(d);
+            BlockState fs = this.level().getBlockState(wallFeet);
+            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs)) {
+                solidFeetNeighbors++;
+            }
+        }
+        return solidHeadNeighbors >= 3 || (solidHeadNeighbors >= 2 && solidFeetNeighbors >= 3);
     }
 
     private void executeHoleEscape() {
@@ -3078,7 +3149,9 @@ public class AiBotPlayer extends ServerPlayer {
         // 1. Break block directly above head if obstructed
         BlockState aboveHeadState = this.level().getBlockState(aboveHead);
         if (!aboveHeadState.isAir() && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0 && aboveHeadState.getDestroySpeed(this.level(), aboveHead) < 15.0f) {
+            equipBestToolFor(aboveHeadState);
             this.level().destroyBlock(aboveHead, true, this);
+            broadcastSwing();
         }
 
         // 2. Pillar jump straight up and place building block beneath feet
@@ -3099,10 +3172,186 @@ public class AiBotPlayer extends ServerPlayer {
         BlockPos frontHead = feetPos.relative(dir).above(2);
         BlockState frontHeadState = this.level().getBlockState(frontHead);
         if (!frontHeadState.isAir() && frontHeadState.getDestroySpeed(this.level(), frontHead) >= 0 && frontHeadState.getDestroySpeed(this.level(), frontHead) < 15.0f) {
+            equipBestToolFor(frontHeadState);
             this.level().destroyBlock(frontHead, true, this);
+            broadcastSwing();
         }
         vacuumNearbyDrops();
         this.stuckTicks = 0;
+        this.moveNoProgressTicks = 0;
+    }
+
+    private void analyzeAndExecuteUnstuckPlan(Vec3 originalGoal) {
+        BlockPos feetPos = this.blockPosition();
+
+        // 1. ANALYZE FOR HOLE / PIT / TRENCH:
+        int solidHeadNeighbors = 0;
+        int solidFeetNeighbors = 0;
+        for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+            BlockPos wallHead = feetPos.relative(d).above();
+            BlockState hs = this.level().getBlockState(wallHead);
+            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs)) {
+                solidHeadNeighbors++;
+            }
+            BlockPos wallFeet = feetPos.relative(d);
+            BlockState fs = this.level().getBlockState(wallFeet);
+            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs)) {
+                solidFeetNeighbors++;
+            }
+        }
+
+        boolean trappedInHole = solidHeadNeighbors >= 3 || (solidHeadNeighbors >= 2 && solidFeetNeighbors >= 3);
+        if (trappedInHole) {
+            // Check if an exit ramp or walkable step exists within 2 blocks
+            BlockPos rampExit = findNearbyExitStep(feetPos, originalGoal);
+            if (rampExit != null) {
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(rampExit);
+                this.bypassWaypointTicks = 35;
+                this.setJumping(rampExit.getY() > feetPos.getY());
+                if (this.onGround() && rampExit.getY() > feetPos.getY()) {
+                    this.jumpFromGround();
+                }
+                this.level().sendParticles(ParticleTypes.HAPPY_VILLAGER, feetPos.getX() + 0.5, feetPos.getY() + 1.2, feetPos.getZ() + 0.5, 4, 0.2, 0.2, 0.2, 0.05);
+                return;
+            }
+
+            // Trapped deep in a pit: clear headroom overhead and pillar jump up!
+            BlockPos aboveHead = feetPos.above(2);
+            BlockState aboveHeadState = this.level().getBlockState(aboveHead);
+            if (!aboveHeadState.isAir() && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0 && aboveHeadState.getDestroySpeed(this.level(), aboveHead) < 15.0f) {
+                equipBestToolFor(aboveHeadState);
+                this.level().destroyBlock(aboveHead, true, this);
+                broadcastSwing();
+            }
+            executeHoleEscape();
+            return;
+        }
+
+        // 2. ANALYZE FOR WALL / BUILDING / CLIFF OBSTACLE:
+        net.minecraft.core.Direction dir = this.getDirection();
+        BlockPos frontFeet = feetPos.relative(dir);
+        BlockPos frontHead = frontFeet.above();
+        BlockState frontFeetState = this.level().getBlockState(frontFeet);
+        BlockState frontHeadState = this.level().getBlockState(frontHead);
+
+        boolean isBlockedInFront = (!frontFeetState.isAir() && !frontFeetState.canBeReplaced())
+                || (!frontHeadState.isAir() && !frontHeadState.canBeReplaced())
+                || isFenceOrWall(frontFeetState);
+
+        if (isBlockedInFront || this.horizontalCollision) {
+            net.minecraft.core.Direction leftDir = dir.getCounterClockWise();
+            net.minecraft.core.Direction rightDir = dir.getClockWise();
+
+            BlockPos bestBypass = null;
+            double bestScore = Double.MAX_VALUE;
+
+            // Probe left side
+            for (int dist = 1; dist <= 8; dist++) {
+                BlockPos probeFeet = feetPos.relative(leftDir, dist);
+                boolean lateralBlocked = true;
+                for (int dy : new int[]{0, 1, -1}) {
+                    if (isStandable(probeFeet.above(dy))) {
+                        lateralBlocked = false;
+                        break;
+                    }
+                }
+                BlockPos clearFp = findClearBypassAtLateral(probeFeet, dir);
+                if (clearFp != null) {
+                    double distToGoal = Vec3.atCenterOf(clearFp).distanceToSqr(originalGoal);
+                    double score = dist * 2.0 + distToGoal;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestBypass = clearFp;
+                    }
+                    break;
+                }
+                if (lateralBlocked && dist > 1) {
+                    break;
+                }
+            }
+
+            // Probe right side
+            for (int dist = 1; dist <= 8; dist++) {
+                BlockPos probeFeet = feetPos.relative(rightDir, dist);
+                boolean lateralBlocked = true;
+                for (int dy : new int[]{0, 1, -1}) {
+                    if (isStandable(probeFeet.above(dy))) {
+                        lateralBlocked = false;
+                        break;
+                    }
+                }
+                BlockPos clearFp = findClearBypassAtLateral(probeFeet, dir);
+                if (clearFp != null) {
+                    double distToGoal = Vec3.atCenterOf(clearFp).distanceToSqr(originalGoal);
+                    double score = dist * 2.0 + distToGoal;
+                    if (score < bestScore) {
+                        bestScore = score;
+                        bestBypass = clearFp;
+                    }
+                    break;
+                }
+                if (lateralBlocked && dist > 1) {
+                    break;
+                }
+            }
+
+            if (bestBypass != null) {
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(bestBypass);
+                this.bypassWaypointTicks = 50;
+                this.level().sendParticles(ParticleTypes.CLOUD, this.getX(), this.getY() + 1.2, this.getZ(), 4, 0.2, 0.2, 0.2, 0.02);
+                return;
+            }
+
+            // If lateral search found no way around within 8 blocks:
+            // Check if it's a 1-2 block barrier (e.g. fence or low wall) and target is elevated or on the other side
+            BlockState headAboveState = this.level().getBlockState(frontHead.above());
+            boolean isLowBarrier = headAboveState.isAir() || headAboveState.canBeReplaced();
+            if (isLowBarrier && originalGoal.y >= this.getY() - 0.5) {
+                executeHoleEscape(); // Pillar over the low barrier
+                return;
+            }
+
+            // High wall with no side opening: Disengage backwards
+            BlockPos backLeft = feetPos.relative(dir.getOpposite(), 2).relative(leftDir, 2);
+            if (isStandable(backLeft)) {
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(backLeft);
+                this.bypassWaypointTicks = 35;
+                return;
+            }
+            BlockPos backRight = feetPos.relative(dir.getOpposite(), 2).relative(rightDir, 2);
+            if (isStandable(backRight)) {
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(backRight);
+                this.bypassWaypointTicks = 35;
+                return;
+            }
+        }
+
+        // 3. ANALYZE FOR PIT / CHASM AHEAD:
+        if (isDeepPitAt(frontFeet)) {
+            net.minecraft.core.Direction leftDir = dir.getCounterClockWise();
+            net.minecraft.core.Direction rightDir = dir.getClockWise();
+            for (int dist = 1; dist <= 6; dist++) {
+                BlockPos leftRim = feetPos.relative(leftDir, dist);
+                if (isStandable(leftRim) && !isDeepPitAt(leftRim.relative(dir))) {
+                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(leftRim.relative(dir));
+                    this.bypassWaypointTicks = 45;
+                    return;
+                }
+                BlockPos rightRim = feetPos.relative(rightDir, dist);
+                if (isStandable(rightRim) && !isDeepPitAt(rightRim.relative(dir))) {
+                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(rightRim.relative(dir));
+                    this.bypassWaypointTicks = 45;
+                    return;
+                }
+            }
+        }
+
+        // 4. GENERAL UNSTUCK FALLBACK:
+        this.xxa = ((this.tickCount / 10) % 2 == 0) ? 0.9f : -0.9f;
+        this.setJumping(true);
+        if (this.onGround()) {
+            this.jumpFromGround();
+        }
     }
 
     private void moveTowards(Vec3 target, boolean sprint) {
@@ -3117,6 +3366,40 @@ public class AiBotPlayer extends ServerPlayer {
                     lookAtPos(new Vec3(center.x, center.y + this.getEyeHeight(), center.z));
                     target = center;
                 }
+            }
+        }
+
+        // Stagnation & Distance-to-Goal Progress Tracking
+        double distToGoalSq = this.position().distanceToSqr(target);
+        if (this.lastMoveTarget == null || target.distanceToSqr(this.lastMoveTarget) > 2.25) {
+            this.lastMoveTarget = target;
+            this.bestMoveTargetDistSq = distToGoalSq;
+            this.moveNoProgressTicks = 0;
+        } else {
+            this.lastMoveTarget = target;
+            if (distToGoalSq < this.bestMoveTargetDistSq - 0.2) {
+                this.bestMoveTargetDistSq = distToGoalSq;
+                this.moveNoProgressTicks = 0;
+            } else {
+                this.moveNoProgressTicks++;
+            }
+        }
+
+        // Motionless check adds to stagnation
+        if (this.position().distanceToSqr(this.lastCheckedPos) < 0.015) {
+            this.moveNoProgressTicks++;
+        }
+        this.lastCheckedPos = this.position();
+
+        // Intermediate Bypass Waypoint Steering
+        if (this.activeBypassWaypoint != null) {
+            double distToBypassSq = this.position().distanceToSqr(this.activeBypassWaypoint);
+            if (distToBypassSq < 1.44 || this.bypassWaypointTicks-- <= 0) {
+                this.activeBypassWaypoint = null;
+                this.bestMoveTargetDistSq = this.position().distanceToSqr(target);
+                this.moveNoProgressTicks = 0;
+            } else {
+                target = this.activeBypassWaypoint;
             }
         }
 
@@ -3170,7 +3453,7 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        // Fence and Wall Barrier Recognition: Never endlessly jump against fences or 2-block tall walls!
+        // Barrier & Wall Recognition
         BlockPos headFront = frontPos.above();
         BlockState headState = this.level().getBlockState(headFront);
         boolean isFenceBarrier = isFenceOrWall(frontState) || isFenceOrWall(headState);
@@ -3187,18 +3470,6 @@ public class AiBotPlayer extends ServerPlayer {
             this.jumpFromGround();
         }
 
-        // 2+ Block Deep Hole / Trap Self-Rescue Engine: Pillar jump and build up!
-        if (!isExcavating && (isTallWall || isEnclosedInHole()) && target.y >= this.getY() - 0.5) {
-            this.holeEscapeTicks++;
-            if (this.holeEscapeTicks >= 4) {
-                this.holeEscapeTicks = 0;
-                executeHoleEscape();
-                return;
-            }
-        } else {
-            this.holeEscapeTicks = 0;
-        }
-
         if (isFenceBarrier) {
             this.setJumping(false);
             if (this.guardAnchorPos != null) {
@@ -3206,37 +3477,18 @@ public class AiBotPlayer extends ServerPlayer {
                 lookAtPos(Vec3.atCenterOf(this.guardAnchorPos));
                 this.zza = 0.5f;
                 this.xxa = 0.0f;
-                this.stuckTicks = 0;
                 return;
             } else {
                 // Steer sideways along the fence
                 this.xxa = ((this.tickCount / 20) % 2 == 0) ? 0.8f : -0.8f;
                 this.zza = 0.2f;
-                this.stuckTicks = 0;
             }
         }
 
-        // Unstuck & Pit Self-Rescue Engine
-        if (this.position().distanceToSqr(this.lastCheckedPos) < 0.025) {
-            this.stuckTicks++;
-            if (isFenceBarrier) {
-                this.stuckTicks = 0;
-                return;
-            }
-            if (this.stuckTicks > 12 && this.stuckTicks <= 24) {
-                // Try strafing left/right and jumping first
-                this.xxa = ((this.tickCount / 10) % 2 == 0) ? 0.85f : -0.85f;
-                if (this.onGround()) {
-                    this.jumpFromGround();
-                }
-            } else if (this.stuckTicks > 24) {
-                this.learnedHazardPits.add(this.blockPosition().immutable());
-                executeHoleEscape();
-                this.stuckTicks = 0;
-            }
-        } else {
-            this.lastCheckedPos = this.position();
-            this.stuckTicks = 0;
+        // Stuck & Area Analysis Engine
+        if (!isExcavating && this.moveNoProgressTicks >= 16) {
+            analyzeAndExecuteUnstuckPlan(target);
+            this.moveNoProgressTicks = 0;
         }
     }
 
@@ -3245,6 +3497,11 @@ public class AiBotPlayer extends ServerPlayer {
         this.xxa = 0.0f;
         this.setJumping(false);
         this.setSprinting(false);
+        this.activeBypassWaypoint = null;
+        this.bypassWaypointTicks = 0;
+        this.moveNoProgressTicks = 0;
+        this.bestMoveTargetDistSq = Double.MAX_VALUE;
+        this.lastMoveTarget = null;
     }
 
     private void lookAtPos(Vec3 target) {
