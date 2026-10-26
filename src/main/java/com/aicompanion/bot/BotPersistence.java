@@ -151,6 +151,14 @@ public class BotPersistence {
         public String assignedArea = "";
         public String skinName = "";
 
+        // Tether / Standby & Absolute Command Mode
+        public Integer tetherX = null;
+        public Integer tetherY = null;
+        public Integer tetherZ = null;
+        public double tetherRadius = 4.0;
+        public boolean standingBy = false;
+        public boolean absoluteCommandMode = false;
+
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
         public List<String> learnedMemories = new ArrayList<>();
@@ -355,6 +363,20 @@ public class BotPersistence {
                 data.conductorCount = bot.getConductorFreightCount();
                 data.conductorReturning = bot.isConductorReturning();
                 data.tractorMode = bot.isTractorMode();
+
+                if (bot.getTetherPos() != null) {
+                    data.tetherX = bot.getTetherPos().getX();
+                    data.tetherY = bot.getTetherPos().getY();
+                    data.tetherZ = bot.getTetherPos().getZ();
+                } else {
+                    data.tetherX = null;
+                    data.tetherY = null;
+                    data.tetherZ = null;
+                }
+                data.tetherRadius = bot.getTetherRadius();
+                data.standingBy = bot.isStandingBy();
+                data.absoluteCommandMode = bot.isAbsoluteCommandMode();
+
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.learnedMemories = bot.getLearnedMemories();
                 data.learnedRecipes = bot.getLearnedRecipes();
@@ -514,6 +536,12 @@ public class BotPersistence {
                     }
                     bot.setConductorConfig(data.conductorDest, data.conductorReturn, data.conductorFreight, data.conductorCount, data.conductorReturning);
                     bot.setTractorMode(data.tractorMode);
+                    if (data.tetherX != null && data.tetherY != null && data.tetherZ != null) {
+                        bot.setTetherPos(new BlockPos(data.tetherX, data.tetherY, data.tetherZ));
+                    }
+                    bot.setTetherRadius(data.tetherRadius > 0 ? data.tetherRadius : 4.0);
+                    bot.setStandingBy(data.standingBy);
+                    bot.setAbsoluteCommandMode(data.absoluteCommandMode);
                     if (data.memory != null) {
                         GeminiService.setMemory(bot.getBotName(), data.memory);
                         for (String memLine : data.memory) {

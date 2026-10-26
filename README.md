@@ -31,7 +31,21 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
   * Run `/bot apikey clear` or `/bot apikey remove` to delete your personal API key immediately in-game.
   * Run `/bot apikey clear all` (Admins/OPs) to wipe all player keys and server default keys.
 
-### 🚪 Doorway Centering & Strict Fence Boundaries *(New in v1.2.6)*
+### 🏹 Archery, Absolute Command Mode & Leash Tethering *(New in v1.2.7)*
+* **True Bow & Archery Combat**:
+  * Companions holding or carrying bows and arrows now dynamically fight at range (up to 25+ blocks), drawing their bow with charging animations, computing ballistic trajectory arcs, and firing precision arrows with vanilla shoot sounds.
+  * Seamlessly switches to melee and raises a shield if hostiles breach within 4 blocks; tactically backpedals when enemies attempt to corner them while drawing.
+* **Absolute Command Mode**:
+  * Immediate fast-path execution of core player orders (*"come here"*, *"follow me"*, *"stop"*, *"stay here"*, *"resume"*) on tick 0 without LLM latency.
+  * In Absolute Mode, player commands unconditionally override background autonomous loops (farming, tree felling, breeding, distant mob hunting).
+* **Smart Aggro Filtering ("Leave Them Alone")**:
+  * Companions strictly ignore ambient, unprovoked monsters minding their own business 20 blocks away.
+  * Hostiles are only engaged if actively attacking the bot, attacking the protected player, swelling as a Creeper in close quarters, or explicitly targeted via an attack order.
+* **Leash Tethering (`/bot tether`, `/bot hold`, `/bot untether`)**:
+  * Tether a companion to any position with a custom radius (*"stay here"*, *"stand here"*, or `/bot tether Goku 4`).
+  * Tethered companions defend with bow and melee but will **never** chase monsters outside their tether boundary, returning immediately to their post.
+
+### 🚪 Doorway Centering & Strict Fence Boundaries *(v1.2.6)*
 * **Smooth 1x2 Doorway Navigation**:
   * Companions cleanly recognize open doors and gates as walk-through passageways rather than solid walls.
   * Automatic shoulder micro-alignment centers the bot along the 1x2 doorway axis, preventing snagging on doorframes.
@@ -291,7 +305,12 @@ You can speak to your companions directly in public chat:
 | `/bot remove <name>` | Despawn a companion |
 | `/bot list` | List all active companions and their current tasks |
 | `/bot status <name>` | View HP, hunger, farm/ranch zones, and inventory |
-| `/bot stop <name\|all>` | Stop all active bot tasks immediately |
+| `/bot stop [name\|all]` | Stop tasks immediately into Absolute Standby Mode (nearest bot if omitted) |
+| `/bot follow [name]` | Order nearest or named companion to follow closely in Absolute Mode |
+| `/bot hold [name]` | Tether nearest or named companion at current spot with a 4m perimeter |
+| `/bot tether <name> [radius]` | Leash companion to their post; defends with bow/melee without wandering |
+| `/bot untether <name>` | Release tether and resume normal autonomous duties |
+| `/bot command <name> <order>` | Direct order override (follow, stop, hold, attack, resume) |
 | `/bot tp` | Teleport nearest companion to your position |
 | `/bot tp all` | Teleport all active companions to your position across all dimensions |
 | `/bot tp <name>` | Teleport specific companion to your position |

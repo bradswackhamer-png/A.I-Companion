@@ -393,6 +393,49 @@ public class BotManager {
         }
         String speakerName = speaker != null ? speaker.getPlainTextName() : "Admin";
 
+        String cmdClean = bot.stripBotReference(requestText).toLowerCase().replaceAll("[,!?:;.]", " ").replaceAll("\\s+", " ").trim();
+
+        // 1. Immediate Follow (Absolute Mode): "come here", "come to me", "follow me", "follow", "to me", "regroup", "on me"
+        if (speaker != null && (cmdClean.equals("come here") || cmdClean.equals("come") || cmdClean.equals("come to me")
+                || cmdClean.equals("follow me") || cmdClean.equals("follow") || cmdClean.equals("to me")
+                || cmdClean.equals("regroup") || cmdClean.equals("on me") || cmdClean.startsWith("come here")
+                || cmdClean.startsWith("follow me") || cmdClean.equals("get over here"))) {
+            bot.setAbsoluteFollow(speaker);
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        // 2. Immediate Stop (Absolute Mode): "stop", "halt", "cancel", "pause", "freeze", "cease"
+        if (cmdClean.equals("stop") || cmdClean.equals("halt") || cmdClean.equals("cancel")
+                || cmdClean.equals("pause") || cmdClean.equals("freeze") || cmdClean.equals("stop it")
+                || cmdClean.equals("stop all") || cmdClean.startsWith("stop ")) {
+            bot.setAbsoluteStop();
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        // 3. Immediate Hold / Stay / Tether: "stay here", "stand here", "wait here", "hold position", "camp here"
+        if (cmdClean.equals("stay here") || cmdClean.equals("stand here") || cmdClean.equals("stay")
+                || cmdClean.equals("stand") || cmdClean.equals("wait here") || cmdClean.equals("hold position")
+                || cmdClean.equals("hold ground") || cmdClean.equals("hold here") || cmdClean.equals("camp here")
+                || cmdClean.equals("standby") || cmdClean.equals("stand by") || cmdClean.equals("wait")) {
+            bot.setAbsoluteTether(bot.blockPosition(), 4.0);
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        // 4. Resume Autonomous: "resume", "continue", "back to work", "dismiss", "free roam"
+        if (cmdClean.equals("resume") || cmdClean.equals("continue") || cmdClean.equals("back to work")
+                || cmdClean.equals("dismiss") || cmdClean.equals("free roam") || cmdClean.equals("carry on")) {
+            bot.resumeAutonomous();
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
         if (bot.handleConductorChatCommand(requestText, speaker)) {
             GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
             BotPersistence.saveAll(server);

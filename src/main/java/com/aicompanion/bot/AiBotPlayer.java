@@ -244,6 +244,13 @@ public class AiBotPlayer extends ServerPlayer {
     private int combatTargetEngageTicks = 0;
     private double bestCombatTargetDistSq = Double.MAX_VALUE;
     private final java.util.Map<Integer, Integer> unreachableMobBlacklist = new java.util.HashMap<>();
+    private int bowChargeTicks = 0;
+
+    // Tether / Standby & Absolute Command Mode
+    private @Nullable BlockPos tetherPos = null;
+    private double tetherRadius = 4.0;
+    private boolean standingBy = false;
+    private boolean absoluteCommandMode = false;
 
     // Village House Construction
     private @Nullable List<HouseBlueprint.VoxelStep> activeHouseQueue = null;
@@ -475,6 +482,89 @@ public class AiBotPlayer extends ServerPlayer {
             if (containsWholeWord(message, alias)) return true;
         }
         return false;
+    }
+
+    public synchronized String stripBotReference(String message) {
+        if (message == null || message.isBlank()) return "";
+        String text = message;
+        if (this.activeNickname != null) {
+            text = text.replaceAll("(?i)\\b" + java.util.regex.Pattern.quote(this.activeNickname) + "\\b", "");
+        }
+        text = text.replaceAll("(?i)\\b" + java.util.regex.Pattern.quote(this.botName) + "\\b", "");
+        for (String alias : this.aliases) {
+            text = text.replaceAll("(?i)\\b" + java.util.regex.Pattern.quote(alias) + "\\b", "");
+        }
+        text = text.replaceAll("(?i)\\b(?:bot|hey|please|can\\s+you|just)\\b", "");
+        return text.trim();
+    }
+
+    public synchronized @Nullable BlockPos getTetherPos() { return this.tetherPos; }
+    public synchronized double getTetherRadius() { return this.tetherRadius; }
+    public synchronized boolean isStandingBy() { return this.standingBy; }
+    public synchronized boolean isAbsoluteCommandMode() { return this.absoluteCommandMode; }
+
+    public synchronized void setTetherPos(@Nullable BlockPos pos) { this.tetherPos = pos; }
+    public synchronized void setTetherRadius(double r) { this.tetherRadius = r > 0 ? r : 4.0; }
+    public synchronized void setStandingBy(boolean standby) { this.standingBy = standby; }
+    public synchronized void setAbsoluteCommandMode(boolean active) { this.absoluteCommandMode = active; }
+
+    public synchronized void setAbsoluteFollow(ServerPlayer target) {
+        this.actionQueue.clear();
+        BotAction followAct = new BotAction("FOLLOW", target.getPlainTextName(), "", 2);
+        followAct.distance = 2.5;
+        this.currentAction = followAct;
+        this.absoluteCommandMode = true;
+        this.standingBy = false;
+        this.tetherPos = null;
+        this.currentCombatTargetId = -1;
+        this.combatTargetEngageTicks = 0;
+        this.setLastHurtByMob(null);
+        if (this.isUsingItem()) this.stopUsingItem();
+        this.stopMovement();
+        sayInChat("Following you directly, " + target.getPlainTextName() + "! (Absolute Command Mode active - autonomous tasks paused)");
+    }
+
+    public synchronized void setAbsoluteTether(BlockPos pos, double radius) {
+        this.actionQueue.clear();
+        this.currentAction = null;
+        this.absoluteCommandMode = true;
+        this.standingBy = true;
+        this.tetherPos = pos;
+        this.tetherRadius = radius > 0 ? radius : 4.0;
+        this.currentCombatTargetId = -1;
+        this.combatTargetEngageTicks = 0;
+        this.setLastHurtByMob(null);
+        if (this.isUsingItem()) this.stopUsingItem();
+        this.stopMovement();
+        sayInChat("Holding position at (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ") with a " + (int)this.tetherRadius + "m tether. Standing by!");
+    }
+
+    public synchronized void setAbsoluteStop() {
+        this.actionQueue.clear();
+        this.currentAction = null;
+        this.absoluteCommandMode = true;
+        this.standingBy = true;
+        this.currentCombatTargetId = -1;
+        this.combatTargetEngageTicks = 0;
+        this.setLastHurtByMob(null);
+        if (this.isUsingItem()) this.stopUsingItem();
+        this.stopMovement();
+        sayInChat("Stopped all tasks immediately. Standing by in Absolute Command Mode!");
+    }
+
+    public synchronized void resumeAutonomous() {
+        this.actionQueue.clear();
+        this.currentAction = null;
+        this.absoluteCommandMode = false;
+        this.standingBy = false;
+        this.tetherPos = null;
+        if (this.isUsingItem()) this.stopUsingItem();
+        sayInChat("Resuming normal role behaviors and autonomous tasks.");
+    }
+
+    public synchronized void clearTether() {
+        this.tetherPos = null;
+        this.standingBy = false;
     }
 
     public static boolean containsWholeWord(String text, String word) {
@@ -1304,12 +1394,35 @@ public class AiBotPlayer extends ServerPlayer {
             vacuumNearbyDrops();
         }
 
+        // Tether boundary enforcement: if tethered and outside tether radius, walk back to tether center immediately
+        if (this.tetherPos != null) {
+            Vec3 tetherCenter = Vec3.atCenterOf(this.tetherPos);
+            double distToTetherSq = this.distanceToSqr(tetherCenter);
+            if (distToTetherSq > (this.tetherRadius * this.tetherRadius)) {
+                if (this.isUsingItem()) this.stopUsingItem();
+                this.bowChargeTicks = 0;
+                moveTowards(tetherCenter, true);
+                return;
+            }
+        }
+
         // Auto-defend if attacked by a monster
         if (BotConfig.AUTO_DEFEND.getAsBoolean() && this.getLastHurtByMob() != null && this.getLastHurtByMob().isAlive()) {
             LivingEntity attacker = this.getLastHurtByMob();
             if (!(attacker instanceof Player) && this.distanceToSqr(attacker) < 64.0 && !this.unreachableMobBlacklist.containsKey(attacker.getId())) {
-                engageTarget(attacker);
-                return;
+                if (this.tetherPos != null) {
+                    double attackerDistToTetherSq = attacker.distanceToSqr(Vec3.atCenterOf(this.tetherPos));
+                    if (attackerDistToTetherSq > (this.tetherRadius * this.tetherRadius) && !hasBowAndArrows()) {
+                        // Beyond tether radius and cannot shoot; remain at post
+                        this.setLastHurtByMob(null);
+                    } else {
+                        engageTarget(attacker);
+                        return;
+                    }
+                } else {
+                    engageTarget(attacker);
+                    return;
+                }
             }
         }
 
@@ -1332,11 +1445,25 @@ public class AiBotPlayer extends ServerPlayer {
                 advanceNextAction();
             }
         } else {
-            tickPassiveRoleBehavior();
+            if (this.standingBy || this.absoluteCommandMode || this.tetherPos != null) {
+                this.stopMovement();
+                if (this.tickCount % 20 == 0) {
+                    Player nearest = this.level().getNearestPlayer(this.getX(), this.getY(), this.getZ(), 8.0, p -> p != this && !(p instanceof AiBotPlayer));
+                    if (nearest != null) {
+                        lookAtPos(nearest.getEyePosition());
+                    }
+                }
+            } else {
+                tickPassiveRoleBehavior();
+            }
         }
     }
 
     private void tickPassiveRoleBehavior() {
+        if (this.standingBy || this.absoluteCommandMode || this.tetherPos != null) {
+            this.stopMovement();
+            return;
+        }
         String r = this.botRole.toLowerCase();
 
         // 1. Guard / Bodyguard: Automatically patrol compound / anchor or follow player, intercepting nearby monsters (never jumping fences!)
@@ -1350,7 +1477,7 @@ public class AiBotPlayer extends ServerPlayer {
                 return;
             }
 
-            Monster threat = findNearestMonsterNear(guardCenter, maxDist);
+            Monster threat = findNearestProvokedThreatNear(guardCenter, maxDist, null);
             if (threat != null) {
                 // Ensure monster is on our side of the fence and inside our guard perimeter
                 boolean threatInside = this.guardAnchorPos == null || threat.distanceToSqr(Vec3.atCenterOf(this.guardAnchorPos)) <= (maxDist * maxDist);
@@ -1512,9 +1639,9 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
-        // Defend guarded player from nearby monsters
+        // Defend guarded player from nearby provoked monsters
         if (BotConfig.AUTO_DEFEND.getAsBoolean()) {
-            Monster threat = findNearestMonsterNear(target.blockPosition(), 10.0);
+            Monster threat = findNearestProvokedThreatNear(target.blockPosition(), 8.0, target);
             if (threat != null) {
                 engageTarget(threat);
                 return false;
@@ -1586,7 +1713,7 @@ public class AiBotPlayer extends ServerPlayer {
         ServerPlayer guarded = findPlayer(action.getPrimaryTarget());
         BlockPos guardCenter = guarded != null ? guarded.blockPosition() : this.blockPosition();
 
-        Monster threat = findNearestMonsterNear(guardCenter, 16.0);
+        Monster threat = findNearestProvokedThreatNear(guardCenter, 16.0, guarded);
         if (threat != null) {
             engageTarget(threat);
             return false;
@@ -2193,7 +2320,41 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void engageTarget(LivingEntity target) {
+        if (target == null || !target.isAlive() || target.isRemoved()) {
+            if (this.isUsingItem()) this.stopUsingItem();
+            this.currentCombatTargetId = -1;
+            this.combatTargetEngageTicks = 0;
+            this.bowChargeTicks = 0;
+            this.setLastHurtByMob(null);
+            return;
+        }
+
         double distSq = this.distanceToSqr(target);
+
+        // Tether constraint enforcement during combat: never wander beyond tether radius!
+        if (this.tetherPos != null) {
+            Vec3 tetherCenter = Vec3.atCenterOf(this.tetherPos);
+            double myDistToTetherSq = this.distanceToSqr(tetherCenter);
+            if (myDistToTetherSq > (this.tetherRadius * this.tetherRadius)) {
+                if (this.isUsingItem()) this.stopUsingItem();
+                this.bowChargeTicks = 0;
+                moveTowards(tetherCenter, true);
+                return;
+            }
+            double targetDistToTetherSq = target.distanceToSqr(tetherCenter);
+            if (targetDistToTetherSq > (this.tetherRadius * this.tetherRadius)) {
+                if (!hasBowAndArrows() || distSq > 625.0) { // 25m max tether archery range
+                    if (this.isUsingItem()) this.stopUsingItem();
+                    this.currentCombatTargetId = -1;
+                    this.combatTargetEngageTicks = 0;
+                    this.bowChargeTicks = 0;
+                    this.setLastHurtByMob(null);
+                    moveTowards(tetherCenter, false);
+                    return;
+                }
+            }
+        }
+
         if (target.getId() != this.currentCombatTargetId) {
             this.currentCombatTargetId = target.getId();
             this.combatTargetEngageTicks = 0;
@@ -2216,12 +2377,84 @@ public class AiBotPlayer extends ServerPlayer {
             this.unreachableMobBlacklist.put(target.getId(), this.tickCount + 200);
             this.currentCombatTargetId = -1;
             this.combatTargetEngageTicks = 0;
+            this.bowChargeTicks = 0;
             this.setLastHurtByMob(null);
+            if (this.isUsingItem()) this.stopUsingItem();
             stopMovement();
             return;
         }
 
         lookAtPos(target.getEyePosition());
+
+        // Archery vs Melee Decision
+        boolean canShootBow = hasBowAndArrows();
+        boolean preferBow = canShootBow && (distSq > 16.0 || !hasMeleeWeapon());
+
+        if (preferBow) {
+            if (this.isUsingItem() && this.getOffhandItem().is(Items.SHIELD)) {
+                this.stopUsingItem();
+            }
+            equipBow();
+            lookAtPos(target.getEyePosition());
+
+            // Archery positioning
+            if (this.tetherPos != null) {
+                Vec3 tetherCenter = Vec3.atCenterOf(this.tetherPos);
+                if (this.distanceToSqr(tetherCenter) > (this.tetherRadius * this.tetherRadius) * 0.8) {
+                    moveTowards(tetherCenter, false);
+                } else {
+                    stopMovement();
+                }
+            } else {
+                if (distSq < 20.25) {
+                    Vec3 away = this.position().subtract(target.position()).normalize().scale(2.0);
+                    moveTowards(this.position().add(away), false);
+                } else if (distSq > 256.0 || !this.hasLineOfSight(target)) {
+                    moveTowards(target.position(), false);
+                } else {
+                    stopMovement();
+                }
+            }
+
+            if (!this.isUsingItem()) {
+                this.startUsingItem(net.minecraft.world.InteractionHand.MAIN_HAND);
+                this.bowChargeTicks = 0;
+            } else {
+                this.bowChargeTicks++;
+                if (this.bowChargeTicks >= 20) {
+                    if (this.hasLineOfSight(target)) {
+                        this.stopUsingItem();
+                        Vec3 eyePos = this.getEyePosition(1.0F);
+                        double dx = target.getX() - eyePos.x;
+                        double horizDist = Math.sqrt(dx * dx + (target.getZ() - eyePos.z) * (target.getZ() - eyePos.z));
+                        double dy = (target.getY() + target.getEyeHeight() * 0.5) - eyePos.y + (horizDist * 0.045);
+                        double dz = target.getZ() - eyePos.z;
+
+                        ItemStack arrowStack = getArrowStackForFiring();
+                        net.minecraft.world.entity.projectile.arrow.Arrow arrow =
+                                new net.minecraft.world.entity.projectile.arrow.Arrow(this.level(), this, arrowStack, this.getMainHandItem());
+                        arrow.shoot(dx, dy, dz, 2.8F, 1.0F);
+                        this.level().addFreshEntity(arrow);
+                        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                                net.minecraft.sounds.SoundEvents.ARROW_SHOOT,
+                                net.minecraft.sounds.SoundSource.PLAYERS,
+                                1.0F, 1.0F / (this.getRandom().nextFloat() * 0.4F + 1.2F));
+
+                        consumeArrow();
+                        this.bowChargeTicks = 0;
+                        this.attackCooldown = 12;
+                        this.combatTargetEngageTicks = 0;
+                    }
+                }
+            }
+            return;
+        }
+
+        // If we were drawing a bow and target closed into melee range, stop bow draw
+        if (this.isUsingItem() && this.getMainHandItem().is(Items.BOW)) {
+            this.stopUsingItem();
+            this.bowChargeTicks = 0;
+        }
 
         // 1. Tactical Shield Check (creeper explosions, skeleton bow drawing)
         boolean shouldShield = false;
@@ -2248,10 +2481,14 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         // 2. Weapon & Range Handling
-        equipBestWeapon();
+        equipBestMeleeWeapon();
 
         if (distSq > 9.5) {
             Vec3 moveGoal = target.position();
+            if (this.tetherPos != null && moveGoal.distanceToSqr(Vec3.atCenterOf(this.tetherPos)) > (this.tetherRadius * this.tetherRadius)) {
+                stopMovement();
+                return;
+            }
             // Leverage the mob's own vanilla A* PathNavigation in reverse to route around corners/obstacles!
             if (!this.hasLineOfSight(target) && target instanceof net.minecraft.world.entity.Mob mob) {
                 net.minecraft.world.level.pathfinder.Path path = mob.getNavigation().createPath(this.blockPosition(), 0);
@@ -4302,6 +4539,97 @@ public class AiBotPlayer extends ServerPlayer {
         }
     }
 
+    public boolean hasBow() {
+        if (this.getMainHandItem().is(Items.BOW) || this.getOffhandItem().is(Items.BOW)) return true;
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            if (this.getInventory().getItem(i).is(Items.BOW)) return true;
+        }
+        return false;
+    }
+
+    public boolean hasArrows() {
+        if (this.isCreative()) return true;
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack stack = this.getInventory().getItem(i);
+            if (isArrowItem(stack)) return true;
+        }
+        return false;
+    }
+
+    private boolean isArrowItem(ItemStack stack) {
+        if (stack.isEmpty()) return false;
+        return stack.is(Items.ARROW) || stack.is(Items.SPECTRAL_ARROW) || stack.is(Items.TIPPED_ARROW);
+    }
+
+    public boolean hasBowAndArrows() {
+        return hasBow() && hasArrows();
+    }
+
+    public boolean hasMeleeWeapon() {
+        if (isMeleeWeapon(this.getMainHandItem())) return true;
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (isMeleeWeapon(s)) return true;
+        }
+        return false;
+    }
+
+    private boolean isMeleeWeapon(ItemStack s) {
+        if (s.isEmpty()) return false;
+        String id = BuiltInRegistries.ITEM.getKey(s.getItem()).toString().toLowerCase();
+        return id.contains("sword") || (id.contains("axe") && !id.contains("pickaxe")) || id.contains("mace") || id.contains("trident");
+    }
+
+    private void equipBow() {
+        if (this.getMainHandItem().is(Items.BOW)) return;
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            if (this.getInventory().getItem(i).is(Items.BOW)) {
+                swapToMainHand(i);
+                return;
+            }
+        }
+    }
+
+    private void equipBestMeleeWeapon() {
+        int bestSlot = -1;
+        int bestScore = isMeleeWeapon(this.getMainHandItem()) ? getWeaponScore(this.getMainHandItem()) : 0;
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (isMeleeWeapon(s)) {
+                int score = getWeaponScore(s);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestSlot = i;
+                }
+            }
+        }
+        if (bestSlot != -1) {
+            swapToMainHand(bestSlot);
+        }
+    }
+
+    private ItemStack getArrowStackForFiring() {
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (isArrowItem(s)) return s.copy();
+        }
+        return new ItemStack(Items.ARROW);
+    }
+
+    private void consumeArrow() {
+        if (this.isCreative()) return;
+        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
+            ItemStack s = this.getInventory().getItem(i);
+            if (isArrowItem(s)) {
+                s.shrink(1);
+                if (s.isEmpty()) {
+                    this.getInventory().setItem(i, ItemStack.EMPTY);
+                }
+                return;
+            }
+        }
+    }
+
     private void equipBestWeapon() {
         int bestSlot = -1;
         int bestScore = getWeaponScore(this.getMainHandItem());
@@ -4831,6 +5159,44 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         return false;
+    }
+
+    public boolean isProvokedThreat(Monster m, @Nullable ServerPlayer protectedPlayer) {
+        if (!isMobReachableAndValid(m)) return false;
+        // 1. Is the monster actively targeting this bot?
+        if (m.getTarget() == this) return true;
+        // 2. Did the monster hurt this bot recently?
+        if (this.getLastHurtByMob() == m) return true;
+        // 3. Is the monster actively targeting or hurting the protected player?
+        if (protectedPlayer != null) {
+            if (m.getTarget() == protectedPlayer) return true;
+            if (protectedPlayer.getLastHurtByMob() == m) return true;
+            if (m instanceof net.minecraft.world.entity.monster.Creeper creeper) {
+                if (creeper.getSwellDir() > 0 && creeper.distanceToSqr(protectedPlayer) < 64.0) {
+                    return true;
+                }
+            }
+        }
+        // 4. Is it a swelling creeper in immediate proximity of the bot?
+        if (m instanceof net.minecraft.world.entity.monster.Creeper creeper) {
+            if (creeper.getSwellDir() > 0 && creeper.distanceToSqr(this) < 64.0) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public @Nullable Monster findNearestProvokedThreatNear(BlockPos center, double radius, @Nullable ServerPlayer protectedPlayer) {
+        AABB box = new AABB(center).inflate(radius, 6.0, radius);
+        List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
+            if (!isProvokedThreat(m, protectedPlayer)) return false;
+            if (isLineBlockedByFence(this.getEyePosition(), m.getEyePosition())) {
+                return false;
+            }
+            return true;
+        });
+        monsters.sort(Comparator.comparingDouble(this::distanceToSqr));
+        return monsters.isEmpty() ? null : monsters.get(0);
     }
 
     private @Nullable Monster findNearestMonsterNear(BlockPos center, double radius) {

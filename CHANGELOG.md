@@ -4,6 +4,46 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.7] - 2026-10-26
+
+### Added
+- **True Archery & Bow Shooting System:**
+  - Companions equipped with bows and arrows now dynamically engage hostile targets at range (up to 25+ blocks) rather than sprinting into melee to swing the bow as a club.
+  - Automatically draws bows with item animations (`startUsingItem`), holds a 20-tick charging cycle for full 1.0 velocity draw, applies ballistic trajectory elevation arc compensation, and shoots high-precision arrows.
+  - Tactical range switching: if enemies close to within 4 blocks and the companion possesses a melee weapon (sword/axe/mace/trident), the companion seamlessly switches to melee and raises their shield; if the enemy retreats, the companion redraws the bow.
+  - Tactically backpedals when enemies attempt to close into point-blank range while drawing the bow.
+  - Plays authentic vanilla bow release audio (`SoundEvents.ARROW_SHOOT`) and consumes arrows from inventory (infinite in Creative mode).
+- **Absolute Command Mode & Fast-Path Intent Interception:**
+  - Introduced **Absolute Command Mode** ensuring player orders unconditionally override autonomous role duties (farming, logging, breeding, compound patrols, distant combat).
+  - Fast-path chat commands executed immediately on tick 0 without LLM round-trip latency:
+    - `"come here"`, `"follow me"`, `"to me"`, `"regroup"`: Instantly puts companion into Absolute Follow Mode, clearing background queues and following closely at 2.5m distance.
+    - `"stop"`, `"halt"`, `"cancel"`, `"pause"`, `"freeze"`: Instantly halts all movement, clears current actions, cancels passive loops, and puts companion into Absolute Standby Mode.
+    - `"stay here"`, `"stand here"`, `"hold position"`, `"camp here"`: Instantly tethers companion at their current coordinates with a 4m leash radius.
+    - `"resume"`, `"continue"`, `"back to work"`, `"dismiss"`, `"free roam"`: Disengages Absolute Command Mode, clears tethers, and resumes normal autonomous role duties.
+- **Tether Leash & Guard Post Perimeter (`/bot tether`, `/bot untether`, `/bot hold`):**
+  - Added strict position tethering (`/bot tether <name> [radius]`, default 4 blocks).
+  - Tethered companions strictly hold their post: if pushed or knocked back outside their tether radius, they immediately navigate back to the tether anchor.
+  - In combat, tethered companions will never pursue enemies beyond their tether perimeter. If holding a bow and arrows, they will snipe distant targets from within their designated area; melee-only companions will disengage if the monster moves outside the tether boundary.
+- **In-Game Direct Command Overrides:**
+  - Added `/bot stop [name|all]`: Argumentless execution halts the nearest companion (or all active companions) into Absolute Standby.
+  - Added `/bot follow [name]`: Commands nearest or named companion to follow caller closely in Absolute Mode.
+  - Added `/bot hold [name]`: Tethers nearest or named companion at current coordinates with a 4m perimeter.
+  - Added `/bot tether <name> [radius]` and `/bot untether <name>`.
+  - Added `/bot command <name> <order>`: Direct command invocation.
+
+### Changed
+- **Strict Mob Threat Aggro Filter ("Leave Mobs Alone"):**
+  - Completely reworked aggro detection so companions will **never** charge unprovoked, distant monsters minding their own business 20 blocks away.
+  - Companions will only engage hostiles if:
+    1. The monster is actively targeting the companion (`target == bot`).
+    2. The monster recently damaged the companion (`lastHurtByMob == monster`).
+    3. The monster is targeting or damaging the protected player.
+    4. The monster is a primed Creeper actively swelling in close proximity (< 8 blocks).
+    5. The player explicitly orders an attack (e.g. `"attack that zombie"`, `/bot command <name> attack <mob>`).
+  - Ambient monsters wandering outside the perimeter are completely ignored, eliminating chain-aggro loops and companions running away from base.
+
+---
+
 ## [1.2.6] - 2026-10-25
 
 ### Fixed

@@ -2,6 +2,7 @@ package com.aicompanion.bot;
 
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.BoolArgumentType;
+import com.mojang.brigadier.arguments.DoubleArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -86,9 +87,37 @@ public class BotCommands {
                                 .suggests(BOT_NAME_SUGGESTIONS)
                                 .executes(ctx -> showStatus(ctx, StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("stop")
+                        .executes(BotCommands::stopNearestOrAllBots)
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
                                 .executes(ctx -> stopBot(ctx, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("follow")
+                        .executes(BotCommands::followNearestBot)
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> followSpecificBot(ctx, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("hold")
+                        .executes(BotCommands::holdNearestBot)
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> holdSpecificBot(ctx, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("tether")
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> tetherBot(ctx, StringArgumentType.getString(ctx, "name"), 4.0))
+                                .then(Commands.argument("radius", DoubleArgumentType.doubleArg(1.0, 64.0))
+                                        .executes(ctx -> tetherBot(ctx, StringArgumentType.getString(ctx, "name"), DoubleArgumentType.getDouble(ctx, "radius"))))))
+                .then(Commands.literal("untether")
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> untetherBot(ctx, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("command")
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .then(Commands.argument("order", StringArgumentType.greedyString())
+                                        .executes(ctx -> executeAbsoluteCommand(ctx,
+                                                StringArgumentType.getString(ctx, "name"),
+                                                StringArgumentType.getString(ctx, "order"))))))
                 .then(Commands.literal("tp")
                         .executes(BotCommands::tpNearestBot)
                         .then(Commands.literal("all")
@@ -681,12 +710,32 @@ public class BotCommands {
         return 1;
     }
 
+    private static int stopNearestOrAllBots(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (source.getEntity() instanceof ServerPlayer player) {
+            AiBotPlayer nearest = BotManager.findNearestBot(player, BotManager.getActiveBots());
+            if (nearest != null) {
+                nearest.setAbsoluteStop();
+                BotPersistence.saveAll(source.getServer());
+                source.sendSuccess(() -> Component.literal("Stopped " + nearest.getPlainTextName() + " (Absolute Standby Mode).").withStyle(ChatFormatting.GREEN), false);
+                return 1;
+            }
+        }
+        for (AiBotPlayer b : BotManager.getActiveBots()) {
+            b.setAbsoluteStop();
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Stopped all active AI companions (Absolute Standby Mode).").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
     private static int stopBot(CommandContext<CommandSourceStack> ctx, String name) {
         if ("all".equalsIgnoreCase(name)) {
             for (AiBotPlayer b : BotManager.getActiveBots()) {
-                b.clearActions();
-                b.sayInChat("Stopped all tasks.");
+                b.setAbsoluteStop();
             }
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            ctx.getSource().sendSuccess(() -> Component.literal("Stopped all AI companions in Absolute Standby Mode.").withStyle(ChatFormatting.GREEN), false);
             return 1;
         }
         AiBotPlayer bot = BotManager.getBot(name);
@@ -694,8 +743,107 @@ public class BotCommands {
             ctx.getSource().sendFailure(Component.literal("No active bot named '" + name + "' found."));
             return 0;
         }
-        bot.clearActions();
-        bot.sayInChat("Stopped my current task and standing by.");
+        bot.setAbsoluteStop();
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        ctx.getSource().sendSuccess(() -> Component.literal("Stopped " + bot.getPlainTextName() + " (Absolute Standby Mode).").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int followNearestBot(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.literal("Only players can command bots to follow them."));
+            return 0;
+        }
+        AiBotPlayer nearest = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        if (nearest == null) {
+            source.sendFailure(Component.literal("No active bots found nearby."));
+            return 0;
+        }
+        nearest.setAbsoluteFollow(player);
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
+    private static int followSpecificBot(CommandContext<CommandSourceStack> ctx, String name) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.literal("Only players can command bots to follow them."));
+            return 0;
+        }
+        AiBotPlayer bot = BotManager.getBot(name);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + name + "' found."));
+            return 0;
+        }
+        bot.setAbsoluteFollow(player);
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
+    private static int holdNearestBot(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = null;
+        if (source.getEntity() instanceof ServerPlayer player) {
+            bot = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        } else if (!BotManager.getActiveBots().isEmpty()) {
+            bot = BotManager.getActiveBots().iterator().next();
+        }
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bots found."));
+            return 0;
+        }
+        bot.setAbsoluteTether(bot.blockPosition(), 4.0);
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
+    private static int holdSpecificBot(CommandContext<CommandSourceStack> ctx, String name) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(name);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + name + "' found."));
+            return 0;
+        }
+        bot.setAbsoluteTether(bot.blockPosition(), 4.0);
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
+    private static int tetherBot(CommandContext<CommandSourceStack> ctx, String name, double radius) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(name);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + name + "' found."));
+            return 0;
+        }
+        bot.setAbsoluteTether(bot.blockPosition(), radius);
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
+    private static int untetherBot(CommandContext<CommandSourceStack> ctx, String name) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(name);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + name + "' found."));
+            return 0;
+        }
+        bot.clearTether();
+        bot.resumeAutonomous();
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
+    private static int executeAbsoluteCommand(CommandContext<CommandSourceStack> ctx, String name, String order) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(name);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + name + "' found."));
+            return 0;
+        }
+        ServerPlayer player = source.getEntity() instanceof ServerPlayer p ? p : null;
+        BotManager.dispatchRequestToBot(bot, player, order);
         return 1;
     }
 
@@ -1112,9 +1260,24 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot gui [name]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Open interactive Speedometer Dashboard & Inventory").withStyle(ChatFormatting.GRAY)), false);
-        src.sendSuccess(() -> Component.literal("/bot stop <name|all>")
+        src.sendSuccess(() -> Component.literal("/bot stop [name|all]")
                 .withStyle(ChatFormatting.YELLOW)
-                .append(Component.literal(" - Stop bot's current task and stand by").withStyle(ChatFormatting.GRAY)), false);
+                .append(Component.literal(" - Stop bot's tasks immediately into Absolute Standby Mode").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot follow [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Order nearest or named bot to follow closely in Absolute Mode").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot hold [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Hold bot in place with a 4m tether perimeter").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot tether <name> [radius]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Leash bot to its post; it defends with bow/melee but won't wander").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot untether <name>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Release tether and resume normal autonomous role duties").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot command <name> <order>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Direct order override (follow, stop, hold, attack, resume)").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot tp [all|<name>|to <name>]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Teleport nearest, all, or specific bot (cross-dimension)").withStyle(ChatFormatting.GRAY)), false);
