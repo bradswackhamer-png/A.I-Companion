@@ -31,7 +31,15 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
   * Run `/bot apikey clear` or `/bot apikey remove` to delete your personal API key immediately in-game.
   * Run `/bot apikey clear all` (Admins/OPs) to wipe all player keys and server default keys.
 
-### 🏹 Sentry Mode, Archery Engine & Strict Fence Combat *(New in v1.2.9)*
+### 🚪 Fence Gate Traversal, Passing-Through & Collision Fix *(New in v1.2.10)*
+* **Seamless Fence Gate Navigation**:
+  * Fixed an issue where open fence gates were classified as solid fences because their identifier contained `"fence"`, causing companions to freeze in front of open gates.
+  * Companions now push forward continuously through gates without their destination resetting to the center of the gate.
+  * Gates dynamically swing open *away* from the companion so the gate panel never collides with their hitbox.
+  * Auto-close logic checks bounding box collision and requires clearing 2.1m before shutting, ensuring gates never slam shut on the companion's body.
+  * Detects gates approaching from any angle or diagonally within 2.5m and features dedicated unstuck recovery.
+
+### 🏹 Sentry Mode, Archery Engine & Strict Fence Combat *(v1.2.9)*
 * **Dedicated Sentry Mode (`/bot sentry [name]` or Chat `"sentry"`)**:
   * Stations companions as stationary sentinels on watchtowers, fortress ramparts, roofs, or base perimeter walls.
   * Sentry companions lock onto their exact post, continuously survey the surroundings in a smooth 360° panoramic scan, and snipe hostile monsters up to 48m away (56m if elevated) with pinpoint accuracy.

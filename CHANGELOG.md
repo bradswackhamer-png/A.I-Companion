@@ -4,6 +4,20 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.10] - 2026-10-26
+
+### Fixed
+- **Fence Gate Traversal, Collision & Passing-Through Overhaul:**
+  - Resolved an issue where companions became stuck attempting to pass through fence gates.
+  - **Open Gate Classification**: Fixed `isFenceOrWall(state)` which previously classified open fence gates as solid impassable barriers because `oak_fence_gate` matched `"fence"`. Open gates and doorways are now recognized as clear walkthrough openings.
+  - **Continuous Forward Momentum**: Fixed navigation resetting `target = gateCenter` every tick, which previously caused companions to navigate to the gate center and stop dead. Companions now apply shoulder centering nudges into the gateway opening while keeping their forward motion vector driving completely through to the other side.
+  - **Directional Gate Swing**: When companions open a fence gate, the gate's `FACING` property is aligned with the companion's movement direction so the gate always swings open *away* from them, preventing the gate panel from swinging into their hitbox and physically blocking passage.
+  - **Hitbox Safety Gate Auto-Close**: Fence gates and doors now check `!this.getBoundingBox().intersects(gateBox)` and require the companion to be 2.1m clear (`distSq > 4.5`) before auto-closing, ensuring gates never slam shut on the companion's body.
+  - **Diagonal & Angled Approach Detection**: Expanded gate detection to all 4 horizontal adjacent blocks within 2.5m, ensuring companions approaching at angles smoothly detect, open, and pass through gates.
+  - **Unstuck Gate Recovery**: Added dedicated fence gate recovery in `analyzeAndExecuteUnstuckPlan`: if a companion ever experiences forward resistance before a gate, they immediately open it and set their bypass waypoint straight through to the far side of the opening.
+
+---
+
 ## [1.2.9] - 2026-10-26
 
 ### Added
