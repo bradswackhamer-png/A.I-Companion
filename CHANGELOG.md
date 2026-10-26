@@ -4,6 +4,23 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.5] - 2026-10-25
+
+### ⚡ Offline Mode & API Key Management
+- **Force Offline Tactical Mode (`/bot offline [true|false]`):**
+  - Added full support to force all companions into 100% Offline Tactical Mode at any time, bypassing cloud Gemini API calls and conserving API quotas even when an API key is present in configs or environment variables.
+  - Added new configuration entry `forceOffline = true|false` in `config/aicompanion-common.toml`.
+  - In-game toggle `/bot offline` or `/bot offline on|off` instantly switches between cloud personality and zero-latency local tactical execution.
+- **In-Game API Key Removal (`/bot apikey clear [all]` / `/bot apikey remove [all]`):**
+  - Added `/bot apikey clear` and `/bot apikey remove` allowing players to remove their personal Gemini API key from the server pool without manually opening configuration files.
+  - Added `/bot apikey clear all` (requires Operator Level 2 / singleplayer) to purge all player keys and server default keys simultaneously.
+  - Recognizes keywords (`clear`, `remove`, `reset`, `none`, `off`) directly via `/bot apikey <argument>` to prevent accidentally saving them as key strings.
+- **Enhanced Status & Setup Guide (`/bot apikey`):**
+  - Dynamically indicates current AI engine state (`Connected to Cloud Gemini`, `Forced Offline Mode`, or `Offline Tactical Mode`).
+  - Lists quick commands for managing keys and toggling offline operation.
+
+---
+
 ## [1.2.4] - 2026-10-25
 
 ### 🌲 Full Lumberjack Role & Tree Felling

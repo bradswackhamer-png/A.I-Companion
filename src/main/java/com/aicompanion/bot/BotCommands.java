@@ -1,6 +1,7 @@
 package com.aicompanion.bot;
 
 import com.mojang.brigadier.CommandDispatcher;
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
@@ -108,8 +109,22 @@ public class BotCommands {
                                                 StringArgumentType.getString(ctx, "request"))))))
                 .then(Commands.literal("apikey")
                         .executes(BotCommands::showApiKeyHelp)
+                        .then(Commands.literal("clear")
+                                .executes(ctx -> clearApiKey(ctx, false))
+                                .then(Commands.literal("all")
+                                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+                                        .executes(ctx -> clearApiKey(ctx, true))))
+                        .then(Commands.literal("remove")
+                                .executes(ctx -> clearApiKey(ctx, false))
+                                .then(Commands.literal("all")
+                                        .requires(Commands.hasPermission(Commands.LEVEL_GAMEMASTERS))
+                                        .executes(ctx -> clearApiKey(ctx, true))))
                         .then(Commands.argument("key", StringArgumentType.greedyString())
                                 .executes(ctx -> setApiKey(ctx, StringArgumentType.getString(ctx, "key")))))
+                .then(Commands.literal("offline")
+                        .executes(BotCommands::toggleOfflineCmd)
+                        .then(Commands.argument("enabled", BoolArgumentType.bool())
+                                .executes(ctx -> setOfflineCmd(ctx, BoolArgumentType.getBool(ctx, "enabled")))))
                 .then(Commands.literal("model")
                         .then(Commands.argument("modelName", StringArgumentType.greedyString())
                                 .executes(ctx -> setModel(ctx, StringArgumentType.getString(ctx, "modelName")))))
@@ -1002,15 +1017,75 @@ public class BotCommands {
     }
 
     private static int setApiKey(CommandContext<CommandSourceStack> ctx, String key) {
+        String trimmed = key != null ? key.trim() : "";
+        if ("clear all".equalsIgnoreCase(trimmed) || "remove all".equalsIgnoreCase(trimmed) || "reset all".equalsIgnoreCase(trimmed)) {
+            return clearApiKey(ctx, true);
+        }
+        if ("clear".equalsIgnoreCase(trimmed) || "remove".equalsIgnoreCase(trimmed) || "reset".equalsIgnoreCase(trimmed) || "none".equalsIgnoreCase(trimmed) || "off".equalsIgnoreCase(trimmed)) {
+            return clearApiKey(ctx, false);
+        }
         ServerPlayer player = ctx.getSource().getPlayer();
         if (player != null) {
-            BotConfig.setPlayerApiKey(player.getPlainTextName(), key);
+            BotConfig.setPlayerApiKey(player.getPlainTextName(), trimmed);
             ctx.getSource().sendSuccess(() -> Component.literal("Saved personal Gemini API Key for " + player.getPlainTextName() + " (and added to server pool)!")
                     .withStyle(ChatFormatting.GREEN), false);
         } else {
-            BotConfig.setApiKey(key);
+            BotConfig.setApiKey(trimmed);
             ctx.getSource().sendSuccess(() -> Component.literal("Server default Gemini API Key saved!")
                     .withStyle(ChatFormatting.GREEN), false);
+        }
+        return 1;
+    }
+
+    private static int clearApiKey(CommandContext<CommandSourceStack> ctx, boolean all) {
+        CommandSourceStack src = ctx.getSource();
+        ServerPlayer player = src.getPlayer();
+        if (all) {
+            if (player != null && !Commands.hasPermission(Commands.LEVEL_GAMEMASTERS).test(src)) {
+                src.sendFailure(Component.literal("You need operator permission (level 2) to clear all server API keys."));
+                return 0;
+            }
+            BotConfig.clearAllApiKeys();
+            src.sendSuccess(() -> Component.literal("All Gemini API keys (server default & player pool) have been cleared! Companions are now running in Offline Tactical Mode.")
+                    .withStyle(ChatFormatting.GOLD), true);
+            return 1;
+        }
+
+        if (player != null) {
+            boolean removed = BotConfig.removePlayerApiKey(player.getPlainTextName());
+            if (removed) {
+                src.sendSuccess(() -> Component.literal("Removed personal Gemini API Key for " + player.getPlainTextName() + ".")
+                        .withStyle(ChatFormatting.GREEN), false);
+            } else {
+                src.sendSuccess(() -> Component.literal("No personal API Key was registered for " + player.getPlainTextName() + ".")
+                        .withStyle(ChatFormatting.YELLOW), false);
+            }
+            if (!BotConfig.getApiKey().isEmpty()) {
+                src.sendSuccess(() -> Component.literal("Note: Server default API key is still active. To force offline mode, use: /bot offline on")
+                        .withStyle(ChatFormatting.GRAY), false);
+            }
+        } else {
+            BotConfig.clearServerApiKey();
+            src.sendSuccess(() -> Component.literal("Server default Gemini API Key removed.")
+                    .withStyle(ChatFormatting.GREEN), false);
+        }
+        return 1;
+    }
+
+    private static int toggleOfflineCmd(CommandContext<CommandSourceStack> ctx) {
+        boolean current = BotConfig.isForceOffline();
+        return setOfflineCmd(ctx, !current);
+    }
+
+    private static int setOfflineCmd(CommandContext<CommandSourceStack> ctx, boolean enabled) {
+        BotConfig.setForceOffline(enabled);
+        CommandSourceStack src = ctx.getSource();
+        if (enabled) {
+            src.sendSuccess(() -> Component.literal("[AI Companion] Force Offline Mode is now ENABLED! Bots will use 100% offline tactical intelligence (no cloud calls, zero API quota used).")
+                    .withStyle(ChatFormatting.YELLOW, ChatFormatting.BOLD), true);
+        } else {
+            src.sendSuccess(() -> Component.literal("[AI Companion] Force Offline Mode is now DISABLED! Bots will connect to Cloud Gemini if an API key is available.")
+                    .withStyle(ChatFormatting.GREEN, ChatFormatting.BOLD), true);
         }
         return 1;
     }
@@ -1064,9 +1139,12 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot skin <list|reload|set>")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Manage custom player skins in /aicompanion/skins").withStyle(ChatFormatting.GRAY)), false);
-        src.sendSuccess(() -> Component.literal("/bot apikey [key]")
+        src.sendSuccess(() -> Component.literal("/bot apikey [key|clear]")
                 .withStyle(ChatFormatting.YELLOW)
-                .append(Component.literal(" - View setup guide or configure personal Gemini API key").withStyle(ChatFormatting.GRAY)), false);
+                .append(Component.literal(" - Configure or remove personal Gemini API key").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot offline [true|false]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Force offline tactical mode on or off").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("Voice Tip: ")
                 .withStyle(ChatFormatting.GOLD)
                 .append(Component.literal("Speak directly to bots in public chat! e.g. \"lumber chop all trees in this 100x100 area\", \"goku dig 10x10x2 box around us starting y81 go up 2\", \"explorer find ocean\".").withStyle(ChatFormatting.AQUA)), false);
@@ -1076,20 +1154,42 @@ public class BotCommands {
     private static int showApiKeyHelp(CommandContext<CommandSourceStack> ctx) {
         ServerPlayer player = ctx.getSource().getPlayer();
         String pName = player != null ? player.getPlainTextName() : "Server";
+        boolean forceOffline = BotConfig.isForceOffline();
         boolean hasKey = !BotConfig.getCandidateApiKeys(pName).isEmpty();
 
-        ctx.getSource().sendSuccess(() -> Component.literal("=== AI Companion: API Key Setup ===\n")
+        String statusText;
+        ChatFormatting statusColor;
+        if (forceOffline) {
+            statusText = "Forced Offline Mode (Active via /bot offline on)\n";
+            statusColor = ChatFormatting.GOLD;
+        } else if (hasKey) {
+            statusText = "Connected to Cloud Gemini (Full AI Personality)\n";
+            statusColor = ChatFormatting.GREEN;
+        } else {
+            statusText = "Offline Tactical Mode (Zero Setup Needed)\n";
+            statusColor = ChatFormatting.YELLOW;
+        }
+
+        ctx.getSource().sendSuccess(() -> Component.literal("=== AI Companion: API Key & Offline Setup ===\n")
                 .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
                 .append(Component.literal("AI Engine Status: ").withStyle(ChatFormatting.GRAY))
-                .append(Component.literal(hasKey ? "Connected to Cloud Gemini (Full AI Personality)\n" : "Offline Tactical Mode (Zero Setup Needed)\n")
-                        .withStyle(hasKey ? ChatFormatting.GREEN : ChatFormatting.YELLOW))
-                .append(Component.literal("\nGet a 100% FREE Gemini API Key in 30 seconds (no credit card needed):\n").withStyle(ChatFormatting.WHITE))
+                .append(Component.literal(statusText).withStyle(statusColor))
+                .append(Component.literal("\nKey Management & Offline Commands:\n").withStyle(ChatFormatting.WHITE, ChatFormatting.BOLD))
+                .append(Component.literal("  /bot apikey <key>").withStyle(ChatFormatting.YELLOW))
+                .append(Component.literal(" - Save your personal API key\n").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("  /bot apikey clear").withStyle(ChatFormatting.YELLOW))
+                .append(Component.literal(" - Remove your personal API key\n").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("  /bot apikey clear all").withStyle(ChatFormatting.YELLOW))
+                .append(Component.literal(" - Clear all keys from server (Admin)\n").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("  /bot offline [true|false]").withStyle(ChatFormatting.YELLOW))
+                .append(Component.literal(" - Toggle force offline tactical mode\n\n").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("Get a 100% FREE Gemini API Key in 30 seconds (no credit card needed):\n").withStyle(ChatFormatting.WHITE))
                 .append(Component.literal("1. Visit: ").withStyle(ChatFormatting.GRAY))
                 .append(Component.literal("https://aistudio.google.com/app/apikey\n").withStyle(ChatFormatting.AQUA, ChatFormatting.UNDERLINE))
                 .append(Component.literal("2. Sign in with Google and click 'Create API Key'.\n").withStyle(ChatFormatting.GRAY))
                 .append(Component.literal("3. In chat, run: ").withStyle(ChatFormatting.GRAY))
                 .append(Component.literal("/bot apikey <your_key_here>\n\n").withStyle(ChatFormatting.GREEN))
-                .append(Component.literal("Note: Even with NO key, companions will still farm, breed, mine, guard, craft, and build offline!")
+                .append(Component.literal("Note: Even in offline mode, companions will still farm, cut trees, breed, mine, guard, craft, and build!")
                         .withStyle(ChatFormatting.DARK_AQUA, ChatFormatting.ITALIC)), false);
         return 1;
     }

@@ -361,6 +361,9 @@ public class GeminiService {
 
     public static CompletableFuture<BotAction.GeminiPlanResponse> askGeminiAsync(String telemetryPrompt, String speakerName, String rawRequest) {
         return CompletableFuture.supplyAsync(() -> {
+            if (BotConfig.isForceOffline()) {
+                return buildLocalFallbackPlan(speakerName, rawRequest);
+            }
             List<String> apiKeys = BotConfig.getCandidateApiKeys(speakerName);
             if (apiKeys.isEmpty()) {
                 return buildLocalFallbackPlan(speakerName, rawRequest);

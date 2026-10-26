@@ -22,6 +22,17 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
 
 ---
 
+### ⚡ Offline Mode & API Key Control *(New in v1.2.5)*
+* **Force Offline Tactical Mode**:
+  * Run `/bot offline on` or `/bot offline true` to instantly force companions into 100% Offline Tactical Mode, even if an API key is present.
+  * Can also be configured directly in `config/aicompanion-common.toml` with `forceOffline = true`.
+  * Zero internet requests, zero API quota usage, ultra-fast local decision making!
+* **Easy API Key Removal**:
+  * Run `/bot apikey clear` or `/bot apikey remove` to delete your personal API key immediately in-game.
+  * Run `/bot apikey clear all` (Admins/OPs) to wipe all player keys and server default keys.
+
+---
+
 ## 🔑 How to Get a Free Gemini API Key in 30 Seconds
 Google provides free Gemini API access with **no credit card or billing required**:
 
@@ -284,6 +295,8 @@ You can speak to your companions directly in public chat:
 | `/bot memory clear <global\|botName>` | Clear recorded personal or global memories and recipes |
 | `/bot ask <name> <request>` | Send a direct task/question to a companion |
 | `/bot apikey [key]` | View API key status or set your personal/server Gemini key |
+| `/bot apikey clear [all]` | Remove your personal API key or clear all keys from server (Admin) |
+| `/bot offline [true\|false]` | Toggle or set force offline tactical mode (bypasses cloud API) |
 | `/bot waypoint <name>` | Save your current coordinates as a named bot waypoint |
 
 ---

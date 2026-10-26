@@ -40,26 +40,34 @@ public class BotConfig {
             .comment("If only 1 bot is active, respond to any chat message even if the bot's name isn't explicitly mentioned")
             .define("listenAllWhenSingleBot", false);
 
+    public static final ModConfigSpec.BooleanValue FORCE_OFFLINE = BUILDER
+            .comment("Force all bots to run in 100% Offline Tactical Mode, bypassing cloud Gemini API calls even if API keys are set")
+            .define("forceOffline", false);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     private static volatile String runtimeApiKeyOverride = null;
     private static volatile String runtimeModelOverride = null;
+    private static volatile Boolean runtimeForceOfflineOverride = null;
     private static final Map<String, String> PLAYER_KEYS = new ConcurrentHashMap<>();
 
     private static void syncLoadedPlayerKeys() {
         try {
             List<? extends String> list = PLAYER_KEY_ENTRIES.get();
             if (list != null) {
+                Set<String> validPlayers = new java.util.HashSet<>();
                 for (String entry : list) {
                     int eq = entry.indexOf('=');
                     if (eq > 0 && eq < entry.length() - 1) {
                         String pName = entry.substring(0, eq).trim().toLowerCase(Locale.ROOT);
                         String pKey = entry.substring(eq + 1).trim();
                         if (!pKey.isEmpty()) {
-                            PLAYER_KEYS.putIfAbsent(pName, pKey);
+                            PLAYER_KEYS.put(pName, pKey);
+                            validPlayers.add(pName);
                         }
                     }
                 }
+                PLAYER_KEYS.keySet().retainAll(validPlayers);
             }
         } catch (Exception ignored) {
         }
@@ -81,6 +89,9 @@ public class BotConfig {
     }
 
     public static List<String> getCandidateApiKeys(String speakerName) {
+        if (isForceOffline()) {
+            return java.util.Collections.emptyList();
+        }
         syncLoadedPlayerKeys();
         Set<String> keys = new LinkedHashSet<>();
         if (speakerName != null && !speakerName.isBlank()) {
@@ -106,6 +117,54 @@ public class BotConfig {
         syncLoadedPlayerKeys();
         PLAYER_KEYS.put(playerName.trim().toLowerCase(Locale.ROOT), key.trim());
         savePlayerKeysToConfig();
+    }
+
+    public static boolean removePlayerApiKey(String playerName) {
+        if (playerName == null || playerName.isBlank()) return false;
+        syncLoadedPlayerKeys();
+        String removed = PLAYER_KEYS.remove(playerName.trim().toLowerCase(Locale.ROOT));
+        savePlayerKeysToConfig();
+        return removed != null;
+    }
+
+    public static void clearServerApiKey() {
+        runtimeApiKeyOverride = "";
+        try {
+            GEMINI_API_KEY.set("");
+            SPEC.save();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static void clearAllApiKeys() {
+        PLAYER_KEYS.clear();
+        runtimeApiKeyOverride = "";
+        try {
+            GEMINI_API_KEY.set("");
+            PLAYER_KEY_ENTRIES.set(List.of());
+            SPEC.save();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static boolean isForceOffline() {
+        if (runtimeForceOfflineOverride != null) {
+            return runtimeForceOfflineOverride;
+        }
+        try {
+            return FORCE_OFFLINE.get();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    public static void setForceOffline(boolean force) {
+        runtimeForceOfflineOverride = force;
+        try {
+            FORCE_OFFLINE.set(force);
+            SPEC.save();
+        } catch (Exception ignored) {
+        }
     }
 
     private static void savePlayerKeysToConfig() {
