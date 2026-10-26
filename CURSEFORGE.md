@@ -22,7 +22,18 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
 
 ---
 
-### 🏹 Archery, Absolute Command Mode & Leash Tethering *(New in v1.2.7)*
+### 🛢️ Crude Oil & Hazardous Fluid Avoidance *(New in v1.2.8)*
+* **Lava-Grade Hazard Classification**:
+  * Companions now treat all modded crude oil, fuel, petroleum, tar, diesel, acid, sludge, and toxic fluids as lethal hazards identical to molten lava.
+  * Companions will **never** step into crude oil pools, walk through oil puddles, or choose bypass waypoints inside oil. They cleanly route along solid shorelines or detour around oil lakes.
+* **Emergency Shoreline Escape**:
+  * If pushed or knocked into crude oil, companions immediately activate emergency vertical propulsion (`0.28` velocity), continuous swimming jumps, and seek the nearest solid bank within 12 blocks to climb out onto dry land.
+* **Item Retrieval Safety**:
+  * Item vacuuming strictly avoids chasing drops that have fallen into crude oil or lava, keeping companions safe on dry land.
+
+---
+
+### 🏹 Archery, Absolute Command Mode & Leash Tethering *(v1.2.7)*
 * **True Bow & Archery Combat**:
   * Companions holding or carrying bows and arrows now dynamically fight at range (up to 25+ blocks), drawing their bow with charging animations, computing ballistic trajectory arcs, and firing precision arrows with vanilla shoot sounds.
   * Seamlessly switches to melee and raises a shield if hostiles breach within 4 blocks; tactically backpedals when enemies attempt to corner them while drawing.

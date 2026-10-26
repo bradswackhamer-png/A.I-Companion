@@ -4,6 +4,24 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.8] - 2026-10-26
+
+### Fixed
+- **Crude Oil & Hazardous Mod Fluid Avoidance (Lava-Grade Hazard Classification):**
+  - Resolved an issue where companions treated modded crude oil pools and lakes (from Create: Diesel Generators, BuildCraft, Ad Astra, Tech Reborn, Thermal, PneumaticCraft, etc.) as safe, walkable terrain and stepped in, becoming trapped and suffocating or drowning.
+  - Implemented dynamic hazardous fluid detection identifying all crude oil, fuel, petroleum, tar, diesel, acid, sludge, and toxic fluids across block and fluid registries.
+  - Upgraded pit and hazard pathfinding (`isDeepPitAt`, `isPassable`, `isStandable`): companions now treat crude oil and hazardous fluids with identical severity to molten lava. Companions will never step into crude oil, walk across oil puddles, or select bypass waypoints in or over oil.
+  - When encountering oil pools or lakes, the dynamic environment analysis engine navigates along the solid rim or detours cleanly around the perimeter.
+  - Item vacuuming (`findNearestDrop`) strictly ignores items that fell into crude oil or lava, preventing companions from diving into oil pools to retrieve dropped items.
+
+### Added
+- **Emergency Crude Oil Self-Preservation & Land Escape:**
+  - Added emergency buoyancy impulse (`escapeHazardousFluidToDryLand`): if a companion is pushed or knocked into crude oil, they immediately apply high vertical propulsion (`0.28` velocity), continuous swimming jumps, and navigate directly to the nearest solid bank within 12 blocks to climb out onto dry land.
+  - Companions taking damage while submerged in crude oil or hazardous fluids prioritize immediate emergency shoreline escape.
+  - Safe respawn scanning (`findSafeDryRespawnPos`) strictly rejects positions with or adjacent to crude oil.
+
+---
+
 ## [1.2.7] - 2026-10-26
 
 ### Added

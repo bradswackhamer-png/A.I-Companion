@@ -1330,8 +1330,13 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        // Active Water Survival / Anti-Drowning & Lava Physics
-        if (this.isInWater()) {
+        // Active Fluid Survival: Water Anti-Drowning & Lava / Crude Oil Hazardous Fluid Physics
+        if (isInHazardousFluid()) {
+            this.setJumping(true);
+            Vec3 motion = this.getDeltaMovement();
+            this.setDeltaMovement(motion.x, Math.max(motion.y, 0.25), motion.z);
+            escapeHazardousFluidToDryLand();
+        } else if (this.isInWater()) {
             this.setJumping(true);
             Vec3 motion = this.getDeltaMovement();
             if (this.isEyeInFluid(FluidTags.WATER) || motion.y < 0.04) {
@@ -1340,10 +1345,6 @@ public class AiBotPlayer extends ServerPlayer {
             if (this.isEyeInFluid(FluidTags.WATER) || this.getAirSupply() < 200) {
                 escapeWaterToDryLand();
             }
-        } else if (this.isInLava()) {
-            this.setJumping(true);
-            Vec3 motion = this.getDeltaMovement();
-            this.setDeltaMovement(motion.x, Math.max(motion.y, 0.15), motion.z);
         }
 
         if (this.attackCooldown > 0) {
@@ -3882,10 +3883,42 @@ public class AiBotPlayer extends ServerPlayer {
         return bestPos;
     }
 
+    public static boolean isHazardousFluid(FluidState fluidState) {
+        if (fluidState.isEmpty()) return false;
+        if (fluidState.is(FluidTags.LAVA)) return true;
+        String id = BuiltInRegistries.FLUID.getKey(fluidState.getType()).getPath().toLowerCase();
+        return id.contains("oil") || id.contains("tar") || id.contains("fuel") || id.contains("petroleum")
+                || id.contains("diesel") || id.contains("acid") || id.contains("sludge") || id.contains("toxic") || id.contains("poison");
+    }
+
+    public static boolean isHazardousBlockOrFluid(BlockState blockState, FluidState fluidState) {
+        if (isHazardousFluid(fluidState)) return true;
+        if (blockState.is(Blocks.LAVA) || blockState.is(Blocks.MAGMA_BLOCK) || blockState.is(Blocks.FIRE) || blockState.is(Blocks.SOUL_FIRE)) return true;
+        String blockId = BuiltInRegistries.BLOCK.getKey(blockState.getBlock()).getPath().toLowerCase();
+        return blockId.contains("oil") || blockId.contains("tar") || blockId.contains("fuel") || blockId.contains("petroleum")
+                || blockId.contains("diesel") || blockId.contains("acid") || blockId.contains("sludge") || blockId.contains("toxic");
+    }
+
+    public boolean isInHazardousFluid() {
+        if (this.isInLava()) return true;
+        FluidState feetFluid = this.level().getFluidState(this.blockPosition());
+        if (isHazardousFluid(feetFluid)) return true;
+        FluidState eyeFluid = this.level().getFluidState(BlockPos.containing(this.getEyePosition()));
+        if (isHazardousFluid(eyeFluid)) return true;
+        BlockState feetBlock = this.level().getBlockState(this.blockPosition());
+        return isHazardousBlockOrFluid(feetBlock, feetFluid);
+    }
+
     private final java.util.Set<BlockPos> learnedHazardPits = new java.util.HashSet<>();
 
     private boolean isDeepPitAt(BlockPos footCandidate) {
         BlockState footState = this.level().getBlockState(footCandidate);
+        FluidState footFluid = this.level().getFluidState(footCandidate);
+        // Crude oil and hazardous fluids are deadly hazards - treat strictly like lava!
+        if (isHazardousBlockOrFluid(footState, footFluid)) {
+            return true;
+        }
+
         if (!footState.isAir() && !footState.canBeReplaced()) return false;
 
         // In Minecraft, drops of 1, 2, or 3 blocks deal ZERO fall damage and are completely safe to step down.
@@ -3898,16 +3931,16 @@ public class AiBotPlayer extends ServerPlayer {
         for (int depth = 1; depth <= 4; depth++) {
             BlockPos groundCandidate = footCandidate.below(depth);
             BlockState state = this.level().getBlockState(groundCandidate);
+            FluidState fluid = this.level().getFluidState(groundCandidate);
+
+            // Hazardous surfaces (crude oil, fuel, lava, magma, fire) are dangerous hazards
+            if (isHazardousBlockOrFluid(state, fluid)) {
+                return true;
+            }
+
             if (!state.isAir() && !state.canBeReplaced() && !isFenceOrWall(state)) {
-                // Hazardous surfaces (lava, magma, fire) are dangerous hazards
-                if (state.is(Blocks.LAVA) || state.is(Blocks.MAGMA_BLOCK) || state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE)) {
-                    return true;
-                }
                 // Solid walkable block found within 3-block drop: safe terrain to walk/drop down!
                 return false;
-            }
-            if (state.is(Blocks.LAVA) || state.is(Blocks.FIRE)) {
-                return true;
             }
         }
 
@@ -3917,6 +3950,9 @@ public class AiBotPlayer extends ServerPlayer {
 
     private boolean isPassable(BlockPos pos) {
         BlockState state = this.level().getBlockState(pos);
+        FluidState fluid = this.level().getFluidState(pos);
+        // Crude oil and hazardous fluids are completely non-passable (never step into them)
+        if (isHazardousBlockOrFluid(state, fluid)) return false;
         if (state.isAir() || state.canBeReplaced()) return true;
         if (isOpenDoorOrGate(state) || isHandOpenableDoorOrGate(state)) return true;
         try {
@@ -3927,6 +3963,8 @@ public class AiBotPlayer extends ServerPlayer {
 
     private boolean isStandable(BlockPos pos) {
         BlockState belowState = this.level().getBlockState(pos.below());
+        FluidState belowFluid = this.level().getFluidState(pos.below());
+        if (isHazardousBlockOrFluid(belowState, belowFluid)) return false;
         boolean hasFloor = !belowState.isAir() && !belowState.canBeReplaced() && !isFenceOrWall(belowState);
         return hasFloor && isPassable(pos) && isPassable(pos.above()) && !isDeepPitAt(pos);
     }
@@ -4445,12 +4483,12 @@ public class AiBotPlayer extends ServerPlayer {
                 || isOpenDoorOrGate(frontState) || isOpenDoorOrGate(headState);
         boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier && !isDoorway;
 
-        // Jump over 1-block ledges or swim in water/lava (Never jump at 2-block tall solid walls or fences!)
+        // Jump over 1-block ledges or swim in water/lava/oil (Never jump at 2-block tall solid walls or fences!)
         boolean stepUpPossible = !frontState.isAir() && headState.isAir() && this.level().getBlockState(headFront.above()).isAir() && !isFenceBarrier && !isDoorway;
         boolean wantsToAscend = target.y > this.getY() - 0.2;
         boolean shouldJump = ((stepUpPossible && (wantsToAscend || this.horizontalCollision))
                 || (this.horizontalCollision && !isTallWall && !isFenceBarrier)
-                || this.isInWater() || this.isInLava()) && !isFenceBarrier && !isDoorway;
+                || this.isInWater() || this.isInLava() || this.isInHazardousFluid()) && !isFenceBarrier && !isDoorway;
         if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier && !isDoorway) {
             shouldJump = true;
         }
@@ -5232,7 +5270,11 @@ public class AiBotPlayer extends ServerPlayer {
 
     private @Nullable ItemEntity findNearestDrop(double radius) {
         AABB box = this.getBoundingBox().inflate(radius);
-        List<ItemEntity> drops = this.level().getEntitiesOfClass(ItemEntity.class, box, Entity::isAlive);
+        List<ItemEntity> drops = this.level().getEntitiesOfClass(ItemEntity.class, box, e -> {
+            if (!e.isAlive()) return false;
+            BlockPos pos = e.blockPosition();
+            return !isHazardousBlockOrFluid(this.level().getBlockState(pos), this.level().getFluidState(pos));
+        });
         drops.sort(Comparator.comparingDouble(this::distanceToSqr));
         return drops.isEmpty() ? null : drops.get(0);
     }
@@ -5386,6 +5428,51 @@ public class AiBotPlayer extends ServerPlayer {
         }
     }
 
+    public void escapeHazardousFluidToDryLand() {
+        BlockPos current = this.blockPosition();
+        BlockPos nearestBank = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (int dx = -12; dx <= 12; dx++) {
+            for (int dz = -12; dz <= 12; dz++) {
+                for (int dy = -2; dy <= 4; dy++) {
+                    BlockPos p = current.offset(dx, dy, dz);
+                    BlockState groundState = this.level().getBlockState(p);
+                    FluidState groundFluid = this.level().getFluidState(p);
+                    if (!isHazardousBlockOrFluid(groundState, groundFluid) && !groundState.getCollisionShape(this.level(), p).isEmpty()) {
+                        BlockPos feet = p.above();
+                        BlockPos head = feet.above();
+                        BlockState footState = this.level().getBlockState(feet);
+                        FluidState footFluid = this.level().getFluidState(feet);
+                        BlockState headState = this.level().getBlockState(head);
+                        FluidState headFluid = this.level().getFluidState(head);
+                        if (!isHazardousBlockOrFluid(footState, footFluid) && footState.getCollisionShape(this.level(), feet).isEmpty()
+                                && !isHazardousBlockOrFluid(headState, headFluid) && headState.getCollisionShape(this.level(), head).isEmpty()) {
+                            double d = this.distanceToSqr(Vec3.atCenterOf(feet));
+                            if (d < bestDistSq) {
+                                bestDistSq = d;
+                                nearestBank = feet;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (nearestBank != null) {
+            Vec3 target = Vec3.atCenterOf(nearestBank);
+            lookAtPos(target);
+            this.setJumping(true);
+            Vec3 m = this.getDeltaMovement();
+            Vec3 dir = target.subtract(this.position()).normalize().scale(0.35);
+            this.setDeltaMovement(dir.x, Math.max(m.y, 0.28), dir.z);
+        } else {
+            this.setJumping(true);
+            Vec3 m = this.getDeltaMovement();
+            this.setDeltaMovement(m.x, Math.max(m.y, 0.25), m.z);
+        }
+    }
+
     public static @Nullable BlockPos findSafeDryRespawnPos(ServerLevel level, BlockPos origin, int radius) {
         if (origin == null || level == null) return null;
 
@@ -5402,19 +5489,20 @@ public class AiBotPlayer extends ServerPlayer {
                         FluidState footFluid = level.getFluidState(footPos);
                         FluidState headFluid = level.getFluidState(headPos);
                         if (!footFluid.isEmpty() || !headFluid.isEmpty()) continue;
+                        if (isHazardousFluid(footFluid) || isHazardousFluid(headFluid)) continue;
 
                         BlockState footState = level.getBlockState(footPos);
                         BlockState headState = level.getBlockState(headPos);
                         if (!footState.getCollisionShape(level, footPos).isEmpty() || !headState.getCollisionShape(level, headPos).isEmpty()) continue;
-                        if (footState.is(Blocks.LAVA) || footState.is(Blocks.FIRE) || footState.is(Blocks.SWEET_BERRY_BUSH)
-                                || footState.is(Blocks.WITHER_ROSE) || footState.is(Blocks.POWDER_SNOW)) continue;
+                        if (footState.is(Blocks.LAVA) || footState.is(Blocks.FIRE) || isHazardousBlockOrFluid(footState, footFluid)
+                                || footState.is(Blocks.SWEET_BERRY_BUSH) || footState.is(Blocks.WITHER_ROSE) || footState.is(Blocks.POWDER_SNOW)) continue;
 
                         FluidState groundFluid = level.getFluidState(groundPos);
-                        if (!groundFluid.isEmpty()) continue;
+                        if (!groundFluid.isEmpty() || isHazardousFluid(groundFluid)) continue;
 
                         BlockState groundState = level.getBlockState(groundPos);
                         if (groundState.getCollisionShape(level, groundPos).isEmpty() && !groundState.isSolid()) continue;
-                        if (groundState.is(Blocks.LAVA) || groundState.is(Blocks.MAGMA_BLOCK)
+                        if (groundState.is(Blocks.LAVA) || groundState.is(Blocks.MAGMA_BLOCK) || isHazardousBlockOrFluid(groundState, groundFluid)
                                 || groundState.is(Blocks.CAMPFIRE) || groundState.is(Blocks.CACTUS)) continue;
 
                         return footPos;
@@ -5427,6 +5515,13 @@ public class AiBotPlayer extends ServerPlayer {
 
     @Override
     public boolean hurtServer(ServerLevel level, DamageSource damageSource, float amount) {
+        if (isInHazardousFluid()) {
+            this.setJumping(true);
+            Vec3 motion = this.getDeltaMovement();
+            this.setDeltaMovement(motion.x, Math.max(motion.y, 0.28), motion.z);
+            escapeHazardousFluidToDryLand();
+            return false;
+        }
         if (damageSource.is(DamageTypes.DROWN)) {
             this.setJumping(true);
             Vec3 motion = this.getDeltaMovement();
