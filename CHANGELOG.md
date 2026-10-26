@@ -4,6 +4,17 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.11] - 2026-10-26
+
+### Fixed
+- **Area Guarding vs Farming Role Hijacking Fix:**
+  - Resolved an issue where ordering a companion to stand in, stay in, or guard a mapped zone with "farm" in its name (e.g. `Wheat_Farm`, `farm1`) triggered automatic farming duty and hijacked the companion's role to "farmer" against player orders.
+  - **Intent Disambiguation for Mapped Areas**: When a registered area name is detected in player chat, the system now distinguishes between guarding/standing vs farming. If the message contains guard, defend, protect, watch, patrol, stand, stay, hold, or sentry directives, or contains negative farming phrases (*"do no farm it"*, *"not a farmer"*, *"don't farm"*), the companion strictly anchors as a guard, preserves their guard/warrior role, and will **never** farm.
+  - **Area Name Keyword Sanitization**: `extractAndLearnFarmConfigFromPrompt` now strips all registered area names before checking for agricultural keywords. An area named `Wheat_Farm` or `tree_farm` will never falsely trigger agricultural farming just because the area's name contains `"farm"`.
+  - Added comprehensive negative farming phrases (`"do no farm"`, `"don't farm"`, `"not farm"`, `"not a farmer"`, `"no farm"`, `"never farm"`).
+
+---
+
 ## [1.2.10] - 2026-10-26
 
 ### Fixed

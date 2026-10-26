@@ -488,31 +488,48 @@ public class BotManager {
             return;
         }
 
-        // Check if player is assigning bot to a global area: "guard Compound" / "stay inside Base"
-        java.util.regex.Matcher areaMatcher = java.util.regex.Pattern.compile(
-                "(?:guard|patrol|stay\\s+(?:in|inside)|defend|hold|watch)\\s+(?:the\\s+)?([a-zA-Z0-9_-]+)",
-                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(requestText);
-        if (areaMatcher.find()) {
-            String candArea = areaMatcher.group(1).trim();
-            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(candArea);
-            if (area != null) {
-                bot.setAssignedArea(area.name);
-                bot.sayInChat("Understood! I am now guarding and holding the perimeter of '" + area.name + "' (" + area.type + "). I will strictly remain inside its borders!");
-                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-                BotPersistence.saveAll(server);
-                return;
+        // Check if player mentions any saved global area (e.g. Wheat_Farm, Base, Compound):
+        com.aicompanion.bot.area.SavedArea mentionedArea = null;
+        for (com.aicompanion.bot.area.SavedArea a : BotPersistence.getAllAreas().values()) {
+            if (cmdClean.contains(a.name.toLowerCase(Locale.ROOT)) || requestText.toLowerCase(Locale.ROOT).contains(a.name.toLowerCase(Locale.ROOT))) {
+                mentionedArea = a;
+                break;
             }
         }
 
-        // Check if player is assigning bot to farm a mapped area: "farm FarmZone", "harvest in Field1"
-        java.util.regex.Matcher farmAreaMatcher = java.util.regex.Pattern.compile(
-                "(?:farm|harvest|tend)\\s+(?:in\\s+|inside\\s+|the\\s+)?([a-zA-Z0-9_-]+)",
-                java.util.regex.Pattern.CASE_INSENSITIVE).matcher(requestText);
-        if (farmAreaMatcher.find()) {
-            String candArea = farmAreaMatcher.group(1).trim();
-            com.aicompanion.bot.area.SavedArea area = BotPersistence.getArea(candArea);
-            if (area != null) {
-                bot.configureFarmForSavedArea(area);
+        if (mentionedArea != null) {
+            String lowerReq = requestText.toLowerCase(Locale.ROOT);
+            boolean isGuardOrStand = lowerReq.contains("guard") || lowerReq.contains("defend")
+                    || lowerReq.contains("protect") || lowerReq.contains("sentry") || lowerReq.contains("watch")
+                    || lowerReq.contains("patrol") || lowerReq.contains("stand") || lowerReq.contains("stay")
+                    || lowerReq.contains("hold") || lowerReq.contains("camp") || lowerReq.contains("remain")
+                    || lowerReq.contains("not farm") || lowerReq.contains("do no farm") || lowerReq.contains("don't farm")
+                    || lowerReq.contains("dont farm") || lowerReq.contains("not a farmer") || lowerReq.contains("no farm")
+                    || lowerReq.contains("stop farm");
+
+            boolean isExplicitFarm = (lowerReq.contains("farm ") || lowerReq.contains("harvest ") || lowerReq.contains("tend ")
+                    || lowerReq.startsWith("farm") || lowerReq.startsWith("harvest") || lowerReq.startsWith("tend"))
+                    && !isGuardOrStand;
+
+            if (isGuardOrStand) {
+                bot.setAssignedArea(mentionedArea.name);
+                if (!bot.getBotRole().toLowerCase().contains("guard") && !bot.getBotRole().toLowerCase().contains("warrior")) {
+                    bot.setBotRole("guard");
+                }
+                BlockPos anchorPos = (speaker != null && mentionedArea.contains(speaker.blockPosition())) ? speaker.blockPosition() : bot.blockPosition();
+                double anchorRadius = Math.max(mentionedArea.getMaxX() - mentionedArea.getMinX(), mentionedArea.getMaxZ() - mentionedArea.getMinZ()) / 2.0;
+                bot.setGuardAnchor(anchorPos, anchorRadius);
+
+                if (lowerReq.contains("stay") || lowerReq.contains("stand") || lowerReq.contains("hold")) {
+                    bot.setAbsoluteTether(anchorPos, Math.max(4.0, Math.min(anchorRadius, 16.0)));
+                }
+
+                bot.sayInChat("Understood! Standing guard in '" + mentionedArea.name + "' (" + mentionedArea.type + "). I am on guard duty and will defend the area without farming!");
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            } else if (isExplicitFarm) {
+                bot.configureFarmForSavedArea(mentionedArea);
                 GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
                 BotPersistence.saveAll(server);
                 return;

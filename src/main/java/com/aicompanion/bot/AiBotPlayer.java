@@ -694,11 +694,23 @@ public class AiBotPlayer extends ServerPlayer {
         String lower = text.toLowerCase(Locale.ROOT);
         if (lower.contains("tree") || lower.contains("trees") || lower.contains("wood") || lower.contains("log") || lower.contains("logs")
                 || lower.contains("chop") || lower.contains("timber") || lower.contains("lumber")
-                || lower.contains("not farm") || lower.contains("not \"farm")) {
+                || lower.contains("guard") || lower.contains("defend") || lower.contains("protect") || lower.contains("sentry")
+                || lower.contains("watch") || lower.contains("patrol") || lower.contains("stand") || lower.contains("stay")
+                || lower.contains("hold") || lower.contains("camp") || lower.contains("remain")
+                || lower.contains("not farm") || lower.contains("do no farm") || lower.contains("don't farm")
+                || lower.contains("dont farm") || lower.contains("no farm") || lower.contains("not a farmer")
+                || lower.contains("never farm") || lower.contains("stop farm")) {
             return false;
         }
-        boolean mentionsFarm = lower.contains("farm") || lower.contains("harvest") || lower.contains("crop")
-                || lower.contains("plant") || lower.contains("replant") || lower.contains("till");
+
+        // Strip known area names so an area named "wheat_farm" doesn't trigger agricultural farm duty
+        String textWithoutAreaNames = lower;
+        for (com.aicompanion.bot.area.SavedArea a : BotPersistence.getAllAreas().values()) {
+            textWithoutAreaNames = textWithoutAreaNames.replace(a.name.toLowerCase(Locale.ROOT), "");
+        }
+
+        boolean mentionsFarm = textWithoutAreaNames.contains("farm") || textWithoutAreaNames.contains("harvest") || textWithoutAreaNames.contains("crop")
+                || textWithoutAreaNames.contains("plant") || textWithoutAreaNames.contains("replant") || textWithoutAreaNames.contains("till");
         if (!mentionsFarm) return false;
 
         com.aicompanion.bot.area.SavedArea foundArea = null;

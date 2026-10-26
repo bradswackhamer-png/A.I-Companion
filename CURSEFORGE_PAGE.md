@@ -22,7 +22,16 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
 
 ---
 
-### 🚪 Fence Gate Traversal, Passing-Through & Collision Fix *(New in v1.2.10)*
+### 🛡️ Area Guarding & Farming Intent Disambiguation *(New in v1.2.11)*
+* **Strict Guarding vs Farming Disambiguation**:
+  * Fixed an issue where ordering a companion to stand in or guard a mapped area containing "farm" in its name (e.g. `Wheat_Farm`) caused the companion to override their role to "farmer" and begin farming crops.
+  * When any mapped area is mentioned, the mod now checks player intent: directives containing guard, defend, protect, stand, stay, hold, or sentry (*"stay here in wheat_farm and guard it"*, *"stand in wheat_farm"*) assign the companion strictly as an area guard, holding position without farming.
+  * Area names are sanitized so naming an area `Wheat_Farm` or `tree_farm` will never trigger agricultural farming loops unless explicitly ordered to farm.
+  * Added robust recognition for negative farming instructions (*"do no farm it"*, *"not a farmer"*, *"don't farm"*).
+
+---
+
+### 🚪 Fence Gate Traversal, Passing-Through & Collision Fix *(v1.2.10)*
 * **Seamless Fence Gate Navigation**:
   * Fixed an issue where open fence gates were classified as solid fences because their identifier contained `"fence"`, causing companions to freeze in front of open gates.
   * Companions now push forward continuously through gates without their destination resetting to the center of the gate.
