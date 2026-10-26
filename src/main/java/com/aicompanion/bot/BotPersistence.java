@@ -158,6 +158,10 @@ public class BotPersistence {
         public double tetherRadius = 4.0;
         public boolean standingBy = false;
         public boolean absoluteCommandMode = false;
+        public boolean sentryMode = false;
+        public Integer sentryX = null;
+        public Integer sentryY = null;
+        public Integer sentryZ = null;
 
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
@@ -376,6 +380,16 @@ public class BotPersistence {
                 data.tetherRadius = bot.getTetherRadius();
                 data.standingBy = bot.isStandingBy();
                 data.absoluteCommandMode = bot.isAbsoluteCommandMode();
+                data.sentryMode = bot.isSentryMode();
+                if (bot.getSentryPos() != null) {
+                    data.sentryX = bot.getSentryPos().getX();
+                    data.sentryY = bot.getSentryPos().getY();
+                    data.sentryZ = bot.getSentryPos().getZ();
+                } else {
+                    data.sentryX = null;
+                    data.sentryY = null;
+                    data.sentryZ = null;
+                }
 
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.learnedMemories = bot.getLearnedMemories();
@@ -542,6 +556,9 @@ public class BotPersistence {
                     bot.setTetherRadius(data.tetherRadius > 0 ? data.tetherRadius : 4.0);
                     bot.setStandingBy(data.standingBy);
                     bot.setAbsoluteCommandMode(data.absoluteCommandMode);
+                    if (data.sentryMode && data.sentryX != null && data.sentryY != null && data.sentryZ != null) {
+                        bot.setSentryMode(true, new BlockPos(data.sentryX, data.sentryY, data.sentryZ));
+                    }
                     if (data.memory != null) {
                         GeminiService.setMemory(bot.getBotName(), data.memory);
                         for (String memLine : data.memory) {

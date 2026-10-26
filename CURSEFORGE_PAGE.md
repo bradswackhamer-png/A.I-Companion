@@ -22,7 +22,23 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
 
 ---
 
-### 🛢️ Crude Oil & Hazardous Fluid Avoidance *(New in v1.2.8)*
+### 🏹 Sentry Mode, Archery Engine & Strict Fence Combat *(New in v1.2.9)*
+* **Dedicated Sentry Mode (`/bot sentry [name]` or Chat `"sentry"`)**:
+  * Stations companions as stationary sentinels on watchtowers, fortress ramparts, roofs, or base perimeter walls.
+  * Sentry companions lock onto their exact post, continuously survey the surroundings in a smooth 360° panoramic scan, and snipe hostile monsters up to 48m away (56m if elevated) with pinpoint accuracy.
+  * Status and coordinates persist across server reboots via `BotPersistence`.
+* **Zero Fence-Hopping & Strict Perimeter Defense**:
+  * Upgraded 3D vertical column fence perception: companions inside fenced compounds will **never** open gates or jump fences to pursue distant monsters in the wilderness.
+  * Archers safely stay behind fence perimeters and fire arrows in parabolic trajectories over the fence at monsters outside.
+  * Melee guards hold ground inside the fence and attack over the fence only if enemies close into direct reach (<3m).
+* **Extended Archery Range & Infinite Fallback Reserve**:
+  * Archery range expanded up to 48m with enhanced gravity/arc compensation; companions stand ground and shoot instead of charging across 30 blocks of wilderness into melee.
+  * AI companions maintain an infinite standard arrow fallback reserve so bow users are never forced into swinging a bow as a club when out of inventory arrows.
+  * Auto-defend detection range for archers expanded up to 48m to immediately return fire against distant skeletons.
+
+---
+
+### 🛢️ Crude Oil & Hazardous Fluid Avoidance *(v1.2.8)*
 * **Lava-Grade Hazard Classification**:
   * Companions now treat all modded crude oil, fuel, petroleum, tar, diesel, acid, sludge, and toxic fluids as lethal hazards identical to molten lava.
   * Companions will **never** step into crude oil pools, walk through oil puddles, or choose bypass waypoints inside oil. They cleanly route along solid shorelines or detour around oil lakes.
@@ -290,6 +306,7 @@ You can speak to your companions directly in public chat:
 | `/bot hold [name]` | Tether nearest or named companion at current spot with a 4m perimeter |
 | `/bot tether <name> [radius]` | Leash companion to their post; defends with bow/melee without wandering |
 | `/bot untether <name>` | Release tether and resume normal autonomous duties |
+| `/bot sentry [name]` | Lock companion to post: stationary sniper scanning 360° up to 48m |
 | `/bot command <name> <order>` | Direct order override (follow, stop, hold, attack, resume) |
 | `/bot tp <name>` | Teleport companion to your position |
 | `/bot ask <name> <request>` | Send a direct task/question to a companion |

@@ -4,6 +4,33 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.9] - 2026-10-26
+
+### Added
+- **Dedicated Sentry Mode (`/bot sentry [name]` & Chat Trigger):**
+  - Added **Sentry Mode** allowing companions to be assigned as stationary sentinels on watchtowers, fortress walls, roofs, or base perimeters.
+  - Activated via `/bot sentry [name]`, `/bot command <name> sentry`, or natural chat phrasing (`"sentry"`, `"sentry mode"`, `"stand sentry"`, `"guard sentry"`, `"sentry duty"`, `"sniper mode"`, `"be a sentry"`, `"hold sentry"`).
+  - Sentry companions hold their exact post coordinates, continuously survey the surrounding area in a smooth 360° panoramic scan, and snipe approaching hostiles up to 48m away (56m if elevated) with pinpoint accuracy.
+  - Sentry mode status and coordinates are preserved across server restarts and world reloads via `BotPersistence`.
+- **Infinite Companion Archery Reserve & Extended Weapon Support:**
+  - Companions equipped with a bow or crossbow maintain a continuous archery reserve and will never be forced to charge into melee to club enemies with a bow due to missing inventory arrows.
+  - Compatible with vanilla bows, crossbows, and modded bows.
+
+### Fixed
+- **Fence Boundary Enforcement in Combat (No Fence Hopping or Gate Leaving):**
+  - Resolved an issue where eye-level line-of-sight ray checks traveled above 1.5m tall fence collision boxes, failing to register fences and leading companions to hop fences or open fence gates to chase monsters outside.
+  - Upgraded `isLineBlockedByFence` to evaluate 3D vertical columns across ground and foot elevations, accurately detecting fences, walls, and closed gates.
+  - During combat, sentry duty, or standby, companions strictly treat fences as impenetrable boundaries and will never open gates or jump fences to pursue enemies in the wilderness.
+- **Ranged Combat Over Fences (`canShootAtTarget`):**
+  - Archers stationed behind fences or on walls can now detect and fire arrows in parabolic arcs over fence perimeters at hostile targets outside while remaining in complete safety behind the fence.
+  - Melee-only guards hold their ground safely inside the fence; if a hostile approaches directly adjacent to the fence (within 3m), the guard attacks over the fence without opening the gate.
+- **Archery Engagement Distance & Bow Clubbing Fix:**
+  - Fixed an issue where archery distance was capped at 16 blocks (`distSq > 256.0`), causing companions holding bows to sprint across 30 blocks of wilderness towards skeletons and melee them with the bow frame.
+  - Archery combat now operates effectively from 4.5m up to 48m (56m in sentry mode). Archers stand ground and shoot, kite backwards if enemies close within 4.5m, and incorporate advanced parabolic trajectory elevation arc compensation.
+  - Auto-defend detection range for archers expanded up to 48m, ensuring companions immediately return fire when targeted by distant skeletons.
+
+---
+
 ## [1.2.8] - 2026-10-26
 
 ### Fixed

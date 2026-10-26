@@ -111,6 +111,11 @@ public class BotCommands {
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
                                 .executes(ctx -> untetherBot(ctx, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("sentry")
+                        .executes(BotCommands::sentryNearestBot)
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> sentrySpecificBot(ctx, StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("command")
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
@@ -835,6 +840,35 @@ public class BotCommands {
         return 1;
     }
 
+    private static int sentryNearestBot(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = null;
+        if (source.getEntity() instanceof ServerPlayer player) {
+            bot = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        } else if (!BotManager.getActiveBots().isEmpty()) {
+            bot = BotManager.getActiveBots().iterator().next();
+        }
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bots found nearby."));
+            return 0;
+        }
+        bot.setAbsoluteSentry();
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
+    private static int sentrySpecificBot(CommandContext<CommandSourceStack> ctx, String name) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(name);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + name + "' found."));
+            return 0;
+        }
+        bot.setAbsoluteSentry();
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
     private static int executeAbsoluteCommand(CommandContext<CommandSourceStack> ctx, String name, String order) {
         CommandSourceStack source = ctx.getSource();
         AiBotPlayer bot = BotManager.getBot(name);
@@ -1275,6 +1309,9 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot untether <name>")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Release tether and resume normal autonomous role duties").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot sentry [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Lock bot to post: stationary sniper scanning 360° up to 48m").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot command <name> <order>")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Direct order override (follow, stop, hold, attack, resume)").withStyle(ChatFormatting.GRAY)), false);

@@ -427,7 +427,17 @@ public class BotManager {
             return;
         }
 
-        // 4. Resume Autonomous: "resume", "continue", "back to work", "dismiss", "free roam"
+        // 4. Immediate Sentry Mode: "sentry", "sentry mode", "stand sentry", "guard sentry", "sentry duty", "sniper mode", "be a sentry"
+        if (cmdClean.equals("sentry") || cmdClean.equals("sentry mode") || cmdClean.equals("stand sentry")
+                || cmdClean.equals("guard sentry") || cmdClean.equals("sentry duty") || cmdClean.equals("sniper mode")
+                || cmdClean.equals("be a sentry") || cmdClean.equals("hold sentry") || cmdClean.equals("start sentry")) {
+            bot.setAbsoluteSentry();
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        // 5. Resume Autonomous: "resume", "continue", "back to work", "dismiss", "free roam"
         if (cmdClean.equals("resume") || cmdClean.equals("continue") || cmdClean.equals("back to work")
                 || cmdClean.equals("dismiss") || cmdClean.equals("free roam") || cmdClean.equals("carry on")) {
             bot.resumeAutonomous();

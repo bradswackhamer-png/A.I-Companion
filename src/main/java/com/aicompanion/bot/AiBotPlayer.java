@@ -85,6 +85,9 @@ import net.minecraft.server.network.CommonListenerCookie;
 import net.minecraft.server.network.ServerGamePacketListenerImpl;
 import net.minecraft.stats.Stat;
 import net.minecraft.util.Mth;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.Container;
 import net.minecraft.world.MenuProvider;
 import net.minecraft.world.damagesource.DamageSource;
@@ -251,6 +254,8 @@ public class AiBotPlayer extends ServerPlayer {
     private double tetherRadius = 4.0;
     private boolean standingBy = false;
     private boolean absoluteCommandMode = false;
+    private boolean sentryMode = false;
+    private @Nullable BlockPos sentryPos = null;
 
     // Village House Construction
     private @Nullable List<HouseBlueprint.VoxelStep> activeHouseQueue = null;
@@ -508,6 +513,13 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized void setStandingBy(boolean standby) { this.standingBy = standby; }
     public synchronized void setAbsoluteCommandMode(boolean active) { this.absoluteCommandMode = active; }
 
+    public synchronized boolean isSentryMode() { return this.sentryMode; }
+    public synchronized @Nullable BlockPos getSentryPos() { return this.sentryPos; }
+    public synchronized void setSentryMode(boolean active, @Nullable BlockPos pos) {
+        this.sentryMode = active;
+        this.sentryPos = pos;
+    }
+
     public synchronized void setAbsoluteFollow(ServerPlayer target) {
         this.actionQueue.clear();
         BotAction followAct = new BotAction("FOLLOW", target.getPlainTextName(), "", 2);
@@ -516,6 +528,8 @@ public class AiBotPlayer extends ServerPlayer {
         this.absoluteCommandMode = true;
         this.standingBy = false;
         this.tetherPos = null;
+        this.sentryMode = false;
+        this.sentryPos = null;
         this.currentCombatTargetId = -1;
         this.combatTargetEngageTicks = 0;
         this.setLastHurtByMob(null);
@@ -531,6 +545,8 @@ public class AiBotPlayer extends ServerPlayer {
         this.standingBy = true;
         this.tetherPos = pos;
         this.tetherRadius = radius > 0 ? radius : 4.0;
+        this.sentryMode = false;
+        this.sentryPos = null;
         this.currentCombatTargetId = -1;
         this.combatTargetEngageTicks = 0;
         this.setLastHurtByMob(null);
@@ -539,11 +555,31 @@ public class AiBotPlayer extends ServerPlayer {
         sayInChat("Holding position at (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ") with a " + (int)this.tetherRadius + "m tether. Standing by!");
     }
 
+    public synchronized void setAbsoluteSentry() {
+        this.actionQueue.clear();
+        this.currentAction = null;
+        this.absoluteCommandMode = true;
+        this.standingBy = true;
+        this.sentryMode = true;
+        this.sentryPos = this.blockPosition();
+        this.tetherPos = this.blockPosition();
+        this.tetherRadius = 2.0;
+        this.currentCombatTargetId = -1;
+        this.combatTargetEngageTicks = 0;
+        this.setLastHurtByMob(null);
+        if (this.isUsingItem()) this.stopUsingItem();
+        this.stopMovement();
+        equipBow();
+        sayInChat("Sentry Mode activated at (" + this.getBlockX() + ", " + this.getBlockY() + ", " + this.getBlockZ() + ")! Holding post and sniping all hostiles up to 48m away.");
+    }
+
     public synchronized void setAbsoluteStop() {
         this.actionQueue.clear();
         this.currentAction = null;
         this.absoluteCommandMode = true;
         this.standingBy = true;
+        this.sentryMode = false;
+        this.sentryPos = null;
         this.currentCombatTargetId = -1;
         this.combatTargetEngageTicks = 0;
         this.setLastHurtByMob(null);
@@ -558,6 +594,8 @@ public class AiBotPlayer extends ServerPlayer {
         this.absoluteCommandMode = false;
         this.standingBy = false;
         this.tetherPos = null;
+        this.sentryMode = false;
+        this.sentryPos = null;
         if (this.isUsingItem()) this.stopUsingItem();
         sayInChat("Resuming normal role behaviors and autonomous tasks.");
     }
@@ -1395,6 +1433,29 @@ public class AiBotPlayer extends ServerPlayer {
             vacuumNearbyDrops();
         }
 
+        // Sentry Mode: Hold exact post, 360-degree scan, and snipe all hostiles up to 48m away
+        if (this.sentryMode && this.sentryPos != null) {
+            Vec3 postCenter = Vec3.atCenterOf(this.sentryPos);
+            double distToPostSq = this.distanceToSqr(postCenter);
+            if (distToPostSq > 2.25) {
+                moveTowards(postCenter, true);
+                return;
+            }
+            Monster sentryThreat = findSentryTarget(48.0);
+            if (sentryThreat != null) {
+                engageTarget(sentryThreat);
+                return;
+            } else {
+                this.stopMovement();
+                equipBow();
+                float scanYaw = (this.tickCount * 2.5f) % 360.0f;
+                this.setYRot(scanYaw);
+                this.setYHeadRot(scanYaw);
+                this.setXRot(0.0f);
+                return;
+            }
+        }
+
         // Tether boundary enforcement: if tethered and outside tether radius, walk back to tether center immediately
         if (this.tetherPos != null) {
             Vec3 tetherCenter = Vec3.atCenterOf(this.tetherPos);
@@ -1410,10 +1471,11 @@ public class AiBotPlayer extends ServerPlayer {
         // Auto-defend if attacked by a monster
         if (BotConfig.AUTO_DEFEND.getAsBoolean() && this.getLastHurtByMob() != null && this.getLastHurtByMob().isAlive()) {
             LivingEntity attacker = this.getLastHurtByMob();
-            if (!(attacker instanceof Player) && this.distanceToSqr(attacker) < 64.0 && !this.unreachableMobBlacklist.containsKey(attacker.getId())) {
+            double maxDefendDistSq = hasBow() ? 2304.0 : 64.0;
+            if (!(attacker instanceof Player) && this.distanceToSqr(attacker) < maxDefendDistSq && !this.unreachableMobBlacklist.containsKey(attacker.getId())) {
                 if (this.tetherPos != null) {
                     double attackerDistToTetherSq = attacker.distanceToSqr(Vec3.atCenterOf(this.tetherPos));
-                    if (attackerDistToTetherSq > (this.tetherRadius * this.tetherRadius) && !hasBowAndArrows()) {
+                    if (attackerDistToTetherSq > (this.tetherRadius * this.tetherRadius) && !hasBow()) {
                         // Beyond tether radius and cannot shoot; remain at post
                         this.setLastHurtByMob(null);
                     } else {
@@ -1482,7 +1544,8 @@ public class AiBotPlayer extends ServerPlayer {
             if (threat != null) {
                 // Ensure monster is on our side of the fence and inside our guard perimeter
                 boolean threatInside = this.guardAnchorPos == null || threat.distanceToSqr(Vec3.atCenterOf(this.guardAnchorPos)) <= (maxDist * maxDist);
-                if (threatInside && !isLineBlockedByFence(this.getEyePosition(), threat.getEyePosition())) {
+                boolean fenceBlocked = isLineBlockedByFence(this.position(), threat.position());
+                if (threatInside && (!fenceBlocked || hasBow())) {
                     engageTarget(threat);
                     return;
                 }
@@ -1642,7 +1705,7 @@ public class AiBotPlayer extends ServerPlayer {
 
         // Defend guarded player from nearby provoked monsters
         if (BotConfig.AUTO_DEFEND.getAsBoolean()) {
-            Monster threat = findNearestProvokedThreatNear(target.blockPosition(), 8.0, target);
+            Monster threat = findNearestProvokedThreatNear(target.blockPosition(), hasBow() ? 32.0 : 8.0, target);
             if (threat != null) {
                 engageTarget(threat);
                 return false;
@@ -1714,7 +1777,7 @@ public class AiBotPlayer extends ServerPlayer {
         ServerPlayer guarded = findPlayer(action.getPrimaryTarget());
         BlockPos guardCenter = guarded != null ? guarded.blockPosition() : this.blockPosition();
 
-        Monster threat = findNearestProvokedThreatNear(guardCenter, 16.0, guarded);
+        Monster threat = findNearestProvokedThreatNear(guardCenter, hasBow() ? 36.0 : 16.0, guarded);
         if (threat != null) {
             engageTarget(threat);
             return false;
@@ -2373,8 +2436,10 @@ public class AiBotPlayer extends ServerPlayer {
         double horizDistSq = hdx * hdx + hdz * hdz;
         double vertDiff = Math.abs(target.getY() - this.getY());
 
-        // Timeout or underground spin check: if standing directly above/below a mob without line of sight, or unable to reach after 80 ticks (4s)
-        if ((horizDistSq < 3.5 && vertDiff > 2.5 && !this.hasLineOfSight(target)) || this.combatTargetEngageTicks > 80) {
+        // Timeout or underground spin check: if standing directly above/below a mob without line of sight, or unable to reach after 80 ticks (4s) for melee (or 240 ticks for archers)
+        boolean hasBow = hasBow();
+        int maxCombatEngageTicks = hasBow ? 240 : 80;
+        if ((horizDistSq < 3.5 && vertDiff > 2.5 && !this.hasLineOfSight(target)) || this.combatTargetEngageTicks > maxCombatEngageTicks) {
             this.unreachableMobBlacklist.put(target.getId(), this.tickCount + 200);
             this.currentCombatTargetId = -1;
             this.combatTargetEngageTicks = 0;
@@ -2387,9 +2452,9 @@ public class AiBotPlayer extends ServerPlayer {
 
         lookAtPos(target.getEyePosition());
 
-        // Archery vs Melee Decision
-        boolean canShootBow = hasBowAndArrows();
-        boolean preferBow = canShootBow && (distSq > 16.0 || !hasMeleeWeapon());
+        // Archery vs Melee Decision & Fence Boundary Enforcement
+        boolean fenceBetween = isLineBlockedByFence(this.position(), target.position());
+        boolean preferBow = hasBow && (distSq > 9.0 || !hasMeleeWeapon() || fenceBetween || this.sentryMode);
 
         if (preferBow) {
             if (this.isUsingItem() && this.getOffhandItem().is(Items.SHIELD)) {
@@ -2399,7 +2464,16 @@ public class AiBotPlayer extends ServerPlayer {
             lookAtPos(target.getEyePosition());
 
             // Archery positioning
-            if (this.tetherPos != null) {
+            if (this.sentryMode) {
+                if (this.sentryPos != null && this.distanceToSqr(Vec3.atCenterOf(this.sentryPos)) > 1.5) {
+                    moveTowards(Vec3.atCenterOf(this.sentryPos), true);
+                } else {
+                    stopMovement();
+                }
+            } else if (fenceBetween) {
+                // Strict Fence Boundary: never move towards target across a fence! Stay behind perimeter.
+                stopMovement();
+            } else if (this.tetherPos != null) {
                 Vec3 tetherCenter = Vec3.atCenterOf(this.tetherPos);
                 if (this.distanceToSqr(tetherCenter) > (this.tetherRadius * this.tetherRadius) * 0.8) {
                     moveTowards(tetherCenter, false);
@@ -2410,7 +2484,7 @@ public class AiBotPlayer extends ServerPlayer {
                 if (distSq < 20.25) {
                     Vec3 away = this.position().subtract(target.position()).normalize().scale(2.0);
                     moveTowards(this.position().add(away), false);
-                } else if (distSq > 256.0 || !this.hasLineOfSight(target)) {
+                } else if (distSq > 2304.0) {
                     moveTowards(target.position(), false);
                 } else {
                     stopMovement();
@@ -2423,18 +2497,19 @@ public class AiBotPlayer extends ServerPlayer {
             } else {
                 this.bowChargeTicks++;
                 if (this.bowChargeTicks >= 20) {
-                    if (this.hasLineOfSight(target)) {
+                    if (canShootAtTarget(target)) {
                         this.stopUsingItem();
                         Vec3 eyePos = this.getEyePosition(1.0F);
                         double dx = target.getX() - eyePos.x;
                         double horizDist = Math.sqrt(dx * dx + (target.getZ() - eyePos.z) * (target.getZ() - eyePos.z));
-                        double dy = (target.getY() + target.getEyeHeight() * 0.5) - eyePos.y + (horizDist * 0.045);
+                        double dy = (target.getY() + target.getEyeHeight() * 0.5) - eyePos.y + (horizDist * 0.055 + (horizDist * horizDist * 0.0012));
                         double dz = target.getZ() - eyePos.z;
 
                         ItemStack arrowStack = getArrowStackForFiring();
                         net.minecraft.world.entity.projectile.arrow.Arrow arrow =
                                 new net.minecraft.world.entity.projectile.arrow.Arrow(this.level(), this, arrowStack, this.getMainHandItem());
-                        arrow.shoot(dx, dy, dz, 2.8F, 1.0F);
+                        float inaccuracy = this.sentryMode ? 0.3F : 0.8F;
+                        arrow.shoot(dx, dy, dz, 2.9F, inaccuracy);
                         this.level().addFreshEntity(arrow);
                         this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
                                 net.minecraft.sounds.SoundEvents.ARROW_SHOOT,
@@ -2443,7 +2518,7 @@ public class AiBotPlayer extends ServerPlayer {
 
                         consumeArrow();
                         this.bowChargeTicks = 0;
-                        this.attackCooldown = 12;
+                        this.attackCooldown = 10;
                         this.combatTargetEngageTicks = 0;
                     }
                 }
@@ -2452,9 +2527,42 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         // If we were drawing a bow and target closed into melee range, stop bow draw
-        if (this.isUsingItem() && this.getMainHandItem().is(Items.BOW)) {
+        if (this.isUsingItem() && isBowItem(this.getMainHandItem())) {
             this.stopUsingItem();
             this.bowChargeTicks = 0;
+        }
+
+        // Fence boundary check for melee fighters: NEVER cross fences or open gates!
+        if (fenceBetween) {
+            if (distSq <= 9.0) {
+                // Adjacent across fence: hit over the fence
+                equipBestMeleeWeapon();
+                lookAtPos(target.getEyePosition());
+                if (this.attackCooldown <= 0) {
+                    broadcastSwing();
+                    this.attack(target);
+                    this.attackCooldown = 12;
+                }
+            } else {
+                stopMovement();
+            }
+            return;
+        }
+
+        // Sentry mode guard without bow: never leave post
+        if (this.sentryMode) {
+            if (distSq <= 9.0) {
+                equipBestMeleeWeapon();
+                lookAtPos(target.getEyePosition());
+                if (this.attackCooldown <= 0) {
+                    broadcastSwing();
+                    this.attack(target);
+                    this.attackCooldown = 12;
+                }
+            } else {
+                stopMovement();
+            }
+            return;
         }
 
         // 1. Tactical Shield Check (creeper explosions, skeleton bow drawing)
@@ -3815,13 +3923,41 @@ public class AiBotPlayer extends ServerPlayer {
 
     public boolean isLineBlockedByFence(Vec3 from, Vec3 to) {
         double dist = from.distanceTo(to);
-        if (dist < 1.0) return false;
-        int steps = (int) Math.ceil(dist);
-        Vec3 diff = to.subtract(from).normalize();
+        if (dist < 0.8) return false;
+        int steps = Math.max(2, (int) Math.ceil(dist * 2.0));
+        Vec3 diff = to.subtract(from);
+        double stepFrac = 1.0 / steps;
+
+        int minY = (int) Math.floor(Math.min(from.y, to.y)) - 2;
+        int maxY = (int) Math.ceil(Math.max(from.y, to.y)) + 1;
+
         for (int i = 1; i < steps; i++) {
-            BlockPos p = BlockPos.containing(from.add(diff.scale(i)));
-            BlockState st = this.level().getBlockState(p);
-            if (isFenceOrWall(st) && !isOpenDoorOrGate(st)) {
+            Vec3 sample = from.add(diff.scale(i * stepFrac));
+            int blockX = Mth.floor(sample.x);
+            int blockZ = Mth.floor(sample.z);
+            for (int y = minY; y <= maxY; y++) {
+                BlockPos p = new BlockPos(blockX, y, blockZ);
+                BlockState st = this.level().getBlockState(p);
+                if (isFenceOrWall(st) && !isOpenDoorOrGate(st)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    public boolean canShootAtTarget(LivingEntity target) {
+        if (!target.isAlive()) return false;
+        if (this.hasLineOfSight(target)) return true;
+
+        Vec3 eyePos = this.getEyePosition();
+        Vec3 targetEye = target.getEyePosition();
+        HitResult hit = this.level().clip(new ClipContext(eyePos, targetEye, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this));
+        if (hit.getType() == HitResult.Type.MISS) return true;
+        if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult bhr) {
+            BlockState hitState = this.level().getBlockState(bhr.getBlockPos());
+            if (isFenceOrWall(hitState)) {
+                // Obstruction is a fence or wall; since archer is elevated and fires in an arc, LoS is cleared for archery
                 return true;
             }
         }
@@ -4153,6 +4289,11 @@ public class AiBotPlayer extends ServerPlayer {
         // B. FENCE / WALL STRICT BOUNDARY CHECK:
         boolean isFenceBarrier = isFenceOrWall(frontFeetState) || isFenceOrWall(frontHeadState);
         if (isFenceBarrier) {
+            if (this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy) {
+                // In combat, sentry, or standby: never seek gates to leave fence perimeter!
+                this.stopMovement();
+                return;
+            }
             // NEVER pillar jump or place blocks to climb over fences/walls!
             // Seek an existing opening or fence gate along the perimeter.
             BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(feetPos, originalGoal, 24);
@@ -4308,6 +4449,11 @@ public class AiBotPlayer extends ServerPlayer {
 
         // 1. Line-of-sight Fence Boundary Check: If direct line to target is blocked by fence, route through gate/opening!
         if (isLineBlockedByFence(this.position(), target)) {
+            if (this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy) {
+                // In combat, sentry, or standby: never leave fence perimeter!
+                this.stopMovement();
+                return;
+            }
             if (this.activeBypassWaypoint == null) {
                 BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
                 if (gateOrOpening != null) {
@@ -4499,6 +4645,11 @@ public class AiBotPlayer extends ServerPlayer {
 
         if (isFenceBarrier) {
             this.setJumping(false);
+            if (this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy) {
+                // In combat, sentry, or standby: never leave fence perimeter!
+                this.stopMovement();
+                return;
+            }
             if (this.activeBypassWaypoint == null) {
                 BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
                 if (gateOrOpening != null) {
@@ -4577,21 +4728,24 @@ public class AiBotPlayer extends ServerPlayer {
         }
     }
 
+    public boolean isBowItem(ItemStack stack) {
+        if (stack == null || stack.isEmpty()) return false;
+        if (stack.getItem() instanceof net.minecraft.world.item.BowItem || stack.getItem() instanceof net.minecraft.world.item.CrossbowItem) return true;
+        String id = BuiltInRegistries.ITEM.getKey(stack.getItem()).getPath().toLowerCase();
+        return id.contains("bow");
+    }
+
     public boolean hasBow() {
-        if (this.getMainHandItem().is(Items.BOW) || this.getOffhandItem().is(Items.BOW)) return true;
+        if (isBowItem(this.getMainHandItem()) || isBowItem(this.getOffhandItem())) return true;
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
-            if (this.getInventory().getItem(i).is(Items.BOW)) return true;
+            if (isBowItem(this.getInventory().getItem(i))) return true;
         }
         return false;
     }
 
     public boolean hasArrows() {
-        if (this.isCreative()) return true;
-        for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
-            ItemStack stack = this.getInventory().getItem(i);
-            if (isArrowItem(stack)) return true;
-        }
-        return false;
+        // AI Companions with a bow always have infinite standard arrow reserve fallback
+        return true;
     }
 
     private boolean isArrowItem(ItemStack stack) {
@@ -4600,7 +4754,7 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public boolean hasBowAndArrows() {
-        return hasBow() && hasArrows();
+        return hasBow();
     }
 
     public boolean hasMeleeWeapon() {
@@ -4619,9 +4773,9 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void equipBow() {
-        if (this.getMainHandItem().is(Items.BOW)) return;
+        if (isBowItem(this.getMainHandItem())) return;
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
-            if (this.getInventory().getItem(i).is(Items.BOW)) {
+            if (isBowItem(this.getInventory().getItem(i))) {
                 swapToMainHand(i);
                 return;
             }
@@ -5226,9 +5380,13 @@ public class AiBotPlayer extends ServerPlayer {
 
     public @Nullable Monster findNearestProvokedThreatNear(BlockPos center, double radius, @Nullable ServerPlayer protectedPlayer) {
         AABB box = new AABB(center).inflate(radius, 6.0, radius);
+        boolean hasBow = hasBow();
         List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
             if (!isProvokedThreat(m, protectedPlayer)) return false;
-            if (isLineBlockedByFence(this.getEyePosition(), m.getEyePosition())) {
+            if (!hasBow && isLineBlockedByFence(this.position(), m.position())) {
+                return false;
+            }
+            if (hasBow && !canShootAtTarget(m)) {
                 return false;
             }
             return true;
@@ -5239,10 +5397,14 @@ public class AiBotPlayer extends ServerPlayer {
 
     private @Nullable Monster findNearestMonsterNear(BlockPos center, double radius) {
         AABB box = new AABB(center).inflate(radius, 6.0, radius);
+        boolean hasBow = hasBow();
         List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
             if (!isMobReachableAndValid(m)) return false;
-            // Ignore monsters separated by fences/walls
-            if (isLineBlockedByFence(this.getEyePosition(), m.getEyePosition())) {
+            // Ignore monsters separated by fences/walls unless archer
+            if (!hasBow && isLineBlockedByFence(this.position(), m.position())) {
+                return false;
+            }
+            if (hasBow && !canShootAtTarget(m)) {
                 return false;
             }
             return true;
@@ -5253,9 +5415,10 @@ public class AiBotPlayer extends ServerPlayer {
 
     private @Nullable LivingEntity findNearestTargetMob(String query, double radius) {
         AABB box = this.getBoundingBox().inflate(radius, 6.0, radius);
+        boolean hasBow = hasBow();
         List<LivingEntity> list = this.level().getEntitiesOfClass(LivingEntity.class, box, e -> {
             if (e == this || e instanceof Player || !isMobReachableAndValid(e)) return false;
-            if (this.guardAnchorPos != null && isLineBlockedByFence(this.getEyePosition(), e.getEyePosition())) {
+            if (!hasBow && isLineBlockedByFence(this.position(), e.position())) {
                 return false;
             }
             if (query.isEmpty() || "hostile".equals(query) || "monsters".equals(query) || "mobs".equals(query)) {
@@ -5266,6 +5429,26 @@ public class AiBotPlayer extends ServerPlayer {
         });
         list.sort(Comparator.comparingDouble(this::distanceToSqr));
         return list.isEmpty() ? null : list.get(0);
+    }
+
+    public @Nullable Monster findSentryTarget(double radius) {
+        AABB box = this.getBoundingBox().inflate(radius, 16.0, radius);
+        List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
+            if (!m.isAlive() || m.isSpectator()) return false;
+            if (this.unreachableMobBlacklist.containsKey(m.getId()) && this.tickCount < this.unreachableMobBlacklist.get(m.getId())) {
+                return false;
+            }
+            return canShootAtTarget(m);
+        });
+        if (monsters.isEmpty()) return null;
+        monsters.sort((m1, m2) -> {
+            boolean c1 = (m1 instanceof net.minecraft.world.entity.monster.Creeper c && c.getSwellDir() > 0);
+            boolean c2 = (m2 instanceof net.minecraft.world.entity.monster.Creeper c && c.getSwellDir() > 0);
+            if (c1 && !c2) return -1;
+            if (c2 && !c1) return 1;
+            return Double.compare(this.distanceToSqr(m1), this.distanceToSqr(m2));
+        });
+        return monsters.get(0);
     }
 
     private @Nullable ItemEntity findNearestDrop(double radius) {
