@@ -1,0 +1,274 @@
+# 🤖 Gemini AI Companion Bots (NeoForge 26.3)
+
+Bring your Minecraft world to life with **true autonomous AI companion players**! Powered by Google Gemini and an intelligent offline tactical engine, these companions don't just stand around — they walk, mine, craft, farm, breed animals, build houses with beds, defend your base with shields and jump-crits, operate locomotives and tractors, excavate pits, wear custom skins from your local folder, and chat naturally with you in multiplayer chat.
+
+Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
+
+---
+
+## ⚡ Zero Configuration Needed (Offline Tactical Engine)
+**No API key? No problem!** The mod features a built-in offline tactical decision engine. The moment you install the mod and spawn a companion, they can immediately:
+* Drop custom skins into `aicompanion/skins` for automatic role-themed dressing with Alex/Steve dual-layer support
+* Dig systematic layer-by-layer holes and pits on conversational demand (*"dig a hole here"*)
+* Mine specific block types within an anchored radius (*"mine all the stone in this 10 block area"*)
+* Dynamically analyze their environment when stuck, probing lateral paths around walls and escaping pits
+* Build complete village cottages, watchtowers, barns, and forges with doors, windows, torches, and beds
+* Open an interactive speedometer-style dashboard on right-click or **`B`** key
+* Guard your compound with shields and sprint-jump critical strikes
+* Enforce global boundary borders set with the **Surveyor Wand**
+* Farm crops, breed livestock, and operate trains and tractors
+
+*(Optional)* Want full conversational AI personality, banter, and contextual planning? Add a 100% free Google Gemini API key in 30 seconds!
+
+---
+
+### 🚪 Doorway Centering & Strict Fence Boundaries *(New in v1.2.6)*
+* **Smooth 1x2 Doorway Navigation**:
+  * Companions cleanly recognize open doors and gates as walk-through passageways rather than solid walls.
+  * Automatic shoulder micro-alignment centers the bot along the 1x2 doorway axis, preventing snagging on doorframes.
+  * Approaching closed wooden doors will automatically open them and politely close them behind after passing.
+* **Strict Fence Boundaries & Gate Routing**:
+  * Fences and stone walls are strictly preserved as impenetrable boundaries — companions will **never** replace fence blocks with dirt, place blocks on top of fences, or pillar-jump over them!
+  * When reaching livestock pens or fenced areas, companions automatically navigate to the nearest fence gate or existing opening, pass through, and close the gate behind to keep animals from escaping.
+
+---
+
+### ⚡ Offline Mode & API Key Control *(v1.2.5)*
+* **Force Offline Tactical Mode**:
+  * Run `/bot offline on` or `/bot offline true` to instantly force companions into 100% Offline Tactical Mode, even if an API key is present.
+  * Can also be configured directly in `config/aicompanion-common.toml` with `forceOffline = true`.
+* **Easy API Key Removal**:
+  * Run `/bot apikey clear` or `/bot apikey remove` to delete your personal API key immediately in-game.
+  * Run `/bot apikey clear all` (Admins/OPs) to wipe all player keys and server default keys.
+
+---
+
+## 🔑 How to Get a Free Gemini API Key in 30 Seconds
+Google provides free Gemini API access with **no credit card or billing required**:
+
+1. **Get your Key**: Go to **[https://aistudio.google.com/app/apikey](https://aistudio.google.com/app/apikey)** and sign in with your standard Google account.
+2. **Create Key**: Click the blue **"Create API Key"** button and copy the generated key.
+3. **Add in Minecraft**: Open chat and run:
+   ```text
+   /bot apikey YOUR_API_KEY_HERE
+   ```
+   *That's it! Your key is saved locally to your server/client configuration.*
+
+---
+
+## 🌟 Key Features
+
+### 🎭 1. Custom Skin Folder & Role-Themed Auto-Assignment *(New in v1.2)*
+* **Drop-In Skins Folder (`/aicompanion/skins`)**:
+  * Simply drop standard **64×64** or **64×32** `.png` Minecraft skins into the `aicompanion/skins` folder (in your game instance directory or config folder)!
+  * Auto-initializes the directory and generates a guide on first launch.
+* **Role Subfolders & Auto-Assignment**:
+  * Organize skins into role subdirectories (e.g. `/guard/`, `/builder/`, `/lumberjack/`, `/rancher/`, `/miner/`, `/farmer/`, `/conductor/`) or name them with role prefixes (e.g. `guard_knight.png`).
+  * When companions spawn with a role, they automatically select a matching skin from that role's category, rotating across variations so each worker/guard looks distinct!
+* **Exact Companion Name Match & Fallback Pool**:
+  * Name a skin file after a companion (e.g. `gemini.png` or `bob.png`) for instant 1:1 skin assignment.
+  * Any general or unassigned skins in the folder form an automatic fallback pool for companions.
+* **Dual Layering & Slim (Alex 3px) / Wide (Steve 4px) Support**:
+  * Full dual-layer rendering: outer accessory layers (hardhats, leather satchels, toolbelts, chaps, braids, fleece vests) render in high fidelity.
+  * Automatically detects Alex 3px slim arm models via alpha transparency or `_slim`/`alex` filename tags.
+* **In-Game Skin Commands**:
+  * `/bot skin list` — Lists all detected skins in the folder along with their detected model types.
+  * `/bot skin reload` — Hot-reloads all skin textures from disk in real-time without restarting Minecraft.
+  * `/bot skin set <botName> <skinName>` — Assigns a specific skin to a companion and persists across world restarts.
+
+### ⛏️ 2. Interactive Verbal Hole Digging & Systematic Excavation (`EXCAVATE`) *(New in v1.2)*
+* **Natural Conversational Follow-Up**:
+  * Tell your companion *"dig a hole"*, *"dig a hole here"*, *"excavate here"*, or *"dig here"*.
+  * The companion marks the exact ground block you are looking at (or standing on) with emerald villager and flame particles, walks over to the spot, and asks in chat:
+    > *"Marked starting point at (X, Y, Z)! How big and how deep should I dig from there? (e.g. '5x5 and 4 deep' or 'width 4 depth 6')"*
+  * Reply naturally without needing to repeat the bot's name (e.g., `"5x5 and 4 deep"`, `"4 by 4, 6 deep"`, `"width 4 depth 8"`, `"5x5"`, or `"4 deep"`).
+  * Say `"cancel"` to abort or `"start here"` to update the anchor point if you reposition.
+* **One-Shot Dimension Commands**:
+  * Include dimensions in your prompt (e.g. *"dig a 5x5 hole 4 deep here"*), and the companion immediately locks onto the spot and begins digging.
+* **Systematic Serpentine Layer-by-Layer Excavation**:
+  * Companions dig the volume systematically from the surface level down layer-by-layer (`dy = 0` down to `-(depth - 1)`).
+  * Automatically equips the optimal tool (shovel for dirt/gravel/sand, pickaxe for stone/ores), breaks blocks with true drops, and vacuums all excavated items directly into the companion's inventory.
+
+### 🎯 3. Radius-Constrained Block Type Mining *(New in v1.2)*
+* **Anchored Area Mining Commands**:
+  * Natural chat commands: *"mine all the stone in this 10 block area"*, *"mine all coal within 15 blocks"*, *"clear all the dirt in this 8 block area"*, or *"mine all the stone here"*.
+  * Locks the mining zone to the player's anchor point with the specified block radius.
+* **Top-Down & Exposed-Block Prioritization**:
+  * Mining systematically prioritizes **exposed surface blocks** and works from the **highest Y level down**, smoothly peeling blocks layer-by-layer.
+  * Distinguishes natural terrain (stone, deepslate, andesite, diorite, granite, tuff, dirt, ores) from player-placed building blocks.
+
+### 🧠 4. Intelligent Stuck Detection, Area Analysis & Dynamic Obstacle Bypass *(New in v1.2)*
+* **Distance-to-Goal Stagnation Tracking**:
+  * Companions measure forward progress toward their destination (`moveNoProgressTicks`). If unable to decrease distance to the goal over 16 ticks (~0.8s), they recognize that they are stuck and analyze their surroundings.
+* **Immediate Environmental Analysis (`analyzeAndExecuteUnstuckPlan`)**:
+  * **Hole & Trench Trap Analysis**: Checks surrounding blocks at chest/head level on 3+ sides. Probes for natural exit ramps or steps within 2 blocks (`findNearbyExitStep`). If trapped in a vertical pit ($\ge 2$ blocks deep) with no ramp, clears overhead obstructions with proper tools and executes a pillar jump (`executeHoleEscape()`).
+  * **Wall / Building / Cliff Bypass Probing**: Probes lateral rays left and right up to 8 blocks away to find the nearest corner or opening around obstacles, setting an intermediate **`activeBypassWaypoint`**.
+  * **Chasm / Deep Pit Rim Search**: When facing a wide drop-off ahead with no bridging materials, companions probe left and right along the rim to find contiguous ground or safe natural crossings.
+* **Seamless Intermediate Waypoint Routing**:
+  * Navigates directly toward `activeBypassWaypoint` until reached or timed out, then seamlessly resumes direct pathing to the original target.
+* **Eliminated Wall-Pillaring Bug**:
+  * Companions no longer place dirt pillars under their feet whenever they touch a building wall or room corner.
+
+### 📐 5. Subterranean Pit Support & Height Ranges *(New in v1.2)*
+* **Negative Height Pit Excavation**:
+  * `/bot area height <name> <height>` (and `/bot area cube`) accepts negative values (down to `-384`) to define subterranean pits and underground quarries.
+* **Two-Number Explicit Y Ranges**:
+  * Added syntax `/bot area height <name> <minY> <maxY>` to define cuboid volumes between two explicit world Y levels.
+
+### 🌟 6. Shader Bloom Fix on Companion Name Tags *(New in v1.2)*
+* **Iris & Complementary Shaders Bloom Fix**:
+  * Routes nametag rendering through standard non-emissive buffers, preventing blinding white glowing rectangles on shader packs and matching human player nametags perfectly.
+
+### 📊 7. Interactive Companion Dashboard & Speedometer HUD *(v1.1)*
+* **Right-Click or Press `B` Key**: Open any companion's full dashboard by right-clicking them or pressing **`B`** (configurable in Controls).
+* **Speedometer-Style Vital Gauges**: Clean color-coded health and hunger meters displaying real-time HP and food levels.
+* **Full Inventory & Gear Management**: 41 dedicated slots covering Helmet, Chestplate, Leggings, Boots, Off-hand (Shield/Torch), and 36-slot backpack with shift-click transfer support.
+* **One-Click Command Buttons**: Instantly order bots to `[Follow/Hold]`, `[Patrol]`, `[Build Cottage]`, `[Store in Chest]`, or `[Eat Rations]`.
+
+### 🗺️ 8. Global Waypoint & Area System with Surveyor Wand *(v1.1)*
+* **Surveyor Wand Tool (`/bot wand`)**:
+  * Right-click blocks to link perimeter corners with glowing laser particle fences (supports 2-corner diagonal boxes or multi-corner polygons).
+  * Sneak + Right-Click opens the **Area Configuration GUI** to name zones (`Compound`, `NorthFarm`) and select zone types (`COMPOUND`, `FARM`, `RANCH`, `SAFE_ZONE`, `RESTRICTED`).
+  * Craftable in survival with **1 Compass + 2 Sticks** diagonally on a crafting table.
+* **3D Cuboid Volume Extrusion (`/bot area height` / `/bot area cube`)**:
+  * Assign a vertical height or min/max Y range to any surveyed area.
+  * Instantly projects a 3D holographic wireframe volume with vertical corner beacons and upper/lower particle boundaries.
+* **Perimeter Confinement**: Assigned companions (`/bot area assign <bot> <area>` or chat *"guard Compound"*) are locked within borders; movement vectors automatically reflect back toward the zone center.
+* **AI Telemetry**: Real-time zone presence is automatically passed to Gemini AI prompts.
+
+### 📐 9. In-World Blueprint Scanner & Custom Builder Catalog *(v1.1)*
+* **Scan & Capture Any Building**:
+  * Run `/bot blueprint capture <areaName> <blueprintName>` to scan everything inside a 3D cubed area into a persistent blueprint.
+  * Records exact block IDs, rotation properties, and relative coordinates.
+  * Check material bills and dimensions anytime with `/bot blueprint info <blueprintName>`.
+* **Builder Bot Remakes**:
+  * Blueprints are instantly registered into the bot's building catalog!
+  * Tell any builder companion in chat: `"builder, build <blueprintName>"` or type `/bot build <bot> <blueprintName>`.
+  * The bot automatically rotates the structure to match their facing direction, clears the footprint, requisitions materials from workshop chests (crafting raw logs into planks if needed), and constructs the entire build block by block!
+
+### 🏠 10. Autonomous Architectural Builder & Expanded Catalog (`builder`) *(v1.1)*
+* **Multi-Archetype Architectural Catalog**:
+  * **Defensive Guard Watchtower ($5 \times 5$, 10 blocks tall)**: Multi-floor outpost with stone brick base, ladder climbing shaft, mid-floor guard deck, and open battlements with arrow slits for guards (`"build watchtower"` / `"build tower"`).
+  * **Farmhouse Barn & Granary ($9 \times 9$, high-vaulted ceiling)**: High vaulted plank roof, double barn doors (Macaw's Barn Doors compatible), decorative hay bales, and deposit chests for farmers (`"build barn"` / `"build granary"`).
+  * **Blacksmith Forge & Workshop ($7 \times 7$)**: Open-air industrial stone pavilion with chimney, Blast Furnace, standard Furnace, Crafting Table, and Anvil (`"build forge"` / `"build blacksmith"`).
+  * **Frontier Residential Cottage ($7 \times 7$)**: Starter home with foundation, log pillars, glass windows, wooden door, torch lighting, and bed (`"build house"` / `"build cottage"`).
+* **Autonomous Workshop Crafting & Supply Logistics**:
+  * Builders automatically scan workshop chests within 16 blocks of the construction site.
+  * If supplies run low, raw logs found in chests are autonomously crafted into wooden planks and sticks without manual player hand-feeding.
+* **Adaptive Modded Palette Engine**:
+  * Dynamically scans nearby storage and mod registries for Macaw's packs (`mcwdoors`, `mcwroofs`, `mcwwindows`, `mcwlights`, `mcwfurnitures`) and harmonizes matching wood themes across all structures.
+* **Village Housing Registry**: Automatically tracks completed houses and available beds to support future colony expansion.
+
+### ⚔️ 11. Tactical Combat Mastery & Squad Defense
+* **Sprint-Jump Critical Strikes**: Companions jump into melee range and strike at peak downward velocity to deal guaranteed critical hits with spark particles.
+* **Dynamic Shield Blocking**: Instantly raises off-hand shields when Creepers swell or Skeletons draw bows, absorbing damage before counter-attacking.
+* **Squad Distress Dispatch**: When non-combat workers (farmers, miners, lumberjacks) are attacked, they call out in chat; nearby Guard companions within 48 blocks rush to neutralize the threat.
+* **Reverse Mob A\* Pathfinding & Anti-Spin Targeting**: Companions utilize reverse pathfinding to navigate around cover toward mobs, vertical targeting is clamped within $\pm 6$ blocks with line-of-sight verification, and unreachable targets time out cleanly.
+
+### 🌾 12. Autonomous Farmer Role (`farmer`)
+* **Surveyor Wand Mapped Area Farming**: Tell your farmer `"farm it"`, `"farm this area"`, `"farm the area"`, or `"farm <name>"` — they automatically link to the mapped zone and systematically tend 100% of the area (e.g. $149\text{ m}^2$ plots) without skipping outer corners.
+* **Assignable Dimensions**: Specify arbitrary dimensions in chat (e.g. `"shawn, from this spot your farm is a 10x10 area"`).
+* **Strict Maturity Harvesting**: Only harvests **100% fully mature crops**, leaving growing plants untouched.
+* **Instant Replanting & Open Farmland Seeding**: Automatically replants harvested spots and plants empty tilled soil from inventory.
+* **Hoe Ground Tilling**: Equips hoes, tills untilled dirt/grass into farmland inside the zone, and immediately plants seeds.
+* **Multi-Chest Storage Logistics**: Automatically locates nearby single chests, double chests, and barrels. If a chest fills up during deposit, the farmer seamlessly switches to the next available container with free space.
+* **Perimeter Access**: Freely reaches perimeter and boundary fence chests within 24 blocks of the farm without hitting perimeter boundaries.
+
+### 🐄 13. Animal Husbandry & Ranching (`husbandry` / `rancher`)
+* **Autonomous Breeding**: Finds livestock in the ranch zone ready to mate and feeds them breeding food.
+* **Controlled Herd Culling**: Automatically manages animal populations when they exceed your stated limit without ever harming babies or dropping below your minimum threshold.
+* **Drop Collection**: Collects meat, leather, wool, and feathers and deposits them into storage chests.
+
+### 🚂 14. Train Conductor & Clean Dismount (`conductor` / `train`) (`miningtools` Integration)
+* **Locomotive Operation**: Automatically boards locomotives, manages fuel, controls throttle, and sounds whistles.
+* **Precision Distance Control**: Say `"move ahead 4 tiles"`, `"forward 10 blocks"`, or `"reverse 5 blocks"`.
+* **Rail Pathfinding**: Say `"come here"` or `"drive to me"` and the conductor rolls the train down tracks directly to you.
+* **Reliable Dismount & Anti-Reboard Protection**: Tell any companion riding a train to `"get out"`, `"dismount"`, `"get off"`, or `"exit"` — they cleanly dismount, cancel all train orders, restore their previous role, and step clear of tracks without any immediate re-boarding loops.
+* **Automated Freight Logistics**: Transports cargo between stations, loading and unloading chests autonomously.
+
+### 🚜 15. Tractor Automation (`tractor`) (`janemoose` Integration)
+* Companions mount and steer rideable tractors equipped with plows, seeders, and harvesters across farm fields.
+
+### 💾 16. Bulletproof World Persistence & Chunk Loading
+* **Persistent Chunk Tickets**: Companions keep their chunks loaded so they remain active even when human players are far away.
+* **Instant Client Rendering**: Immediate packet synchronization on player login eliminates invisible companion lag.
+
+---
+
+## 💬 Natural Chat Command Examples
+
+You can speak to your companions directly in public chat:
+
+* **Excavation & Hole Digging**:
+  > *"dig a hole here"* → Companion responds: *"Marked starting point at (X, Y, Z)! How big and how deep should I dig from there?"* → Reply: *"5x5 and 4 deep"*
+  > *"dig a 4x4 hole 6 deep here"*
+  > *"excavate here"*
+* **Radius-Constrained Mining**:
+  > *"mine all the stone in this 10 block area"*
+  > *"mine all coal within 15 blocks"*
+  > *"clear all the dirt in this 8 block area"*
+* **Building**:
+  > *"builder, build a house right here"*
+  > *"build a watchtower"*
+  > *"build a barn"*
+  > *"build a forge"*
+* **Areas & Guarding**:
+  > *"guard Compound"*
+  > *"stay inside Base and watch the perimeter"*
+* **Nicknames & Renaming**:
+  > *"assign nickname Charlie"*
+  > *"set your nickname to Bob"*
+  > *"your nickname is now Steve"*
+* **Farming (Whole Mapped Areas & Custom Dimensions)**:
+  > *"farm the area"* / *"farm this area"* / *"farm it"* (automatically farms full Surveyor Wand mapped zone)
+  > *"farm FarmZone"*
+  > *"shawn, from this spot ur farm land is 10x10 area, plant wheat and carrots, put ur harvest in the chest, only harvest 100% mature crop"*
+* **Husbandry**:
+  > *"james, breed cows with wheat, kill adult cows when amount is over 10, only kill adults never have less then 5 cows at anytime."*
+* **Trains**:
+  > *"conductor, move ahead 10 blocks"*
+  > *"drive to me"*
+  > *"stop train"*
+  > *"get out"* / *"dismount"* / *"get off the train"*
+
+---
+
+## 🎮 Slash Commands
+
+| Command | Description |
+| :--- | :--- |
+| `/bot spawn <name> [role]` | Spawn a new companion (`farmer`, `husbandry`, `guard`, `builder`, `miner`, `lumberjack`, `conductor`, `courier`) |
+| `/bot nickname [botName] <nickname>` | Assign an active nickname/alias to a companion (or nearest companion) |
+| `/bot rename [botName] <nickname>` | Alias for `/bot nickname` |
+| `/bot skin list` | List all detected skins in the `aicompanion/skins` folder and their model types |
+| `/bot skin reload` | Hot-reload all skin textures from disk in real-time |
+| `/bot skin set <botName> <skinName>` | Manually assign a specific skin to a companion (persisted across restarts) |
+| `/bot gui [name]` | Open the interactive Speedometer Dashboard & Inventory for a bot |
+| `/bot wand` | Obtain the Surveyor Wand for defining global boundary areas |
+| `/bot area list` | List all saved global areas and compound zones |
+| `/bot area height <name> <height\|minY> [maxY]` | Set 3D extrusion height (supports negative pits) or explicit min/max Y range |
+| `/bot area cube <name> <height\|minY> [maxY]` | Alias for `/bot area height` |
+| `/bot area show <name>` | Display glowing laser boundary particles around an area |
+| `/bot area assign <bot> <area>` | Confine a companion's patrol area strictly to a saved zone |
+| `/bot area remove <name>` | Delete a saved global area |
+| `/bot blueprint capture <area> <name>` | Scan in-world structure within a cubed area into a saved blueprint |
+| `/bot blueprint list` | List all custom saved blueprints |
+| `/bot blueprint info <name>` | View dimensions, block count, and material bill for a blueprint |
+| `/bot blueprint build <bot> <name>` | Order a builder companion to construct the blueprint |
+| `/bot remove <name>` | Despawn a companion |
+| `/bot list` | List all active companions and their current tasks |
+| `/bot status <name>` | View HP, hunger, farm/ranch zones, and inventory |
+| `/bot stop <name\|all>` | Stop all active bot tasks immediately |
+| `/bot tp <name>` | Teleport companion to your position |
+| `/bot ask <name> <request>` | Send a direct task/question to a companion |
+| `/bot apikey [key]` | View API key status or set your personal/server Gemini key |
+| `/bot waypoint <name>` | Save your current coordinates as a named bot waypoint |
+
+---
+
+## 📋 Technical Requirements
+* **Platform**: NeoForge 26.3
+* **Minecraft Version**: 26.3
+* **Java Version**: Java 25
+* **Side**: Both (Client & Server)
+* **License**: MIT

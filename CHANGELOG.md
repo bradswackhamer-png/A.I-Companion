@@ -4,6 +4,30 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.6] - 2026-10-25
+
+### Fixed
+- **1x2 Doorway Navigation & Passage Fix:**
+  - Fixed an issue where companions were unable to walk through 1x2 doorways when a door was present even if it was open.
+  - Updated `isPassable` and `isStandable` to correctly classify open doors (`DoorBlock.OPEN == true`), open gates, and hand-openable doors as walkable passageways rather than solid, impenetrable walls.
+  - Doorways are no longer misidentified as 2-block-tall solid walls (`isTallWall`), preventing the bot from refusing movement or triggering lateral exterior detour loops.
+  - Implemented doorway axis alignment and shoulder micro-centering so the companion's 0.6-wide bounding box aligns with the center of the 1x2 aperture without snagging on the doorframe or door leaf.
+  - Companions approaching closed wooden doors automatically open them and politely close them behind after passing through.
+
+- **Strict Fence Boundaries & Animal Pen Protection:**
+  - Resolved an issue where companions stuck against fences would destroy or replace fence blocks with dirt/building blocks and pillar-jump over them.
+  - Fences and stone walls are now treated as strict, impenetrable boundaries: companions will **never** pillar-jump over them, place blocks next to or on top of them, or break them.
+  - Hole escape pillaring is now strictly confined to true subterranean pits/trenches with solid 3-sided terrain, and explicitly refuses execution if standing on or next to fences or walls.
+  - Building block placement (`placeBuildingBlockAt`) completely rejects placing blocks onto, adjacent to, or above fence and wall blocks.
+
+### Changed
+- **Intelligent Gate & Fence Opening Routing:**
+  - When a companion's destination (such as cattle, sheep, crops, or players) is separated by a fence line, the companion automatically locates the nearest `FenceGateBlock` or existing opening in the fence perimeter within 24 blocks.
+  - Companions route to the gate, open the gate to enter or leave, and automatically close the gate behind them once through so livestock cannot escape.
+  - If a fenced pen has no gates or openings, the companion respects the perimeter and stands by cleanly without attempting to vault or damage the fence.
+
+---
+
 ## [1.2.5] - 2026-10-25
 
 ### ⚡ Offline Mode & API Key Management

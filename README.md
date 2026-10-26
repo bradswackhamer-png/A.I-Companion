@@ -31,6 +31,15 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
   * Run `/bot apikey clear` or `/bot apikey remove` to delete your personal API key immediately in-game.
   * Run `/bot apikey clear all` (Admins/OPs) to wipe all player keys and server default keys.
 
+### 🚪 Doorway Centering & Strict Fence Boundaries *(New in v1.2.6)*
+* **Smooth 1x2 Doorway Navigation**:
+  * Companions cleanly recognize open doors and gates as walk-through passageways rather than solid walls.
+  * Automatic shoulder micro-alignment centers the bot along the 1x2 doorway axis, preventing snagging on doorframes.
+  * Approaching closed wooden doors will automatically open them and politely close them behind after passing.
+* **Strict Fence Boundaries & Gate Routing**:
+  * Fences and stone walls are strictly preserved as impenetrable boundaries — companions will **never** replace fence blocks with dirt, place blocks on top of fences, or pillar-jump over them!
+  * When reaching livestock pens or fenced areas, companions automatically navigate to the nearest fence gate or existing opening, pass through, and close the gate behind to keep animals from escaping.
+
 ---
 
 ## 🔑 How to Get a Free Gemini API Key in 30 Seconds

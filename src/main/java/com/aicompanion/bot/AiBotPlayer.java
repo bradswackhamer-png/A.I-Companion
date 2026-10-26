@@ -231,6 +231,12 @@ public class AiBotPlayer extends ServerPlayer {
     private double bestMoveTargetDistSq = Double.MAX_VALUE;
     private int moveNoProgressTicks = 0;
 
+    // Doorway & Fence Gate Navigation
+    private @Nullable BlockPos lastOpenedDoorPos = null;
+    private int doorCloseTimer = 0;
+    private @Nullable BlockPos lastOpenedGatePos = null;
+    private int gateCloseTimer = 0;
+
     // Tactical Combat & Defense
     private int shieldBlockTicks = 0;
     private int lastDistressTick = 0;
@@ -1258,6 +1264,33 @@ public class AiBotPlayer extends ServerPlayer {
             this.shieldBlockTicks--;
             if (this.shieldBlockTicks <= 0 && this.isUsingItem() && this.getOffhandItem().is(Items.SHIELD)) {
                 this.stopUsingItem();
+            }
+        }
+
+        // Auto-close passed doors and gates
+        if (this.lastOpenedGatePos != null) {
+            this.gateCloseTimer--;
+            if (this.gateCloseTimer <= 0 || this.distanceToSqr(Vec3.atCenterOf(this.lastOpenedGatePos)) > 2.5) {
+                if (!this.blockPosition().equals(this.lastOpenedGatePos)) {
+                    BlockState gs = this.level().getBlockState(this.lastOpenedGatePos);
+                    if (gs.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && gs.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
+                        this.level().setBlockAndUpdate(this.lastOpenedGatePos, gs.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, false));
+                        this.level().playSound(null, this.lastOpenedGatePos, net.minecraft.sounds.SoundEvents.FENCE_GATE_CLOSE, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f);
+                    }
+                    this.lastOpenedGatePos = null;
+                }
+            }
+        }
+        if (this.lastOpenedDoorPos != null) {
+            this.doorCloseTimer--;
+            if (this.doorCloseTimer <= 0 || this.distanceToSqr(Vec3.atCenterOf(this.lastOpenedDoorPos)) > 3.0) {
+                if (!this.blockPosition().equals(this.lastOpenedDoorPos)) {
+                    BlockState ds = this.level().getBlockState(this.lastOpenedDoorPos);
+                    if (ds.getBlock() instanceof DoorBlock door && ds.getValue(DoorBlock.OPEN)) {
+                        door.setOpen(this, this.level(), ds, this.lastOpenedDoorPos, false);
+                    }
+                    this.lastOpenedDoorPos = null;
+                }
             }
         }
 
@@ -2344,7 +2377,12 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private boolean placeBuildingBlockAt(BlockPos pos) {
-        if (!this.level().getBlockState(pos).isAir() && !this.level().getBlockState(pos).canBeReplaced()) {
+        BlockState targetState = this.level().getBlockState(pos);
+        if (!targetState.isAir() && !targetState.canBeReplaced()) {
+            return false;
+        }
+        // Fences and walls are strict boundaries: NEVER replace or place blocks onto or above fences/walls!
+        if (isFenceOrWall(targetState) || isFenceOrWall(this.level().getBlockState(pos.below()))) {
             return false;
         }
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
@@ -3500,6 +3538,34 @@ public class AiBotPlayer extends ServerPlayer {
 
     // === MOVEMENT, NAVIGATION & UNSTUCK ENGINE ===
 
+    public boolean isOpenDoorOrGate(BlockState state) {
+        if (state == null || state.isAir()) return false;
+        if (state.getBlock() instanceof DoorBlock && state.hasProperty(DoorBlock.OPEN) && state.getValue(DoorBlock.OPEN)) {
+            return true;
+        }
+        if (state.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && state.hasProperty(net.minecraft.world.level.block.FenceGateBlock.OPEN) && state.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
+            return true;
+        }
+        if (state.getBlock() instanceof net.minecraft.world.level.block.TrapDoorBlock && state.hasProperty(net.minecraft.world.level.block.TrapDoorBlock.OPEN) && state.getValue(net.minecraft.world.level.block.TrapDoorBlock.OPEN)) {
+            return true;
+        }
+        return false;
+    }
+
+    public boolean isHandOpenableDoorOrGate(BlockState state) {
+        if (state == null || state.isAir()) return false;
+        if (state.getBlock() instanceof DoorBlock door) {
+            return door.type().canOpenByHand();
+        }
+        if (state.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
+            return true;
+        }
+        if (state.getBlock() instanceof net.minecraft.world.level.block.TrapDoorBlock) {
+            return !state.is(net.minecraft.world.level.block.Blocks.IRON_TRAPDOOR);
+        }
+        return false;
+    }
+
     public boolean isFenceOrWall(BlockState state) {
         if (state == null || state.isAir()) return false;
         if (state.is(net.minecraft.tags.BlockTags.FENCES) || state.is(net.minecraft.tags.BlockTags.WALLS)) return true;
@@ -3516,11 +3582,67 @@ public class AiBotPlayer extends ServerPlayer {
         Vec3 diff = to.subtract(from).normalize();
         for (int i = 1; i < steps; i++) {
             BlockPos p = BlockPos.containing(from.add(diff.scale(i)));
-            if (isFenceOrWall(this.level().getBlockState(p))) {
+            BlockState st = this.level().getBlockState(p);
+            if (isFenceOrWall(st) && !isOpenDoorOrGate(st)) {
                 return true;
             }
         }
         return false;
+    }
+
+    public @Nullable BlockPos findNearbyFenceOpeningOrGate(BlockPos start, Vec3 goal, int radius) {
+        BlockPos bestPos = null;
+        double bestScore = Double.MAX_VALUE;
+
+        int minY = Math.max(this.level().getMinY(), start.getY() - 2);
+        int maxY = Math.min(this.level().getMaxY(), start.getY() + 3);
+
+        for (int dx = -radius; dx <= radius; dx++) {
+            for (int dz = -radius; dz <= radius; dz++) {
+                for (int y = minY; y <= maxY; y++) {
+                    BlockPos p = new BlockPos(start.getX() + dx, y, start.getZ() + dz);
+                    BlockState state = this.level().getBlockState(p);
+
+                    // Candidate 1: Fence Gate (passageway in fence perimeter)
+                    if (state.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
+                        BlockState below = this.level().getBlockState(p.below());
+                        BlockState above = this.level().getBlockState(p.above());
+                        if (!below.isAir() && (above.isAir() || isPassable(p.above()))) {
+                            double distToBot = Math.sqrt(start.distSqr(p));
+                            double distToGoal = Math.sqrt(Vec3.atBottomCenterOf(p).distanceToSqr(goal));
+                            double score = distToBot + distToGoal * 0.7;
+                            if (score < bestScore) {
+                                bestScore = score;
+                                bestPos = p;
+                            }
+                        }
+                    }
+                    // Candidate 2: Existing Opening / Gap in the fence line
+                    else if (isPassable(p) && isPassable(p.above())) {
+                        BlockState below = this.level().getBlockState(p.below());
+                        if (!below.isAir() && !below.canBeReplaced() && !isFenceOrWall(below)) {
+                            boolean adjacentToFence = false;
+                            for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+                                if (isFenceOrWall(this.level().getBlockState(p.relative(d)))) {
+                                    adjacentToFence = true;
+                                    break;
+                                }
+                            }
+                            if (adjacentToFence) {
+                                double distToBot = Math.sqrt(start.distSqr(p));
+                                double distToGoal = Math.sqrt(Vec3.atBottomCenterOf(p).distanceToSqr(goal));
+                                double score = distToBot + distToGoal * 0.85;
+                                if (score < bestScore) {
+                                    bestScore = score;
+                                    bestPos = p;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return bestPos;
     }
 
     private final java.util.Set<BlockPos> learnedHazardPits = new java.util.HashSet<>();
@@ -3558,7 +3680,12 @@ public class AiBotPlayer extends ServerPlayer {
 
     private boolean isPassable(BlockPos pos) {
         BlockState state = this.level().getBlockState(pos);
-        return state.isAir() || state.canBeReplaced();
+        if (state.isAir() || state.canBeReplaced()) return true;
+        if (isOpenDoorOrGate(state) || isHandOpenableDoorOrGate(state)) return true;
+        try {
+            if (state.getCollisionShape(this.level(), pos).isEmpty()) return true;
+        } catch (Exception ignored) {}
+        return false;
     }
 
     private boolean isStandable(BlockPos pos) {
@@ -3619,12 +3746,12 @@ public class AiBotPlayer extends ServerPlayer {
         for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
             BlockPos wallHead = feet.relative(d).above();
             BlockState hs = this.level().getBlockState(wallHead);
-            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs)) {
+            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs) && !isOpenDoorOrGate(hs)) {
                 solidHeadNeighbors++;
             }
             BlockPos wallFeet = feet.relative(d);
             BlockState fs = this.level().getBlockState(wallFeet);
-            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs)) {
+            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs) && !isOpenDoorOrGate(fs)) {
                 solidFeetNeighbors++;
             }
         }
@@ -3632,12 +3759,20 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void executeHoleEscape() {
+        if (!isEnclosedInHole()) {
+            return;
+        }
         BlockPos feetPos = this.blockPosition();
+        BlockState feetState = this.level().getBlockState(feetPos);
+        BlockState belowState = this.level().getBlockState(feetPos.below());
+        if (isFenceOrWall(feetState) || isFenceOrWall(belowState)) {
+            return; // Strict boundary: Never place blocks on or climb over fences!
+        }
         BlockPos aboveHead = feetPos.above(2);
 
-        // 1. Break block directly above head if obstructed
+        // 1. Break block directly above head if obstructed (never fences)
         BlockState aboveHeadState = this.level().getBlockState(aboveHead);
-        if (!aboveHeadState.isAir() && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0 && aboveHeadState.getDestroySpeed(this.level(), aboveHead) < 15.0f) {
+        if (!aboveHeadState.isAir() && !isFenceOrWall(aboveHeadState) && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0 && aboveHeadState.getDestroySpeed(this.level(), aboveHead) < 15.0f) {
             equipBestToolFor(aboveHeadState);
             this.level().destroyBlock(aboveHead, true, this);
             broadcastSwing();
@@ -3649,18 +3784,20 @@ public class AiBotPlayer extends ServerPlayer {
         this.setDeltaMovement(0, 0.42, 0);
 
         if (!placeBuildingBlockAt(feetPos)) {
-            // Survival fallback: place dirt so companion is never permanently trapped
-            this.level().setBlockAndUpdate(feetPos, Blocks.DIRT.defaultBlockState());
+            // Survival fallback: ONLY place dirt if truly in a deep pit and feetPos is air/replaceable (never fences!)
+            if ((feetState.isAir() || feetState.canBeReplaced()) && !isFenceOrWall(feetState) && !isFenceOrWall(belowState)) {
+                this.level().setBlockAndUpdate(feetPos, Blocks.DIRT.defaultBlockState());
+            }
         }
 
         this.level().playSound(null, feetPos, net.minecraft.sounds.SoundEvents.STONE_PLACE, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f);
         this.level().sendParticles(ParticleTypes.HAPPY_VILLAGER, feetPos.getX() + 0.5, feetPos.getY() + 1.2, feetPos.getZ() + 0.5, 6, 0.2, 0.2, 0.2, 0.05);
 
-        // 3. Clear step in front so we can walk forward onto the next level
+        // 3. Clear step in front so we can walk forward onto the next level (never fences)
         net.minecraft.core.Direction dir = this.getDirection();
         BlockPos frontHead = feetPos.relative(dir).above(2);
         BlockState frontHeadState = this.level().getBlockState(frontHead);
-        if (!frontHeadState.isAir() && frontHeadState.getDestroySpeed(this.level(), frontHead) >= 0 && frontHeadState.getDestroySpeed(this.level(), frontHead) < 15.0f) {
+        if (!frontHeadState.isAir() && !isFenceOrWall(frontHeadState) && frontHeadState.getDestroySpeed(this.level(), frontHead) >= 0 && frontHeadState.getDestroySpeed(this.level(), frontHead) < 15.0f) {
             equipBestToolFor(frontHeadState);
             this.level().destroyBlock(frontHead, true, this);
             broadcastSwing();
@@ -3716,16 +3853,48 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        // 2. ANALYZE FOR WALL / BUILDING / CLIFF OBSTACLE:
+        // 2. ANALYZE FOR WALL / BUILDING / CLIFF / FENCE OBSTACLE:
         net.minecraft.core.Direction dir = this.getDirection();
         BlockPos frontFeet = feetPos.relative(dir);
         BlockPos frontHead = frontFeet.above();
         BlockState frontFeetState = this.level().getBlockState(frontFeet);
         BlockState frontHeadState = this.level().getBlockState(frontHead);
 
-        boolean isBlockedInFront = (!frontFeetState.isAir() && !frontFeetState.canBeReplaced())
-                || (!frontHeadState.isAir() && !frontHeadState.canBeReplaced())
-                || isFenceOrWall(frontFeetState);
+        // A. DOORWAY CHECK: If standing before a 1x2 doorway with a door (open or closed):
+        boolean isDoorInFront = (frontFeetState.getBlock() instanceof DoorBlock) || (frontHeadState.getBlock() instanceof DoorBlock);
+        if (isDoorInFront) {
+            BlockPos doorPos = (frontFeetState.getBlock() instanceof DoorBlock) ? frontFeet : frontHead;
+            BlockState ds = this.level().getBlockState(doorPos);
+            if (ds.getBlock() instanceof DoorBlock door && door.type().canOpenByHand() && !ds.getValue(DoorBlock.OPEN)) {
+                door.setOpen(this, this.level(), ds, doorPos, true);
+                this.lastOpenedDoorPos = doorPos;
+                this.doorCloseTimer = 40;
+            }
+            this.activeBypassWaypoint = Vec3.atBottomCenterOf(doorPos);
+            this.bypassWaypointTicks = 30;
+            return;
+        }
+
+        // B. FENCE / WALL STRICT BOUNDARY CHECK:
+        boolean isFenceBarrier = isFenceOrWall(frontFeetState) || isFenceOrWall(frontHeadState);
+        if (isFenceBarrier) {
+            // NEVER pillar jump or place blocks to climb over fences/walls!
+            // Seek an existing opening or fence gate along the perimeter.
+            BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(feetPos, originalGoal, 24);
+            if (gateOrOpening != null) {
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening);
+                this.bypassWaypointTicks = 60;
+                this.level().sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 4, 0.2, 0.2, 0.2, 0.05);
+                return;
+            } else {
+                // Strict boundary: stop movement without damaging or jumping fences
+                this.stopMovement();
+                return;
+            }
+        }
+
+        boolean isBlockedInFront = (!isPassable(frontFeet) && !isDoorInFront)
+                || (!isPassable(frontHead) && !isDoorInFront);
 
         if (isBlockedInFront || this.horizontalCollision) {
             net.minecraft.core.Direction leftDir = dir.getCounterClockWise();
@@ -3788,15 +3957,6 @@ public class AiBotPlayer extends ServerPlayer {
                 this.activeBypassWaypoint = Vec3.atBottomCenterOf(bestBypass);
                 this.bypassWaypointTicks = 50;
                 this.level().sendParticles(ParticleTypes.CLOUD, this.getX(), this.getY() + 1.2, this.getZ(), 4, 0.2, 0.2, 0.2, 0.02);
-                return;
-            }
-
-            // If lateral search found no way around within 8 blocks:
-            // Check if it's a 1-2 block barrier (e.g. fence or low wall) and target is elevated or on the other side
-            BlockState headAboveState = this.level().getBlockState(frontHead.above());
-            boolean isLowBarrier = headAboveState.isAir() || headAboveState.canBeReplaced();
-            if (isLowBarrier && originalGoal.y >= this.getY() - 0.5) {
-                executeHoleEscape(); // Pillar over the low barrier
                 return;
             }
 
@@ -3871,6 +4031,17 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        // 1. Line-of-sight Fence Boundary Check: If direct line to target is blocked by fence, route through gate/opening!
+        if (isLineBlockedByFence(this.position(), target)) {
+            if (this.activeBypassWaypoint == null) {
+                BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
+                if (gateOrOpening != null) {
+                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening);
+                    this.bypassWaypointTicks = 80;
+                }
+            }
+        }
+
         // Stagnation & Distance-to-Goal Progress Tracking
         double distToGoalSq = this.position().distanceToSqr(target);
         if (this.lastMoveTarget == null || target.distanceToSqr(this.lastMoveTarget) > 2.25) {
@@ -3905,23 +4076,81 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        // 2. 1x2 Doorway Navigation & Shoulder Alignment:
+        BlockPos currentFeet = this.blockPosition();
+        net.minecraft.core.Direction dir = this.getDirection();
+        BlockPos frontPos = currentFeet.relative(dir);
+        BlockState frontState = this.level().getBlockState(frontPos);
+
+        BlockPos doorwayPos = null;
+        if (frontState.getBlock() instanceof DoorBlock) {
+            doorwayPos = frontPos;
+        } else if (this.level().getBlockState(currentFeet).getBlock() instanceof DoorBlock) {
+            doorwayPos = currentFeet;
+        } else {
+            for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+                BlockPos adj = currentFeet.relative(d);
+                if (this.level().getBlockState(adj).getBlock() instanceof DoorBlock) {
+                    if (this.distanceToSqr(Vec3.atBottomCenterOf(adj)) < 2.0) {
+                        doorwayPos = adj;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (doorwayPos != null) {
+            BlockState ds = this.level().getBlockState(doorwayPos);
+            if (ds.getBlock() instanceof DoorBlock door) {
+                // Open wooden door if closed
+                if (!ds.getValue(DoorBlock.OPEN) && door.type().canOpenByHand()) {
+                    door.setOpen(this, this.level(), ds, doorwayPos, true);
+                    this.lastOpenedDoorPos = doorwayPos;
+                    this.doorCloseTimer = 40;
+                }
+
+                // Centering: Guide bot through center of the 1x2 doorway
+                Vec3 doorCenter = Vec3.atBottomCenterOf(doorwayPos);
+                double distToDoorSq = this.distanceToSqr(doorCenter);
+                if (distToDoorSq > 0.04 && distToDoorSq < 3.24) {
+                    target = doorCenter;
+                    double nudgeX = (doorCenter.x - this.getX()) * 0.25;
+                    double nudgeZ = (doorCenter.z - this.getZ()) * 0.25;
+                    Vec3 mot = this.getDeltaMovement();
+                    this.setDeltaMovement(mot.x + nudgeX, mot.y, mot.z + nudgeZ);
+                }
+            }
+        }
+
+        // 3. Fence Gate Interaction:
+        BlockPos gatePos = null;
+        if (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
+            gatePos = frontPos;
+        } else if (this.level().getBlockState(currentFeet).getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
+            gatePos = currentFeet;
+        }
+        if (gatePos != null) {
+            BlockState gs = this.level().getBlockState(gatePos);
+            if (gs.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && !gs.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
+                this.level().setBlockAndUpdate(gatePos, gs.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, true));
+                this.level().playSound(null, gatePos, net.minecraft.sounds.SoundEvents.FENCE_GATE_OPEN, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f);
+                this.lastOpenedGatePos = gatePos;
+                this.gateCloseTimer = 35;
+            }
+            Vec3 gateCenter = Vec3.atBottomCenterOf(gatePos);
+            if (this.distanceToSqr(gateCenter) > 0.04 && this.distanceToSqr(gateCenter) < 3.24) {
+                target = gateCenter;
+                double nudgeX = (gateCenter.x - this.getX()) * 0.25;
+                double nudgeZ = (gateCenter.z - this.getZ()) * 0.25;
+                Vec3 mot = this.getDeltaMovement();
+                this.setDeltaMovement(mot.x + nudgeX, mot.y, mot.z + nudgeZ);
+            }
+        }
+
         lookAtPos(new Vec3(target.x, target.y + this.getEyeHeight(), target.z));
         this.setSprinting(sprint);
         this.zza = sprint ? 1.0f : 0.8f;
         this.xxa = 0.0f;
-
-        net.minecraft.core.Direction dir = this.getDirection();
-        BlockPos frontPos = this.blockPosition().relative(dir);
-        BlockState frontState = this.level().getBlockState(frontPos);
-
-        // Open wooden doors & fence gates in front of bot
-        if (frontState.getBlock() instanceof DoorBlock door && !frontState.getValue(DoorBlock.OPEN)) {
-            door.setOpen(this, this.level(), frontState, frontPos, true);
-        } else if (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && !frontState.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
-            if (this.guardAnchorPos == null) {
-                this.level().setBlockAndUpdate(frontPos, frontState.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, true));
-            }
-        }
 
         boolean isExcavating = this.currentAction != null && "EXCAVATE".equals(this.currentAction.getNormalizedType());
 
@@ -3975,16 +4204,17 @@ public class AiBotPlayer extends ServerPlayer {
         BlockPos headFront = frontPos.above();
         BlockState headState = this.level().getBlockState(headFront);
         boolean isFenceBarrier = isFenceOrWall(frontState) || isFenceOrWall(headState);
-        boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier;
+        boolean isDoorway = (frontState.getBlock() instanceof DoorBlock) || (headState.getBlock() instanceof DoorBlock)
+                || isOpenDoorOrGate(frontState) || isOpenDoorOrGate(headState);
+        boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier && !isDoorway;
 
-        // Jump over 1-block ledges or swim in water/lava (Never jump at 2-block tall solid walls!)
-        // Only jump onto an elevated block if target is at or above our elevation, or if physically obstructed
-        boolean stepUpPossible = !frontState.isAir() && headState.isAir() && this.level().getBlockState(headFront.above()).isAir() && !isFenceBarrier;
+        // Jump over 1-block ledges or swim in water/lava (Never jump at 2-block tall solid walls or fences!)
+        boolean stepUpPossible = !frontState.isAir() && headState.isAir() && this.level().getBlockState(headFront.above()).isAir() && !isFenceBarrier && !isDoorway;
         boolean wantsToAscend = target.y > this.getY() - 0.2;
         boolean shouldJump = ((stepUpPossible && (wantsToAscend || this.horizontalCollision))
-                || (this.horizontalCollision && !isTallWall)
-                || this.isInWater() || this.isInLava()) && !isFenceBarrier;
-        if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier) {
+                || (this.horizontalCollision && !isTallWall && !isFenceBarrier)
+                || this.isInWater() || this.isInLava()) && !isFenceBarrier && !isDoorway;
+        if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier && !isDoorway) {
             shouldJump = true;
         }
         this.setJumping(shouldJump);
@@ -3994,16 +4224,23 @@ public class AiBotPlayer extends ServerPlayer {
 
         if (isFenceBarrier) {
             this.setJumping(false);
+            if (this.activeBypassWaypoint == null) {
+                BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
+                if (gateOrOpening != null) {
+                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening);
+                    this.bypassWaypointTicks = 80;
+                    return;
+                }
+            }
             if (this.guardAnchorPos != null) {
-                // Anchored inside compound: turn around and steer toward anchor center
                 lookAtPos(Vec3.atCenterOf(this.guardAnchorPos));
                 this.zza = 0.5f;
                 this.xxa = 0.0f;
                 return;
             } else {
-                // Steer sideways along the fence
-                this.xxa = ((this.tickCount / 20) % 2 == 0) ? 0.8f : -0.8f;
-                this.zza = 0.2f;
+                // Respect fence boundary: stop!
+                this.stopMovement();
+                return;
             }
         }
 
