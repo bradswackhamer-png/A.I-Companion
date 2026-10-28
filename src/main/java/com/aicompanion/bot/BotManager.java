@@ -393,54 +393,141 @@ public class BotManager {
         }
         String speakerName = speaker != null ? speaker.getPlainTextName() : "Admin";
 
+        String rawLower = requestText.toLowerCase(Locale.ROOT).trim();
+        boolean hasICommand = rawLower.startsWith("i command") || rawLower.contains(" i command");
+
         String cmdClean = bot.stripBotReference(requestText).toLowerCase().replaceAll("[,!?:;.]", " ").replaceAll("\\s+", " ").trim();
 
-        // 1. Immediate Follow (Absolute Mode): "come here", "come to me", "follow me", "follow", "to me", "regroup", "on me"
-        if (speaker != null && (cmdClean.equals("come here") || cmdClean.equals("come") || cmdClean.equals("come to me")
-                || cmdClean.equals("follow me") || cmdClean.equals("follow") || cmdClean.equals("to me")
-                || cmdClean.equals("regroup") || cmdClean.equals("on me") || cmdClean.startsWith("come here")
-                || cmdClean.startsWith("follow me") || cmdClean.equals("get over here"))) {
-            bot.setAbsoluteFollow(speaker);
-            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-            BotPersistence.saveAll(server);
-            return;
+        // 1. If player explicitly prefixed request with "i command":
+        if (hasICommand) {
+            String orderPart = rawLower.replaceAll(".*\\bi\\s+command(?:\\s+you)?(?:\\s+to)?(?:\\s+that)?[:]?", "").trim();
+            String orderClean = bot.stripBotReference(orderPart).toLowerCase().replaceAll("[,!?:;.]", " ").replaceAll("\\s+", " ").trim();
+
+            if (orderClean.equals("stop") || orderClean.equals("halt") || orderClean.equals("cancel")
+                    || orderClean.equals("pause") || orderClean.equals("freeze") || orderClean.equals("stop it")
+                    || orderClean.equals("stop all") || orderClean.equals("standby")) {
+                bot.setAbsoluteStop();
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+
+            if (speaker != null && (orderClean.equals("come here") || orderClean.equals("come") || orderClean.equals("come to me")
+                    || orderClean.equals("follow me") || orderClean.equals("follow") || orderClean.equals("to me")
+                    || orderClean.equals("regroup") || orderClean.equals("on me") || orderClean.startsWith("come here")
+                    || orderClean.startsWith("follow me") || orderClean.equals("get over here"))) {
+                bot.setAbsoluteFollow(speaker);
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+
+            if (orderClean.equals("stay here") || orderClean.equals("stand here") || orderClean.equals("stay")
+                    || orderClean.equals("stand") || orderClean.equals("wait here") || orderClean.equals("hold position")
+                    || orderClean.equals("hold ground") || orderClean.equals("hold here") || orderClean.equals("camp here")
+                    || orderClean.equals("stand by") || orderClean.equals("wait")) {
+                bot.setAbsoluteTether(bot.blockPosition(), 4.0);
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+
+            if (orderClean.equals("sentry") || orderClean.equals("sentry mode") || orderClean.equals("stand sentry")
+                    || orderClean.equals("guard sentry") || orderClean.equals("sentry duty") || orderClean.equals("sniper mode")
+                    || orderClean.equals("be a sentry") || orderClean.equals("hold sentry") || orderClean.equals("start sentry")) {
+                bot.setAbsoluteSentry();
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+
+            // Other tasks prefixed with "i command" place the bot in Absolute Command Mode
+            bot.setAbsoluteCommandMode(true);
+        } else {
+            // Normal (Non-Absolute) Controls:
+            // Immediate Stop: only triggers on standalone stop/halt/cancel words (NOT "stop combining...", "stop farming...")
+            if (cmdClean.equals("stop") || cmdClean.equals("halt") || cmdClean.equals("cancel")
+                    || cmdClean.equals("pause") || cmdClean.equals("freeze") || cmdClean.equals("stop it")
+                    || cmdClean.equals("stop all") || cmdClean.equals("stop current task") || cmdClean.equals("stop working")) {
+                bot.clearActions();
+                bot.stopMovement();
+                bot.setStandingBy(false);
+                bot.setAbsoluteCommandMode(false);
+                bot.sayInChat("Stopped current tasks.");
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+
+            // Normal Follow (without locking into Absolute Mode)
+            if (speaker != null && (cmdClean.equals("come here") || cmdClean.equals("come") || cmdClean.equals("come to me")
+                    || cmdClean.equals("follow me") || cmdClean.equals("follow") || cmdClean.equals("to me")
+                    || cmdClean.equals("regroup") || cmdClean.equals("on me") || cmdClean.startsWith("come here")
+                    || cmdClean.startsWith("follow me") || cmdClean.equals("get over here"))) {
+                bot.clearActions();
+                BotAction followAct = new BotAction("FOLLOW", speaker.getPlainTextName(), "", 2);
+                followAct.distance = 2.5;
+                bot.setActionPlan(List.of(followAct));
+                bot.setAbsoluteCommandMode(false);
+                bot.setStandingBy(false);
+                bot.setTetherPos(null);
+                bot.setSentryMode(false, null);
+                bot.sayInChat("Following you, " + speaker.getPlainTextName() + "!");
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+
+            // Normal Hold / Stay / Tether
+            if (cmdClean.equals("stay here") || cmdClean.equals("stand here") || cmdClean.equals("stay")
+                    || cmdClean.equals("stand") || cmdClean.equals("wait here") || cmdClean.equals("hold position")
+                    || cmdClean.equals("hold ground") || cmdClean.equals("hold here") || cmdClean.equals("camp here")
+                    || cmdClean.equals("standby") || cmdClean.equals("stand by") || cmdClean.equals("wait")) {
+                bot.clearActions();
+                bot.setAbsoluteCommandMode(false);
+                bot.setStandingBy(true);
+                bot.setTetherPos(bot.blockPosition());
+                bot.setTetherRadius(4.0);
+                bot.sayInChat("Holding position at (" + bot.getBlockX() + ", " + bot.getBlockY() + ", " + bot.getBlockZ() + ") with a 4m tether.");
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
+
+            // Normal Sentry Mode
+            if (cmdClean.equals("sentry") || cmdClean.equals("sentry mode") || cmdClean.equals("stand sentry")
+                    || cmdClean.equals("guard sentry") || cmdClean.equals("sentry duty") || cmdClean.equals("sniper mode")
+                    || cmdClean.equals("be a sentry") || cmdClean.equals("hold sentry") || cmdClean.equals("start sentry")) {
+                bot.clearActions();
+                bot.setAbsoluteCommandMode(false);
+                bot.setStandingBy(true);
+                bot.setSentryMode(true, bot.blockPosition());
+                bot.setTetherPos(bot.blockPosition());
+                bot.setTetherRadius(2.0);
+                bot.equipBow();
+                bot.sayInChat("Sentry Mode activated at (" + bot.getBlockX() + ", " + bot.getBlockY() + ", " + bot.getBlockZ() + ")!");
+                GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+                BotPersistence.saveAll(server);
+                return;
+            }
         }
 
-        // 2. Immediate Stop (Absolute Mode): "stop", "halt", "cancel", "pause", "freeze", "cease"
-        if (cmdClean.equals("stop") || cmdClean.equals("halt") || cmdClean.equals("cancel")
-                || cmdClean.equals("pause") || cmdClean.equals("freeze") || cmdClean.equals("stop it")
-                || cmdClean.equals("stop all") || cmdClean.startsWith("stop ")) {
-            bot.setAbsoluteStop();
-            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-            BotPersistence.saveAll(server);
-            return;
-        }
-
-        // 3. Immediate Hold / Stay / Tether: "stay here", "stand here", "wait here", "hold position", "camp here"
-        if (cmdClean.equals("stay here") || cmdClean.equals("stand here") || cmdClean.equals("stay")
-                || cmdClean.equals("stand") || cmdClean.equals("wait here") || cmdClean.equals("hold position")
-                || cmdClean.equals("hold ground") || cmdClean.equals("hold here") || cmdClean.equals("camp here")
-                || cmdClean.equals("standby") || cmdClean.equals("stand by") || cmdClean.equals("wait")) {
-            bot.setAbsoluteTether(bot.blockPosition(), 4.0);
-            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-            BotPersistence.saveAll(server);
-            return;
-        }
-
-        // 4. Immediate Sentry Mode: "sentry", "sentry mode", "stand sentry", "guard sentry", "sentry duty", "sniper mode", "be a sentry"
-        if (cmdClean.equals("sentry") || cmdClean.equals("sentry mode") || cmdClean.equals("stand sentry")
-                || cmdClean.equals("guard sentry") || cmdClean.equals("sentry duty") || cmdClean.equals("sniper mode")
-                || cmdClean.equals("be a sentry") || cmdClean.equals("hold sentry") || cmdClean.equals("start sentry")) {
-            bot.setAbsoluteSentry();
-            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
-            BotPersistence.saveAll(server);
-            return;
-        }
-
-        // 5. Resume Autonomous: "resume", "continue", "back to work", "dismiss", "free roam"
+        // Resume Autonomous: "resume", "continue", "back to work", "dismiss", "free roam"
         if (cmdClean.equals("resume") || cmdClean.equals("continue") || cmdClean.equals("back to work")
                 || cmdClean.equals("dismiss") || cmdClean.equals("free roam") || cmdClean.equals("carry on")) {
             bot.resumeAutonomous();
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.handleHousingChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.handleRoleChatCommand(requestText, speaker)) {
             GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
             BotPersistence.saveAll(server);
             return;

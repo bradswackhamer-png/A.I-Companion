@@ -92,6 +92,32 @@ public class AiCompanionMod {
                     event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
                     return;
                 }
+                if (bot.getBotRole().toLowerCase().contains("villager") && held.is(net.minecraft.world.item.Items.EMERALD)) {
+                    if (!player.isCreative()) {
+                        held.shrink(1);
+                    }
+                    bot.getInventory().add(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.EMERALD, 1));
+                    net.minecraft.world.item.ItemStack tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.BREAD, 4);
+                    if (bot.countMatching(s -> s.is(net.minecraft.world.item.Items.WHEAT)) >= 6) {
+                        bot.consumeMatching(s -> s.is(net.minecraft.world.item.Items.WHEAT), 6);
+                    } else if (bot.countMatching(s -> s.is(net.minecraft.world.item.Items.BREAD)) >= 4) {
+                        bot.consumeMatching(s -> s.is(net.minecraft.world.item.Items.BREAD), 4);
+                    }
+                    player.getInventory().add(tradeReward);
+                    bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                            net.minecraft.sounds.SoundEvents.VILLAGER_YES,
+                            net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
+                    bot.sayInChat("Hmm! Pleasure trading with you, " + player.getPlainTextName() + "! [Trade: 1 Emerald -> 4 Bread]");
+                    BotPersistence.saveAll(player.level().getServer());
+                    event.setCanceled(true);
+                    event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+                    return;
+                }
+                if (bot.getBotRole().toLowerCase().contains("villager")) {
+                    bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                            net.minecraft.sounds.SoundEvents.VILLAGER_AMBIENT,
+                            net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
+                }
                 bot.openCompanionGui(player);
             }
             event.setCanceled(true);

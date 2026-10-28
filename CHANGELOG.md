@@ -4,6 +4,43 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.12] - 2026-10-28
+
+### Added
+- **"Villager" Role & 100% Vanilla Villager Simulation:**
+  - Added new role `"villager"`. When set to this role, companions fully emulate vanilla villager behavior and schedules while retaining all companion capabilities (chat, memory, status, and role-switching).
+  - **Daily Schedule & Workstations**: Villagers stroll around their home in early morning, work at assigned workstations during work hours (2000-9000 ticks) producing job site sounds (composter filling, page turning, blast furnace crackle, smithing hammering) and green sparkles (`HAPPY_VILLAGER`), gather at bells or with other companions in the afternoon (9000-11500 ticks) to socialize and gossip, and return home in the evening.
+  - **Panic & Flee Reactions**: Villager companions flee in panic from hostile monsters (zombies, drowneds, illagers), sprint towards safety or their house, and ring nearby village bells to alert defenders.
+  - **Emerald Trading**: Right-clicking a villager companion with Emeralds initiates authentic villager trading (1 emerald for 4 bread or items), accompanied by cheerful villager trade audio.
+- **Housing & Bed Assignment (`/bot bed`, `/bot house`) with Nocturnal Sleep:**
+  - **Bed Assignment**: Assign personal beds via `/bot bed assign <name> [pos]` or chat (*"this is your bed"*, *"assign bed"*, *"claim this bed"*). Companions remember their bed location across restarts.
+  - **House Assignment**: Assign home houses via `/bot house assign <name> [areaName]` or chat (*"this is your house"*, *"set home"*, *"house Cottage"*).
+  - **Nocturnal Shelter & Sleep**: Unless commanded otherwise, companions automatically pathfind to their bed and sleep until morning (`startSleeping` and wake at AM dawn). If no bed is found, they shelter inside their assigned house or covered roofing.
+  - **Night Shelter Controls**: Toggle nocturnal sleep via `/bot shelter <name> [true|false]` or chat (*"night watch"*, *"stay awake"*, *"seek shelter at night"*).
+- **Villager-Style Colony Breeding Logic:**
+  - When hunger is good (food level >= 16 and holding breeding food), safe (no hostile threats within 16m, healthy), and total beds in a 100x100 block area exceed current bot population (`beds >= bots + 1`), companions can breed.
+  - Consumes 3 raw wheat (or bread/carrots), emits heart particles (`HEART`), plays level-up and happy villager sounds, and spawns a newborn companion with a friendly random name and the `"villager"` role.
+  - Newborn automatically claims the vacant bed in the colony.
+- **Dynamic Role Management & Farm Commands:**
+  - Added `/bot role <name> <role>` and chat command (*"you are now a [role]"*, *"change role to [role]"*) allowing seamless role switching back and forth at any time.
+  - Added `/bot farm autohay <name> [true|false]` to toggle automatic wheat-to-hay compaction.
+
+### Changed
+- **Absolute Command Mode Gated by "i command":**
+  - Absolute Command Mode is now strictly gated and only activated when a player explicitly prefaces their request with *"i command"* (e.g. *"i command you to follow me"*, *"i command stop"*, *"i command stay here"*) or uses `/bot command <name> <order>`.
+  - Standard chat instructions without *"i command"* run with normal companion priority without locking into Absolute Mode.
+
+### Fixed
+- **Wheat-to-Hay Auto-Compaction & Negation Fix:**
+  - Resolved an issue where asking a companion to *"stop combining the wheat into haybales"* triggered `autoCompactWheatToHay = true` and crafted all wheat into hay bales.
+  - Added negative intent detection (*"stop"*, *"don't"*, *"keep wheat as wheat"*, *"need wheat as wheat to breed with"*), disabling auto-compaction so players can save raw wheat for breeding.
+  - Added support for uncrafting existing hay bales back into 9x raw wheat upon player request (*"uncraft hay"*, *"turn hay back into wheat"*).
+- **"stop something" Absolute Mode Hijack Fix:**
+  - Fixed `cmdClean.startsWith("stop ")` in `BotManager` which previously intercepted any command starting with "stop " (e.g. *"stop combining wheat"*, *"stop mining"*) and put the companion into Absolute Standby Mode.
+  - Standalone stop words (*"stop"*, *"halt"*, *"cancel"*) now stop current actions cleanly without entering Absolute Mode unless preceded by *"i command"*.
+
+---
+
 ## [1.2.11] - 2026-10-26
 
 ### Fixed

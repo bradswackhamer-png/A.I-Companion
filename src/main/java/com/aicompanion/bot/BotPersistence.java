@@ -163,6 +163,17 @@ public class BotPersistence {
         public Integer sentryY = null;
         public Integer sentryZ = null;
 
+        // Bed, House & Night Shelter configuration
+        public Integer bedX = null;
+        public Integer bedY = null;
+        public Integer bedZ = null;
+        public Integer houseX = null;
+        public Integer houseY = null;
+        public Integer houseZ = null;
+        public String houseAreaName = "";
+        public boolean nightShelterEnabled = true;
+        public long lastBreedingTime = 0L;
+
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
         public List<String> learnedMemories = new ArrayList<>();
@@ -391,6 +402,30 @@ public class BotPersistence {
                     data.sentryZ = null;
                 }
 
+                if (bot.getAssignedBedPos() != null) {
+                    data.bedX = bot.getAssignedBedPos().getX();
+                    data.bedY = bot.getAssignedBedPos().getY();
+                    data.bedZ = bot.getAssignedBedPos().getZ();
+                } else {
+                    data.bedX = null;
+                    data.bedY = null;
+                    data.bedZ = null;
+                }
+
+                if (bot.getAssignedHousePos() != null) {
+                    data.houseX = bot.getAssignedHousePos().getX();
+                    data.houseY = bot.getAssignedHousePos().getY();
+                    data.houseZ = bot.getAssignedHousePos().getZ();
+                } else {
+                    data.houseX = null;
+                    data.houseY = null;
+                    data.houseZ = null;
+                }
+
+                data.houseAreaName = bot.getAssignedHouseAreaName() != null ? bot.getAssignedHouseAreaName() : "";
+                data.nightShelterEnabled = bot.isNightShelterEnabled();
+                data.lastBreedingTime = bot.getLastBreedingTime();
+
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.learnedMemories = bot.getLearnedMemories();
                 data.learnedRecipes = bot.getLearnedRecipes();
@@ -559,6 +594,17 @@ public class BotPersistence {
                     if (data.sentryMode && data.sentryX != null && data.sentryY != null && data.sentryZ != null) {
                         bot.setSentryMode(true, new BlockPos(data.sentryX, data.sentryY, data.sentryZ));
                     }
+                    if (data.bedX != null && data.bedY != null && data.bedZ != null) {
+                        bot.setAssignedBedPos(new BlockPos(data.bedX, data.bedY, data.bedZ));
+                    }
+                    if (data.houseX != null && data.houseY != null && data.houseZ != null) {
+                        bot.setAssignedHousePos(new BlockPos(data.houseX, data.houseY, data.houseZ));
+                    }
+                    if (data.houseAreaName != null && !data.houseAreaName.isBlank()) {
+                        bot.setAssignedHouseAreaName(data.houseAreaName);
+                    }
+                    bot.setNightShelterEnabled(data.nightShelterEnabled);
+                    bot.setLastBreedingTime(data.lastBreedingTime);
                     if (data.memory != null) {
                         GeminiService.setMemory(bot.getBotName(), data.memory);
                         for (String memLine : data.memory) {

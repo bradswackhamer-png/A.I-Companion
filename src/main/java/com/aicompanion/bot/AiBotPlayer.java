@@ -122,6 +122,11 @@ import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.biome.Biome;
 import net.minecraft.core.Holder;
+import net.minecraft.world.level.block.BedBlock;
+import net.minecraft.world.level.block.state.properties.BedPart;
+import net.minecraft.world.entity.ai.village.poi.PoiManager;
+import net.minecraft.world.entity.ai.village.poi.PoiTypes;
+import java.util.Collections;
 import java.util.Queue;
 import java.util.ArrayDeque;
 import java.util.HashSet;
@@ -254,6 +259,14 @@ public class AiBotPlayer extends ServerPlayer {
     private double tetherRadius = 4.0;
     private boolean standingBy = false;
     private boolean absoluteCommandMode = false;
+
+    // Bed, House & Night Shelter configuration
+    private @Nullable BlockPos assignedBedPos = null;
+    private @Nullable BlockPos assignedHousePos = null;
+    private @Nullable String assignedHouseAreaName = null;
+    private boolean nightShelterEnabled = true;
+    private long lastBreedingTime = 0L;
+    private long lastVillagerAmbientSoundTime = 0L;
     private boolean sentryMode = false;
     private @Nullable BlockPos sentryPos = null;
 
@@ -519,6 +532,17 @@ public class AiBotPlayer extends ServerPlayer {
         this.sentryMode = active;
         this.sentryPos = pos;
     }
+
+    public synchronized @Nullable BlockPos getAssignedBedPos() { return this.assignedBedPos; }
+    public synchronized void setAssignedBedPos(@Nullable BlockPos pos) { this.assignedBedPos = pos; }
+    public synchronized @Nullable BlockPos getAssignedHousePos() { return this.assignedHousePos; }
+    public synchronized void setAssignedHousePos(@Nullable BlockPos pos) { this.assignedHousePos = pos; }
+    public synchronized @Nullable String getAssignedHouseAreaName() { return this.assignedHouseAreaName; }
+    public synchronized void setAssignedHouseAreaName(@Nullable String name) { this.assignedHouseAreaName = name; }
+    public synchronized boolean isNightShelterEnabled() { return this.nightShelterEnabled; }
+    public synchronized void setNightShelterEnabled(boolean enabled) { this.nightShelterEnabled = enabled; }
+    public synchronized long getLastBreedingTime() { return this.lastBreedingTime; }
+    public synchronized void setLastBreedingTime(long time) { this.lastBreedingTime = time; }
 
     public synchronized void setAbsoluteFollow(ServerPlayer target) {
         this.actionQueue.clear();
@@ -1265,6 +1289,10 @@ public class AiBotPlayer extends ServerPlayer {
             this.getInventory().add(new ItemStack(Items.IRON_HELMET, 1));
             this.getInventory().add(new ItemStack(Items.BREAD, 16));
             this.autoEquipArmor();
+        } else if (r.contains("villager")) {
+            this.getInventory().add(new ItemStack(Items.EMERALD, 4));
+            this.getInventory().add(new ItemStack(Items.BREAD, 6));
+            this.getInventory().add(new ItemStack(Items.WHEAT, 6));
         }
     }
 
@@ -1547,6 +1575,17 @@ public class AiBotPlayer extends ServerPlayer {
         }
         String r = this.botRole.toLowerCase();
 
+        // Night Shelter & Bed Sleeping: Unless told otherwise, seek shelter and bed at night until AM
+        boolean isGuardRole = r.contains("guard") || r.contains("bodyguard") || r.contains("warrior");
+        boolean shouldSeekShelter = this.nightShelterEnabled && (this.assignedBedPos != null || !isGuardRole);
+        if (shouldSeekShelter && (isNightTime() || this.level().isThundering())) {
+            if (tickNightShelterAndSleep()) {
+                return;
+            }
+        } else if (this.isSleeping()) {
+            this.stopSleepInBed(false, true);
+        }
+
         // 1. Guard / Bodyguard: Automatically patrol compound / anchor or follow player, intercepting nearby monsters (never jumping fences!)
         if (r.contains("guard") || r.contains("bodyguard") || r.contains("warrior")) {
             BlockPos guardCenter = this.guardAnchorPos != null ? this.guardAnchorPos : this.blockPosition();
@@ -1640,6 +1679,12 @@ public class AiBotPlayer extends ServerPlayer {
         // 6. Lumberjack: Automatically locate trees in lumber zone, fell whole trees, replant saplings, vacuum drops, and store in chest
         if (r.contains("lumber") || r.contains("wood") || this.lumberjackAreaActive) {
             tickPassiveLumberjack();
+            return;
+        }
+
+        // 7. Villager: 100% vanilla villager routine (workstation, gathering/breeding, panic/flee, bed)
+        if (r.contains("villager")) {
+            tickPassiveVillager();
             return;
         }
 
@@ -2263,6 +2308,21 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
         return crafted;
+    }
+
+    public int uncompactHayInInventory() {
+        int hayCount = countMatching(s -> s.is(Items.HAY_BLOCK));
+        if (hayCount <= 0) return 0;
+        int uncrafted = 0;
+        for (int i = 0; i < hayCount; i++) {
+            if (consumeMatching(s -> s.is(Items.HAY_BLOCK), 1)) {
+                giveToSelf(new ItemStack(Items.WHEAT, 9));
+                uncrafted++;
+            } else {
+                break;
+            }
+        }
+        return uncrafted;
     }
 
     public boolean canCraftLearnedRecipe(LearnedRecipe recipe) {
@@ -4759,7 +4819,7 @@ public class AiBotPlayer extends ServerPlayer {
         }
     }
 
-    private void stopMovement() {
+    public void stopMovement() {
         this.zza = 0.0f;
         this.xxa = 0.0f;
         this.setJumping(false);
@@ -4854,7 +4914,7 @@ public class AiBotPlayer extends ServerPlayer {
         return id.contains("sword") || (id.contains("axe") && !id.contains("pickaxe")) || id.contains("mace") || id.contains("trident");
     }
 
-    private void equipBow() {
+    public void equipBow() {
         if (isBowItem(this.getMainHandItem())) return;
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             if (isBowItem(this.getInventory().getItem(i))) {
@@ -5046,7 +5106,7 @@ public class AiBotPlayer extends ServerPlayer {
         return id.contains("cobblestone") || id.contains("cobbled_deepslate") || id.contains("blackstone");
     }
 
-    private int countMatching(Predicate<ItemStack> predicate) {
+    public int countMatching(Predicate<ItemStack> predicate) {
         int total = 0;
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack s = this.getInventory().getItem(i);
@@ -5057,7 +5117,7 @@ public class AiBotPlayer extends ServerPlayer {
         return total;
     }
 
-    private boolean consumeMatching(Predicate<ItemStack> predicate, int amount) {
+    public boolean consumeMatching(Predicate<ItemStack> predicate, int amount) {
         if (countMatching(predicate) < amount) return false;
         int remaining = amount;
         for (int i = 0; i < this.getInventory().getContainerSize() && remaining > 0; i++) {
@@ -6176,12 +6236,21 @@ public class AiBotPlayer extends ServerPlayer {
         boolean mentionsCompact = lower.contains("combine") || lower.contains("craft") || lower.contains("turn")
                 || lower.contains("compact") || lower.contains("make") || lower.contains("compress");
 
+        boolean isNegation = lower.contains("stop") || lower.contains("don't") || lower.contains("dont")
+                || lower.contains("do not") || lower.contains("never") || lower.contains("disable")
+                || lower.contains("no more") || lower.contains("cease") || lower.contains("quit")
+                || lower.contains("keep wheat") || lower.contains("keep as wheat") || lower.contains("as wheat")
+                || lower.contains("breed with") || lower.contains("need wheat");
+
         boolean isHayCommand = (mentionsWheat && mentionsHay) || (mentionsHay && mentionsCompact)
                 || (mentionsWheat && lower.contains("space")) || lower.contains("combine wheat") || lower.contains("compact wheat")
-                || lower.contains("combine the wheat") || lower.contains("wheat into hay");
+                || lower.contains("combine the wheat") || lower.contains("wheat into hay")
+                || lower.contains("hay bale") || lower.contains("hay bales")
+                || (mentionsWheat && (lower.contains("breed") || lower.contains("cow") || lower.contains("sheep")));
+        boolean isUncompactCommand = lower.contains("uncraft hay") || lower.contains("turn hay") || lower.contains("convert hay") || lower.contains("hay to wheat") || lower.contains("hay into wheat");
         boolean isCompostCommand = mentionsCompost || (mentionsSeed && (lower.contains("keep") || lower.contains("chest") || lower.contains("hand") || lower.contains("only") || lower.contains("rest")));
 
-        if (!isHayCommand && !isCompostCommand) {
+        if (!isHayCommand && !isUncompactCommand && !isCompostCommand) {
             return false;
         }
 
@@ -6189,11 +6258,31 @@ public class AiBotPlayer extends ServerPlayer {
 
         // 1. Process wheat to hay compaction request
         if (isHayCommand) {
-            this.autoCompactWheatToHay = true;
-            int crafted = compactWheatInInventory();
-            reply.append("Understood! I will combine wheat into hay bales to save inventory and chest space.");
-            if (crafted > 0) {
-                reply.append(" Crafted ").append(crafted).append("x hay bales right now!");
+            if (isNegation) {
+                this.autoCompactWheatToHay = false;
+                reply.append("Understood! I will STOP combining wheat into hay bales and keep wheat as raw wheat for breeding and farming.");
+                int uncrafted = uncompactHayInInventory();
+                if (uncrafted > 0) {
+                    reply.append(" Uncrafted ").append(uncrafted).append("x hay bales back into ").append(uncrafted * 9).append("x raw wheat!");
+                }
+            } else {
+                this.autoCompactWheatToHay = true;
+                int crafted = compactWheatInInventory();
+                reply.append("Understood! I will combine wheat into hay bales to save inventory and chest space.");
+                if (crafted > 0) {
+                    reply.append(" Crafted ").append(crafted).append("x hay bales right now!");
+                }
+            }
+        }
+
+        // 2. Process uncompacting hay bales back into raw wheat
+        if (isUncompactCommand && !isHayCommand) {
+            int uncrafted = uncompactHayInInventory();
+            if (reply.length() > 0) reply.append(" ");
+            if (uncrafted > 0) {
+                reply.append("Uncrafted ").append(uncrafted).append("x hay bales back into ").append(uncrafted * 9).append("x raw wheat!");
+            } else {
+                reply.append("No hay bales found in my inventory to uncraft into wheat.");
             }
         }
 
@@ -6861,6 +6950,623 @@ public class AiBotPlayer extends ServerPlayer {
             this.houseBuildCooldown = 2;
         }
 
+        return false;
+    }
+
+    private static final List<String> NEWBORN_BOT_NAMES = List.of(
+            "Pip", "Barnaby", "Oliver", "Milo", "Luna", "Jasper", "Theo", "Rosie",
+            "Finley", "Toby", "Daisy", "Felix", "Archie", "Willow", "Hazel", "Leo",
+            "Gideon", "Clover", "Rowan", "Arlo", "Elliot", "Sage", "Penny", "Gulliver",
+            "Finn", "Nora", "Silas", "Freya", "Bramble", "Arthur", "Maisie", "Orson"
+    );
+
+    public static String pickRandomAvailableBotName() {
+        List<String> shuffled = new ArrayList<>(NEWBORN_BOT_NAMES);
+        Collections.shuffle(shuffled);
+        for (String name : shuffled) {
+            if (BotManager.getBot(name) == null) {
+                return name;
+            }
+        }
+        return "Villager_" + (BotManager.getActiveBots().size() + 1);
+    }
+
+    private static final Set<Block> VILLAGER_WORKSTATIONS = Set.of(
+            Blocks.COMPOSTER,
+            Blocks.LECTERN,
+            Blocks.BLAST_FURNACE,
+            Blocks.SMOKER,
+            Blocks.CARTOGRAPHY_TABLE,
+            Blocks.BREWING_STAND,
+            Blocks.FLETCHING_TABLE,
+            Blocks.CAULDRON,
+            Blocks.LOOM,
+            Blocks.SMITHING_TABLE,
+            Blocks.STONECUTTER,
+            Blocks.GRINDSTONE,
+            Blocks.BARREL
+    );
+
+    public synchronized boolean tickNightShelterAndSleep() {
+        if (this.isSleeping()) {
+            this.stopMovement();
+            return true;
+        }
+
+        BlockPos targetBed = this.assignedBedPos;
+        if (targetBed == null) {
+            targetBed = findNearestBedBlock(32);
+            if (targetBed != null) {
+                this.assignedBedPos = targetBed;
+            }
+        }
+
+        if (targetBed != null) {
+            double distSq = this.distanceToSqr(Vec3.atCenterOf(targetBed));
+            if (distSq > 4.0) {
+                moveTowards(Vec3.atCenterOf(targetBed), true);
+                return true;
+            } else {
+                stopMovement();
+                lookAtPos(Vec3.atCenterOf(targetBed));
+                if (this.tickCount % 20 == 0) {
+                    try {
+                        boolean ok = this.startSleeping(targetBed);
+                        if (ok) {
+                            return true;
+                        }
+                    } catch (Exception ignored) {}
+                }
+                return true;
+            }
+        }
+
+        BlockPos targetHouse = this.assignedHousePos;
+        if (targetHouse != null) {
+            double distSq = this.distanceToSqr(Vec3.atCenterOf(targetHouse));
+            if (distSq > 4.0) {
+                moveTowards(Vec3.atCenterOf(targetHouse), false);
+            } else {
+                stopMovement();
+            }
+            return true;
+        }
+
+        BlockPos shelter = findNearestShelterBlock(24);
+        if (shelter != null) {
+            double distSq = this.distanceToSqr(Vec3.atCenterOf(shelter));
+            if (distSq > 3.0) {
+                moveTowards(Vec3.atCenterOf(shelter), false);
+            } else {
+                stopMovement();
+            }
+            return true;
+        }
+
+        return false;
+    }
+
+    public @Nullable BlockPos findNearestBedBlock(int radius) {
+        return findNearestBedBlockNear(this.blockPosition(), radius);
+    }
+
+    public @Nullable BlockPos findNearestBedBlockNear(BlockPos pos, int radius) {
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+        for (BlockPos p : BlockPos.betweenClosed(pos.offset(-radius, -3, -radius), pos.offset(radius, 3, radius))) {
+            BlockState st = this.level().getBlockState(p);
+            if (st.getBlock() instanceof BedBlock && st.getValue(BedBlock.PART) == BedPart.HEAD) {
+                double d = Vec3.atCenterOf(pos).distanceToSqr(Vec3.atCenterOf(p));
+                if (d < bestDistSq) {
+                    bestDistSq = d;
+                    best = p.immutable();
+                }
+            }
+        }
+        return best;
+    }
+
+    public @Nullable BlockPos findNearestShelterBlock(int radius) {
+        BlockPos center = this.blockPosition();
+        for (int r = 1; r <= radius; r += 2) {
+            for (BlockPos p : BlockPos.betweenClosed(center.offset(-r, -2, -r), center.offset(r, 2, r))) {
+                if (this.level().getBlockState(p).isAir() && this.level().getBlockState(p.above()).isAir()) {
+                    if (this.level().canSeeSky(p)) continue;
+                    BlockPos stand = p.below();
+                    if (this.level().getBlockState(stand).isSolid()) {
+                        return p.immutable();
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    public @Nullable BlockPos findNearestBlockType(Block blockType, int radius) {
+        BlockPos center = this.blockPosition();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+        for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -4, -radius), center.offset(radius, 4, radius))) {
+            if (this.level().getBlockState(p).is(blockType)) {
+                double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                if (d < bestDistSq) {
+                    bestDistSq = d;
+                    best = p.immutable();
+                }
+            }
+        }
+        return best;
+    }
+
+    public @Nullable BlockPos findNearestWorkstation(int radius) {
+        BlockPos center = this.blockPosition();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+        for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -4, -radius), center.offset(radius, 4, radius))) {
+            Block b = this.level().getBlockState(p).getBlock();
+            if (VILLAGER_WORKSTATIONS.contains(b)) {
+                double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                if (d < bestDistSq) {
+                    bestDistSq = d;
+                    best = p.immutable();
+                }
+            }
+        }
+        return best;
+    }
+
+    public @Nullable Monster findNearestHostileThreatForVillager(double maxDist) {
+        AABB box = this.getBoundingBox().inflate(maxDist);
+        List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> m.isAlive() && !m.isAlliedTo(this));
+        Monster closest = null;
+        double bestDistSq = maxDist * maxDist;
+        for (Monster m : monsters) {
+            double d = this.distanceToSqr(m);
+            if (d < bestDistSq) {
+                bestDistSq = d;
+                closest = m;
+            }
+        }
+        return closest;
+    }
+
+    public boolean isNightTime() {
+        long t = this.level().getOverworldClockTime() % 24000L;
+        return (t >= 12542L && t <= 23459L);
+    }
+
+    public void wanderAroundHomeOrAnchor(double maxDist) {
+        BlockPos center = this.assignedHousePos != null ? this.assignedHousePos
+                : (this.guardAnchorPos != null ? this.guardAnchorPos : this.blockPosition());
+        double distSq = this.distanceToSqr(Vec3.atCenterOf(center));
+        if (distSq > (maxDist * maxDist)) {
+            moveTowards(Vec3.atCenterOf(center), false);
+            return;
+        }
+
+        if (this.tickCount % 60 == 0) {
+            double angle = (this.tickCount * 23) % 360;
+            double r = 4.0 + (this.tickCount % 5);
+            double targetX = center.getX() + Math.cos(Math.toRadians(angle)) * r;
+            double targetZ = center.getZ() + Math.sin(Math.toRadians(angle)) * r;
+            BlockPos targetPos = new BlockPos((int) targetX, center.getY(), (int) targetZ);
+            BlockPos safeStand = (this.level() instanceof ServerLevel sl) ? findSafeDryRespawnPos(sl, targetPos, 3) : null;
+            if (safeStand != null) {
+                moveTowards(Vec3.atCenterOf(safeStand), false);
+            } else {
+                moveTowards(Vec3.atCenterOf(targetPos), false);
+            }
+        }
+    }
+
+    private void handleVillagerPanic(Monster threat) {
+        this.stopUsingItem();
+        BlockPos bell = findNearestBlockType(Blocks.BELL, 16);
+        if (bell != null) {
+            double distToBellSq = this.distanceToSqr(Vec3.atCenterOf(bell));
+            if (distToBellSq > 4.0) {
+                moveTowards(Vec3.atCenterOf(bell), true);
+            } else {
+                stopMovement();
+                this.level().playSound(null, bell, SoundEvents.BELL_BLOCK, SoundSource.BLOCKS, 2.0f, 1.0f);
+            }
+        } else {
+            Vec3 away = this.position().subtract(threat.position()).normalize();
+            Vec3 escapeTarget = (this.assignedHousePos != null)
+                    ? Vec3.atCenterOf(this.assignedHousePos)
+                    : this.position().add(away.scale(12.0));
+            moveTowards(escapeTarget, true);
+        }
+
+        if (this.tickCount % 40 == 0) {
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_NO, SoundSource.NEUTRAL, 1.0f, 1.0f);
+        }
+    }
+
+    private void tickVillagerWork() {
+        BlockPos workstation = findNearestWorkstation(24);
+        if (workstation != null) {
+            double distSq = this.distanceToSqr(Vec3.atCenterOf(workstation));
+            if (distSq > 4.0) {
+                moveTowards(Vec3.atCenterOf(workstation), false);
+            } else {
+                stopMovement();
+                lookAtPos(Vec3.atCenterOf(workstation));
+
+                if (this.tickCount % 70 == 0) {
+                    BlockState bs = this.level().getBlockState(workstation);
+                    Block b = bs.getBlock();
+                    net.minecraft.sounds.SoundEvent snd = SoundEvents.VILLAGER_WORK_ARMORER;
+                    if (b == Blocks.COMPOSTER) {
+                        snd = SoundEvents.COMPOSTER_FILL;
+                        if (this.isAutoCompostExcessSeeds()) {
+                            compostExcessSeeds(workstation, this.maxSeedsToKeepOnHand);
+                        }
+                    } else if (b == Blocks.LECTERN) {
+                        snd = SoundEvents.BOOK_PAGE_TURN;
+                    } else if (b == Blocks.BLAST_FURNACE || b == Blocks.SMOKER) {
+                        snd = SoundEvents.FURNACE_FIRE_CRACKLE;
+                    } else if (b == Blocks.SMITHING_TABLE) {
+                        snd = SoundEvents.SMITHING_TABLE_USE;
+                    } else if (b == Blocks.STONECUTTER) {
+                        snd = SoundEvents.UI_STONECUTTER_TAKE_RESULT;
+                    } else if (b == Blocks.BREWING_STAND) {
+                        snd = SoundEvents.BREWING_STAND_BREW;
+                    } else if (b == Blocks.BARREL) {
+                        snd = SoundEvents.BARREL_OPEN;
+                    }
+
+                    this.level().playSound(null, workstation, snd, SoundSource.BLOCKS, 0.8f, 1.0f);
+                    if (this.level() instanceof ServerLevel sl) {
+                        sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, workstation.getX() + 0.5, workstation.getY() + 1.1, workstation.getZ() + 0.5, 4, 0.3, 0.3, 0.3, 0.05);
+                    }
+                }
+            }
+        } else {
+            wanderAroundHomeOrAnchor(16.0);
+        }
+    }
+
+    private void tickVillagerGatheringAndBreeding() {
+        BlockPos bell = findNearestBlockType(Blocks.BELL, 36);
+        AiBotPlayer nearestOtherBot = null;
+        double bestBotDistSq = 36.0 * 36.0;
+        for (AiBotPlayer other : BotManager.getActiveBots()) {
+            if (other != this && other.level() == this.level()) {
+                double d = this.distanceToSqr(other);
+                if (d < bestBotDistSq) {
+                    bestBotDistSq = d;
+                    nearestOtherBot = other;
+                }
+            }
+        }
+
+        if (bell != null && (nearestOtherBot == null || this.distanceToSqr(Vec3.atCenterOf(bell)) < 16.0)) {
+            double distSq = this.distanceToSqr(Vec3.atCenterOf(bell));
+            if (distSq > 9.0) {
+                moveTowards(Vec3.atCenterOf(bell), false);
+            } else {
+                stopMovement();
+            }
+        } else if (nearestOtherBot != null) {
+            double distSq = this.distanceToSqr(nearestOtherBot);
+            if (distSq > 6.0) {
+                moveTowards(nearestOtherBot.position(), false);
+            } else {
+                stopMovement();
+                lookAtPos(nearestOtherBot.getEyePosition());
+            }
+        } else {
+            wanderAroundHomeOrAnchor(16.0);
+        }
+
+        if (this.tickCount - this.lastVillagerAmbientSoundTime > 100) {
+            this.lastVillagerAmbientSoundTime = this.tickCount;
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 1.0f);
+        }
+
+        if (this.tickCount % 40 == 0) {
+            checkAndExecuteBreeding(nearestOtherBot);
+        }
+    }
+
+    private void tickVillagerReturnHome() {
+        BlockPos homeTarget = this.assignedBedPos != null ? this.assignedBedPos : this.assignedHousePos;
+        if (homeTarget != null) {
+            double distSq = this.distanceToSqr(Vec3.atCenterOf(homeTarget));
+            if (distSq > 4.0) {
+                moveTowards(Vec3.atCenterOf(homeTarget), false);
+            } else {
+                stopMovement();
+            }
+        } else {
+            wanderAroundHomeOrAnchor(10.0);
+        }
+    }
+
+    public synchronized void tickPassiveVillager() {
+        Monster threat = findNearestHostileThreatForVillager(12.0);
+        if (threat != null) {
+            handleVillagerPanic(threat);
+            return;
+        }
+
+        long dayTime = this.level().getOverworldClockTime() % 24000L;
+
+        if (isNightTime() || this.level().isThundering()) {
+            tickNightShelterAndSleep();
+            return;
+        }
+
+        if (dayTime < 2000L) {
+            if (this.tickCount % 80 == 0) {
+                this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 1.0f);
+            }
+            wanderAroundHomeOrAnchor(12.0);
+            return;
+        }
+
+        if (dayTime >= 2000L && dayTime < 9000L) {
+            tickVillagerWork();
+            return;
+        }
+
+        if (dayTime >= 9000L && dayTime < 11500L) {
+            tickVillagerGatheringAndBreeding();
+            return;
+        }
+
+        tickVillagerReturnHome();
+    }
+
+    public int countBedsIn100x100(BlockPos center) {
+        if (!(this.level() instanceof ServerLevel sl)) return 0;
+        PoiManager poi = sl.getPoiManager();
+        long count = poi.getCountInRange(holder -> holder.is(PoiTypes.HOME), center, 50, PoiManager.Occupancy.ANY);
+        return (int) count;
+    }
+
+    public int countBotsIn100x100(BlockPos center) {
+        int count = 0;
+        for (AiBotPlayer b : BotManager.getActiveBots()) {
+            if (b.level() == this.level() && Math.abs(b.getBlockX() - center.getX()) <= 50 && Math.abs(b.getBlockZ() - center.getZ()) <= 50) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    public @Nullable BlockPos findVacantBedIn100x100(BlockPos center) {
+        if (!(this.level() instanceof ServerLevel sl)) return null;
+        PoiManager poi = sl.getPoiManager();
+        Set<BlockPos> claimedBeds = new HashSet<>();
+        for (AiBotPlayer bot : BotManager.getActiveBots()) {
+            if (bot.getAssignedBedPos() != null) {
+                claimedBeds.add(bot.getAssignedBedPos());
+            }
+        }
+        return poi.findAll(holder -> holder.is(PoiTypes.HOME), pos -> !claimedBeds.contains(pos), center, 50, PoiManager.Occupancy.ANY)
+                .findFirst().orElse(null);
+    }
+
+    public synchronized boolean checkAndExecuteBreeding(@Nullable AiBotPlayer partner) {
+        if (!(this.level() instanceof ServerLevel sl)) return false;
+
+        long now = System.currentTimeMillis();
+        if (now - this.lastBreedingTime < 300_000L) {
+            return false;
+        }
+        if (partner != null && (now - partner.getLastBreedingTime() < 300_000L)) {
+            return false;
+        }
+
+        if (this.getFoodData().getFoodLevel() < 16) {
+            return false;
+        }
+
+        boolean hasWheat = countMatching(s -> s.is(Items.WHEAT)) >= 3;
+        boolean hasBread = countMatching(s -> s.is(Items.BREAD)) >= 3;
+        boolean hasCarrots = countMatching(s -> s.is(Items.CARROT)) >= 12;
+        boolean hasPotatoes = countMatching(s -> s.is(Items.POTATO)) >= 12;
+        boolean hasBeetroots = countMatching(s -> s.is(Items.BEETROOT)) >= 12;
+
+        if (!hasWheat && !hasBread && !hasCarrots && !hasPotatoes && !hasBeetroots) {
+            return false;
+        }
+
+        if (findNearestHostileThreatForVillager(16.0) != null) {
+            return false;
+        }
+        if (this.getHealth() < 15.0f || this.isOnFire()) {
+            return false;
+        }
+
+        int totalBeds = countBedsIn100x100(this.blockPosition());
+        int botCount = countBotsIn100x100(this.blockPosition());
+
+        if (totalBeds < (botCount + 1)) {
+            return false;
+        }
+
+        BlockPos vacantBed = findVacantBedIn100x100(this.blockPosition());
+        if (vacantBed == null) {
+            return false;
+        }
+
+        if (hasWheat) {
+            consumeMatching(s -> s.is(Items.WHEAT), 3);
+        } else if (hasBread) {
+            consumeMatching(s -> s.is(Items.BREAD), 3);
+        } else if (hasCarrots) {
+            consumeMatching(s -> s.is(Items.CARROT), 12);
+        } else if (hasPotatoes) {
+            consumeMatching(s -> s.is(Items.POTATO), 12);
+        } else {
+            consumeMatching(s -> s.is(Items.BEETROOT), 12);
+        }
+
+        sl.sendParticles(ParticleTypes.HEART, this.getX(), this.getY() + 1.2, this.getZ(), 8, 0.4, 0.4, 0.4, 0.1);
+        if (partner != null) {
+            sl.sendParticles(ParticleTypes.HEART, partner.getX(), partner.getY() + 1.2, partner.getZ(), 8, 0.4, 0.4, 0.4, 0.1);
+            partner.setLastBreedingTime(now);
+        }
+
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_YES, SoundSource.NEUTRAL, 1.0f, 1.0f);
+
+        String babyName = pickRandomAvailableBotName();
+        AiBotPlayer baby = BotManager.spawnBot(sl, babyName, "villager", this.getX() + 0.5, this.getY(), this.getZ() + 0.5, this.getYRot(), 0.0f);
+        baby.setAssignedBedPos(vacantBed);
+        baby.setAssignedHousePos(vacantBed);
+        VillageManager.registerHouse("Compound", vacantBed, vacantBed, babyName);
+
+        this.lastBreedingTime = now;
+        sayInChat("A new companion was born into our colony! Welcoming " + baby.getPlainTextName() + " to the village (Role: Villager)!");
+        BotPersistence.saveAll(sl.getServer());
+        return true;
+    }
+
+    public synchronized boolean handleHousingChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        boolean mentionsBed = lower.contains("bed");
+        boolean mentionsHouse = lower.contains("house") || lower.contains("home") || lower.contains("shelter");
+        boolean mentionsAssign = lower.contains("assign") || lower.contains("set") || lower.contains("this is")
+                || lower.contains("claim") || lower.contains("your bed") || lower.contains("your house") || lower.contains("your home");
+
+        if (mentionsBed && mentionsAssign) {
+            BlockPos targetBed = null;
+            if (speaker != null) {
+                HitResult hit = speaker.pick(5.0D, 0.0F, false);
+                if (hit instanceof BlockHitResult bhr) {
+                    BlockPos hitPos = bhr.getBlockPos();
+                    if (this.level().getBlockState(hitPos).getBlock() instanceof BedBlock) {
+                        targetBed = hitPos;
+                    }
+                }
+                if (targetBed == null) {
+                    targetBed = findNearestBedBlockNear(speaker.blockPosition(), 6);
+                }
+            }
+            if (targetBed == null) {
+                targetBed = findNearestBedBlock(6);
+            }
+
+            if (targetBed != null) {
+                this.assignedBedPos = targetBed;
+                VillageManager.registerHouse("Compound", targetBed, targetBed, this.botName);
+                sayInChat("Understood! Assigned bed at (" + targetBed.getX() + ", " + targetBed.getY() + ", " + targetBed.getZ() + ") as my personal bed. I will return here to sleep every night!");
+                return true;
+            } else {
+                sayInChat("I couldn't find a bed nearby! Look at a bed or stand next to one and tell me again.");
+                return true;
+            }
+        }
+
+        if (mentionsHouse && mentionsAssign) {
+            com.aicompanion.bot.area.SavedArea foundArea = null;
+            for (com.aicompanion.bot.area.SavedArea a : BotPersistence.getAllAreas().values()) {
+                if (lower.contains(a.name.toLowerCase(Locale.ROOT))) {
+                    foundArea = a;
+                    break;
+                }
+            }
+
+            if (foundArea != null) {
+                this.assignedHouseAreaName = foundArea.name;
+                BlockPos areaCenter = new BlockPos((foundArea.getMinX() + foundArea.getMaxX()) / 2, (foundArea.minY + foundArea.maxY) / 2, (foundArea.getMinZ() + foundArea.getMaxZ()) / 2);
+                this.assignedHousePos = areaCenter;
+                int maxRadius = Math.max(foundArea.getMaxX() - foundArea.getMinX(), foundArea.getMaxZ() - foundArea.getMinZ()) / 2 + 2;
+                BlockPos bedInArea = findNearestBedBlockNear(this.assignedHousePos, maxRadius);
+                if (bedInArea != null) {
+                    this.assignedBedPos = bedInArea;
+                }
+                sayInChat("Understood! Assigned saved area '" + foundArea.name + "' as my home house. I will seek shelter here!");
+                return true;
+            } else {
+                BlockPos housePos = speaker != null ? speaker.blockPosition() : this.blockPosition();
+                this.assignedHousePos = housePos;
+                BlockPos bedNear = findNearestBedBlockNear(housePos, 8);
+                if (bedNear != null) {
+                    this.assignedBedPos = bedNear;
+                }
+                sayInChat("Understood! Assigned (" + housePos.getX() + ", " + housePos.getY() + ", " + housePos.getZ() + ") as my home house! I will seek shelter here at night.");
+                return true;
+            }
+        }
+
+        if (lower.contains("go to bed") || lower.contains("go to sleep") || lower.equals("sleep") || lower.contains("sleep now")) {
+            if (isNightTime() || this.level().isThundering()) {
+                sayInChat("Heading to bed now! Goodnight!");
+                tickNightShelterAndSleep();
+            } else {
+                sayInChat("It's daytime right now! I'll head to bed when night falls.");
+            }
+            return true;
+        }
+
+        if (lower.contains("wake up") || lower.contains("get out of bed") || lower.contains("rise and shine")) {
+            if (this.isSleeping()) {
+                this.stopSleepInBed(false, true);
+                sayInChat("I'm awake! Ready for orders.");
+            } else {
+                sayInChat("I'm already awake!");
+            }
+            return true;
+        }
+
+        if (lower.contains("night watch") || lower.contains("stay awake") || lower.contains("don't sleep") || lower.contains("dont sleep") || lower.contains("no sleep")) {
+            this.nightShelterEnabled = false;
+            sayInChat("Understood! I will stay awake on night watch and won't seek shelter or bed.");
+            return true;
+        }
+
+        if (lower.contains("seek shelter") || lower.contains("sleep at night") || lower.contains("use bed")) {
+            this.nightShelterEnabled = true;
+            sayInChat("Understood! I will seek shelter and sleep in my bed when night falls.");
+            return true;
+        }
+
+        return false;
+    }
+
+    public synchronized boolean handleRoleChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile(
+                "(?:you\\s+are\\s+now\\s+(?:a|an)?|change\\s+role\\s+to|switch\\s+role\\s+to|set\\s+role\\s+(?:to\\s+)?|become\\s+(?:a|an)?|be\\s+(?:a|an)?|role[:]?)\\s+([a-zA-Z0-9_ -]+)",
+                java.util.regex.Pattern.CASE_INSENSITIVE
+        ).matcher(lower);
+
+        if (m.find()) {
+            String roleRaw = m.group(1).trim();
+            roleRaw = roleRaw.replaceAll("\\b(?:bot|please|now|here|thank\\s+you)\\b", "").trim();
+            if (roleRaw.isBlank()) return false;
+
+            String newRole = roleRaw;
+            if (newRole.contains("villager")) newRole = "villager";
+            else if (newRole.contains("farmer") || newRole.contains("farm")) newRole = "farmer";
+            else if (newRole.contains("guard") || newRole.contains("bodyguard") || newRole.contains("warrior")) newRole = "guard";
+            else if (newRole.contains("miner") || newRole.contains("mine")) newRole = "miner";
+            else if (newRole.contains("lumber") || newRole.contains("wood")) newRole = "lumberjack";
+            else if (newRole.contains("builder") || newRole.contains("build")) newRole = "builder";
+            else if (newRole.contains("ranch") || newRole.contains("husbandry") || newRole.contains("breed")) newRole = "husbandry";
+            else if (newRole.contains("conductor") || newRole.contains("train")) newRole = "conductor";
+            else if (newRole.contains("courier") || newRole.contains("helper")) newRole = "courier";
+
+            this.setBotRole(newRole);
+            this.applyRoleStarterKit();
+
+            String skin = com.aicompanion.bot.skin.BotSkinManager.determineSkinForBot(this.botName, newRole, this.aliases, this.getUUID());
+            if (skin != null && !skin.isBlank() && !skin.equals(this.customSkinName)) {
+                this.setCustomSkinName(skin);
+                net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(this.getUUID(), skin));
+            }
+
+            sayInChat("Understood! My role has been changed to '" + newRole + "'. I will now focus on my " + newRole + " duties!");
+            return true;
+        }
         return false;
     }
 

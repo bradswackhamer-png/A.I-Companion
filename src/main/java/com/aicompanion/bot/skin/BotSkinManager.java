@@ -142,6 +142,7 @@ public class BotSkinManager {
                         tagRoleIfMatches(check, "farmer", key);
                         tagRoleIfMatches(check, "miner", key);
                         tagRoleIfMatches(check, "conductor", key);
+                        tagRoleIfMatches(check, "villager", key);
                     }
                 });
             } catch (Exception e) {

@@ -31,7 +31,29 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
   * Run `/bot apikey clear` or `/bot apikey remove` to delete your personal API key immediately in-game.
   * Run `/bot apikey clear all` (Admins/OPs) to wipe all player keys and server default keys.
 
-### 🛡️ Area Guarding & Farming Intent Disambiguation *(New in v1.2.11)*
+### 🌾 Villager Role, Bed & House Assignment, Breeding & "I Command" Absolute Mode *(New in v1.2.12)*
+* **"Villager" Role & 100% Vanilla Villager Simulation**:
+  * Set a companion to the `"villager"` role via `/bot role <name> villager` or chat (*"you are now a villager"*).
+  * Follows authentic vanilla villager schedules: morning strolls, job site workstation employment with ambient sounds (composter, lectern, blast furnace, smoker, smithing table) and green sparkles (`HAPPY_VILLAGER`), afternoon socializing and gossiping at bells, and night sleep in beds.
+  * Flees from hostile monsters (zombies, drowneds, illagers) and rings village bells to warn the colony.
+  * Trade with villager companions by right-clicking with Emeralds!
+  * Retains 100% of companion features: chat, memory, commands, and ability to switch roles back to anything else at any time (*"change role to guard"*).
+* **Housing, Bed Assignment & Night Sleep Routine**:
+  * Assign a personal bed via `/bot bed assign <name> [pos]` or chat (*"this is your bed"*, *"assign bed"*).
+  * Assign a home house via `/bot house assign <name> [areaName]` or chat (*"this is your house"*, *"set house"*).
+  * At night and during thunderstorms, companions automatically seek shelter and sleep in their assigned bed until morning dawn.
+  * Toggle nocturnal shelter via `/bot shelter <name> [true|false]` or chat (*"night watch"*, *"stay awake"*).
+* **Villager-Style Colony Breeding Logic**:
+  * When hunger is good (food level >= 16 and holding food), safe (no nearby threats, healthy), and total beds in a 100x100 block radius exceed bot population (`beds >= bots + 1`), companions can breed.
+  * Consumes 3 raw wheat (or bread/carrots), emits heart particles, plays level-up and happy villager sounds, and spawns a newborn companion with a random name and the `"villager"` role.
+* **Strict "I Command" Gating for Absolute Command Mode**:
+  * Absolute Command Mode is now strictly gated: it is only enabled when a player says *"i command"* (e.g. *"i command you to follow me"*, *"i command stop"*) or uses `/bot command <name> <order>`.
+  * Phrases like *"stop combining the wheat into haybales"* or regular *"stop"* no longer lock the companion into Absolute Standby Mode.
+* **Wheat-to-Hay Auto-Compaction Fix & Hay Uncrafting**:
+  * Asking a bot to stop compacting wheat (*"stop combining wheat into haybales"*, *"keep wheat as wheat"*, *"need wheat to breed with"*) now properly disables auto-compaction and preserves raw wheat.
+  * Companions can also uncraft existing hay bales back into 9x raw wheat upon player request (*"uncraft hay"*, *"turn hay into wheat"*).
+
+### 🛡️ Area Guarding & Farming Intent Disambiguation *(v1.2.11)*
 * **Strict Guarding vs Farming Disambiguation**:
   * Fixed an issue where ordering a companion to stand in or guard a mapped area containing "farm" in its name (e.g. `Wheat_Farm`) caused the companion to override their role to "farmer" and begin farming crops.
   * When any mapped area is mentioned, the mod now checks player intent: directives containing guard, defend, protect, stand, stay, hold, or sentry (*"stay here in wheat_farm and guard it"*, *"stand in wheat_farm"*) assign the companion strictly as an area guard, holding position without farming.
@@ -324,7 +346,14 @@ You can speak to your companions directly in public chat:
 
 | Command | Description |
 | :--- | :--- |
-| `/bot spawn <name> [role]` | Spawn a new companion (`farmer`, `husbandry`, `guard`, `builder`, `miner`, `lumberjack`, `conductor`, `courier`) |
+| `/bot spawn <name> [role]` | Spawn a new companion (`farmer`, `husbandry`, `guard`, `builder`, `miner`, `lumberjack`, `conductor`, `courier`, `villager`) |
+| `/bot role <name> <role>` | Switch companion role (e.g. `villager`, `guard`, `farmer`, `miner`) |
+| `/bot bed assign <name> [pos]` | Assign personal bed for nightly sleep |
+| `/bot bed clear <name>` | Clear assigned bed |
+| `/bot house assign <name> [area]` | Assign home house / compound area for shelter |
+| `/bot house clear <name>` | Clear assigned house |
+| `/bot shelter <name> [true\|false]` | Enable or disable night shelter and bed sleeping |
+| `/bot farm autohay <name> [true\|false]` | Toggle automatic wheat-to-hay compaction |
 | `/bot help` | Display formatted categorized help guide and voice command examples |
 | `/bot nickname [botName] <nickname>` | Assign an active nickname/alias to a companion (or nearest companion) |
 | `/bot rename [botName] <nickname>` | Alias for `/bot nickname` |

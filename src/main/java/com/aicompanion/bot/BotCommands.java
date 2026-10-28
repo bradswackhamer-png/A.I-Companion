@@ -25,6 +25,13 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
 import org.jspecify.annotations.Nullable;
+import net.minecraft.core.BlockPos;
+import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.level.block.BedBlock;
+import com.aicompanion.bot.village.VillageManager;
+import java.util.Locale;
 import com.aicompanion.bot.area.SavedArea;
 import com.aicompanion.bot.memory.BotMemoryManager;
 import com.aicompanion.bot.memory.LearnedRecipe;
@@ -38,7 +45,7 @@ public class BotCommands {
     };
 
     private static final SuggestionProvider<CommandSourceStack> ROLE_SUGGESTIONS = (ctx, builder) ->
-            SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher", "conductor"), builder);
+            SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher", "conductor", "villager"), builder);
 
     private static final SuggestionProvider<CommandSourceStack> AREA_SUGGESTIONS = (ctx, builder) -> {
         var names = BotPersistence.getAllAreas().values().stream().map(a -> a.name).toList();
@@ -123,6 +130,56 @@ public class BotCommands {
                                         .executes(ctx -> executeAbsoluteCommand(ctx,
                                                 StringArgumentType.getString(ctx, "name"),
                                                 StringArgumentType.getString(ctx, "order"))))))
+                .then(Commands.literal("role")
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .then(Commands.argument("role", StringArgumentType.greedyString())
+                                        .suggests(ROLE_SUGGESTIONS)
+                                        .executes(ctx -> setBotRoleCmd(ctx,
+                                                StringArgumentType.getString(ctx, "botName"),
+                                                StringArgumentType.getString(ctx, "role"))))))
+                .then(Commands.literal("bed")
+                        .then(Commands.literal("assign")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> assignBedCmd(ctx, StringArgumentType.getString(ctx, "botName"), null))
+                                        .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                                .executes(ctx -> assignBedCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
+                                                        BlockPosArgument.getLoadedBlockPos(ctx, "pos"))))))
+                        .then(Commands.literal("clear")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> clearBedCmd(ctx, StringArgumentType.getString(ctx, "botName"))))))
+                .then(Commands.literal("house")
+                        .then(Commands.literal("assign")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> assignHouseCmd(ctx, StringArgumentType.getString(ctx, "botName"), null))
+                                        .then(Commands.argument("areaName", StringArgumentType.word())
+                                                .suggests(AREA_SUGGESTIONS)
+                                                .executes(ctx -> assignHouseCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
+                                                        StringArgumentType.getString(ctx, "areaName"))))))
+                        .then(Commands.literal("clear")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> clearHouseCmd(ctx, StringArgumentType.getString(ctx, "botName"))))))
+                .then(Commands.literal("shelter")
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .then(Commands.argument("enabled", BoolArgumentType.bool())
+                                        .executes(ctx -> setShelterCmd(ctx,
+                                                StringArgumentType.getString(ctx, "botName"),
+                                                BoolArgumentType.getBool(ctx, "enabled"))))))
+                .then(Commands.literal("farm")
+                        .then(Commands.literal("autohay")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .then(Commands.argument("enabled", BoolArgumentType.bool())
+                                                .executes(ctx -> setAutoHayCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
+                                                        BoolArgumentType.getBool(ctx, "enabled")))))))
                 .then(Commands.literal("tp")
                         .executes(BotCommands::tpNearestBot)
                         .then(Commands.literal("all")
@@ -702,6 +759,16 @@ public class BotCommands {
             extra.append(String.format("Livestock: %s (Food: %s, Cap: %d, Min: %d, CullAdults: %b)\n",
                     bot.getRanchAnimal(), bot.getRanchFood(), bot.getRanchMaxPop(), bot.getRanchMinPop(), bot.isRanchAutoCull()));
         }
+        if (bot.getAssignedBedPos() != null) {
+            extra.append(String.format("Assigned Bed: (%d, %d, %d)\n", bot.getAssignedBedPos().getX(), bot.getAssignedBedPos().getY(), bot.getAssignedBedPos().getZ()));
+        }
+        if (bot.getAssignedHousePos() != null) {
+            extra.append(String.format("Assigned House: (%d, %d, %d)%s\n",
+                    bot.getAssignedHousePos().getX(), bot.getAssignedHousePos().getY(), bot.getAssignedHousePos().getZ(),
+                    bot.getAssignedHouseAreaName() != null ? " [" + bot.getAssignedHouseAreaName() + "]" : ""));
+        }
+        extra.append(String.format("Night Shelter: %b | AutoHay: %b | AbsoluteMode: %b\n",
+                bot.isNightShelterEnabled(), bot.isAutoCompactWheatToHay(), bot.isAbsoluteCommandMode()));
 
         ctx.getSource().sendSuccess(() -> Component.literal("=== " + bot.getChatTag() + " Status ===\n")
                 .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
@@ -877,7 +944,152 @@ public class BotCommands {
             return 0;
         }
         ServerPlayer player = source.getEntity() instanceof ServerPlayer p ? p : null;
-        BotManager.dispatchRequestToBot(bot, player, order);
+        bot.setAbsoluteCommandMode(true);
+        BotManager.dispatchRequestToBot(bot, player, "i command " + order);
+        return 1;
+    }
+
+    private static int setBotRoleCmd(CommandContext<CommandSourceStack> ctx, String botName, String newRole) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setBotRole(newRole);
+        bot.applyRoleStarterKit();
+        String skin = com.aicompanion.bot.skin.BotSkinManager.determineSkinForBot(bot.getBotName(), newRole, bot.getAliases(), bot.getUUID());
+        if (skin != null && !skin.isBlank() && !skin.equals(bot.getCustomSkinName())) {
+            bot.setCustomSkinName(skin);
+            net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), skin));
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Set role for " + bot.getPlainTextName() + " to '" + newRole + "'!").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int assignBedCmd(CommandContext<CommandSourceStack> ctx, String botName, @Nullable BlockPos pos) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        BlockPos target = pos;
+        if (target == null && source.getEntity() instanceof ServerPlayer player) {
+            HitResult hit = player.pick(5.0D, 0.0F, false);
+            if (hit instanceof BlockHitResult bhr) {
+                BlockPos hitPos = bhr.getBlockPos();
+                if (bot.level().getBlockState(hitPos).getBlock() instanceof BedBlock) {
+                    target = hitPos;
+                }
+            }
+            if (target == null) {
+                target = bot.findNearestBedBlockNear(player.blockPosition(), 6);
+            }
+        }
+        if (target == null) {
+            target = bot.findNearestBedBlock(6);
+        }
+        if (target == null) {
+            source.sendFailure(Component.literal("No bed found at or near specified location. Stand near a bed or provide coordinates."));
+            return 0;
+        }
+        bot.setAssignedBedPos(target);
+        VillageManager.registerHouse("Compound", target, target, bot.getBotName());
+        BotPersistence.saveAll(source.getServer());
+        BlockPos finalTarget = target;
+        source.sendSuccess(() -> Component.literal("Assigned bed at (" + finalTarget.getX() + ", " + finalTarget.getY() + ", " + finalTarget.getZ() + ") to " + bot.getPlainTextName() + "!").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int clearBedCmd(CommandContext<CommandSourceStack> ctx, String botName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setAssignedBedPos(null);
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Cleared assigned bed for " + bot.getPlainTextName() + ".").withStyle(ChatFormatting.YELLOW), false);
+        return 1;
+    }
+
+    private static int assignHouseCmd(CommandContext<CommandSourceStack> ctx, String botName, @Nullable String areaName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        if (areaName != null) {
+            var area = BotPersistence.getAllAreas().get(areaName.toLowerCase(Locale.ROOT));
+            if (area == null) {
+                source.sendFailure(Component.literal("No global area named '" + areaName + "' found."));
+                return 0;
+            }
+            bot.setAssignedHouseAreaName(area.name);
+            BlockPos areaCenter = new BlockPos((area.getMinX() + area.getMaxX()) / 2, (area.minY + area.maxY) / 2, (area.getMinZ() + area.getMaxZ()) / 2);
+            bot.setAssignedHousePos(areaCenter);
+            int radius = Math.max(area.getMaxX() - area.getMinX(), area.getMaxZ() - area.getMinZ()) / 2 + 2;
+            BlockPos bedInArea = bot.findNearestBedBlockNear(areaCenter, radius);
+            if (bedInArea != null) {
+                bot.setAssignedBedPos(bedInArea);
+            }
+            BotPersistence.saveAll(source.getServer());
+            source.sendSuccess(() -> Component.literal("Assigned house area '" + area.name + "' to " + bot.getPlainTextName() + "!").withStyle(ChatFormatting.GREEN), false);
+            return 1;
+        } else {
+            BlockPos pos = source.getEntity() != null ? source.getEntity().blockPosition() : bot.blockPosition();
+            bot.setAssignedHousePos(pos);
+            BlockPos bedNear = bot.findNearestBedBlockNear(pos, 8);
+            if (bedNear != null) {
+                bot.setAssignedBedPos(bedNear);
+            }
+            BotPersistence.saveAll(source.getServer());
+            source.sendSuccess(() -> Component.literal("Assigned house at (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ") to " + bot.getPlainTextName() + "!").withStyle(ChatFormatting.GREEN), false);
+            return 1;
+        }
+    }
+
+    private static int clearHouseCmd(CommandContext<CommandSourceStack> ctx, String botName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setAssignedHousePos(null);
+        bot.setAssignedHouseAreaName(null);
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Cleared assigned house for " + bot.getPlainTextName() + ".").withStyle(ChatFormatting.YELLOW), false);
+        return 1;
+    }
+
+    private static int setShelterCmd(CommandContext<CommandSourceStack> ctx, String botName, boolean enabled) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setNightShelterEnabled(enabled);
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Night shelter & bed sleep for " + bot.getPlainTextName() + " set to: " + enabled).withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int setAutoHayCmd(CommandContext<CommandSourceStack> ctx, String botName, boolean enabled) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setAutoCompactWheatToHay(enabled);
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Auto wheat-to-hay compaction for " + bot.getPlainTextName() + " set to: " + enabled).withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 
@@ -1284,7 +1496,22 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("==================== AI COMPANION COMMANDS ====================").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
         src.sendSuccess(() -> Component.literal("/bot spawn <name> [role]")
                 .withStyle(ChatFormatting.YELLOW)
-                .append(Component.literal(" - Spawn bot (farmer, lumberjack, miner, guard, builder, conductor, husbandry, courier)").withStyle(ChatFormatting.GRAY)), false);
+                .append(Component.literal(" - Spawn bot (farmer, lumberjack, miner, guard, builder, conductor, husbandry, courier, villager)").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot role <name> <role>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Switch companion role (e.g. villager, guard, farmer, miner)").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot bed assign <name> [pos] / /bot bed clear <name>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Assign personal bed for nightly sleep").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot house assign <name> [area] / /bot house clear <name>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Assign home house / compound area for shelter").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot shelter <name> [true|false]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Enable or disable night shelter and bed sleeping").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot farm autohay <name> [true|false]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Toggle automatic wheat-to-hay compaction").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot list")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - List all active bots and current tasks").withStyle(ChatFormatting.GRAY)), false);
