@@ -173,6 +173,14 @@ public class BotPersistence {
         public String houseAreaName = "";
         public boolean nightShelterEnabled = true;
         public long lastBreedingTime = 0L;
+        public boolean isBaby = false;
+        public int babyAgeTicks = 0;
+        public String subRole = "unemployed";
+        public Integer workstationX = null;
+        public Integer workstationY = null;
+        public Integer workstationZ = null;
+        public int villagerLevel = 1;
+        public int villagerXp = 0;
 
         public List<SavedItemStack> inventory = new ArrayList<>();
         public List<String> memory = new ArrayList<>();
@@ -188,6 +196,7 @@ public class BotPersistence {
         public Map<String, CustomBlueprint> blueprints = new LinkedHashMap<>();
         public List<String> globalMemories = new ArrayList<>();
         public List<LearnedRecipe> globalRecipes = new ArrayList<>();
+        public com.aicompanion.bot.learning.HiveMindBrain.SavedBrainState hiveMindBrain = null;
     }
 
     // Persistent custom architectural blueprints captured from world
@@ -425,6 +434,20 @@ public class BotPersistence {
                 data.houseAreaName = bot.getAssignedHouseAreaName() != null ? bot.getAssignedHouseAreaName() : "";
                 data.nightShelterEnabled = bot.isNightShelterEnabled();
                 data.lastBreedingTime = bot.getLastBreedingTime();
+                data.isBaby = bot.isBaby();
+                data.babyAgeTicks = bot.getBabyAgeTicks();
+                data.subRole = bot.getBotSubRole();
+                if (bot.getAssignedWorkstationPos() != null) {
+                    data.workstationX = bot.getAssignedWorkstationPos().getX();
+                    data.workstationY = bot.getAssignedWorkstationPos().getY();
+                    data.workstationZ = bot.getAssignedWorkstationPos().getZ();
+                } else {
+                    data.workstationX = null;
+                    data.workstationY = null;
+                    data.workstationZ = null;
+                }
+                data.villagerLevel = bot.getVillagerLevel();
+                data.villagerXp = bot.getVillagerXp();
 
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.learnedMemories = bot.getLearnedMemories();
@@ -450,6 +473,7 @@ public class BotPersistence {
 
             store.globalMemories = BotMemoryManager.getGlobalMemories();
             store.globalRecipes = BotMemoryManager.getGlobalRecipes();
+            store.hiveMindBrain = com.aicompanion.bot.learning.HiveMindBrain.exportState();
 
             File file = getSaveFile(server);
             File bakFile = new File(file.getParentFile(), "aicompanion_memory.json.bak");
@@ -541,6 +565,9 @@ public class BotPersistence {
             if (store.globalRecipes != null) {
                 BotMemoryManager.setGlobalRecipes(store.globalRecipes);
             }
+            if (store.hiveMindBrain != null) {
+                com.aicompanion.bot.learning.HiveMindBrain.importState(store.hiveMindBrain);
+            }
 
             if (store.bots != null) {
                 for (SavedBotData data : store.bots) {
@@ -605,6 +632,15 @@ public class BotPersistence {
                     }
                     bot.setNightShelterEnabled(data.nightShelterEnabled);
                     bot.setLastBreedingTime(data.lastBreedingTime);
+                    bot.setBaby(data.isBaby, data.babyAgeTicks);
+                    if (data.subRole != null && !data.subRole.isBlank()) {
+                        bot.setBotSubRole(data.subRole);
+                    }
+                    if (data.workstationX != null && data.workstationY != null && data.workstationZ != null) {
+                        bot.setAssignedWorkstationPos(new BlockPos(data.workstationX, data.workstationY, data.workstationZ));
+                    }
+                    bot.setVillagerLevel(data.villagerLevel <= 0 ? 1 : data.villagerLevel);
+                    bot.setVillagerXp(Math.max(0, data.villagerXp));
                     if (data.memory != null) {
                         GeminiService.setMemory(bot.getBotName(), data.memory);
                         for (String memLine : data.memory) {

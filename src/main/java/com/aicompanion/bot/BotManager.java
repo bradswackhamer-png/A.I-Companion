@@ -75,6 +75,11 @@ public class BotManager {
         bot.gameMode.changeGameModeForPlayer(GameType.SURVIVAL);
         bot.setHealth(bot.getMaxHealth());
 
+        // New bot villagers start out as adorable baby bot villagers
+        if (role != null && role.equalsIgnoreCase("villager")) {
+            bot.setBaby(true);
+        }
+
         // Give starter rations and role-specific kit
         bot.getInventory().add(new ItemStack(Items.BREAD, 8));
         bot.applyRoleStarterKit();
@@ -118,6 +123,7 @@ public class BotManager {
         bot.gameMode.changeGameModeForPlayer(GameType.SURVIVAL);
         bot.setHealth(Math.max(1.0f, data.health));
         bot.getFoodData().setFoodLevel(data.foodLevel);
+        bot.setBaby(data.isBaby, data.babyAgeTicks);
 
         if (data.inventory != null) {
             for (BotPersistence.SavedItemStack s : data.inventory) {
@@ -360,6 +366,13 @@ public class BotManager {
                 }
                 AiBotPlayer candidate = nearestFarmer != null ? nearestFarmer : findNearestBot(speaker, bots);
                 if (candidate != null) targets.add(candidate);
+            } else if (lower.contains("good job") || lower.contains("bad job") || lower.contains("good bot")
+                    || lower.contains("bad bot") || lower.contains("well done") || lower.contains("nice job")
+                    || lower.contains("wrong way") || lower.contains("bad path") || lower.contains("good path")
+                    || lower.contains("nice path") || lower.contains("learn this path") || lower.contains("watch how i walk")
+                    || lower.contains("stop learning path") || lower.contains("done showing path")) {
+                AiBotPlayer nearest = findNearestBot(speaker, bots);
+                if (nearest != null) targets.add(nearest);
             } else if (bots.size() == 1 && BotConfig.LISTEN_ALL_WHEN_SINGLE_BOT.getAsBoolean()) {
                 targets.add(bots.iterator().next());
             }
@@ -392,6 +405,7 @@ public class BotManager {
             return;
         }
         String speakerName = speaker != null ? speaker.getPlainTextName() : "Admin";
+        bot.setLastInteractingPlayer(speaker);
 
         String rawLower = requestText.toLowerCase(Locale.ROOT).trim();
         boolean hasICommand = rawLower.startsWith("i command") || rawLower.contains(" i command");
@@ -521,7 +535,19 @@ public class BotManager {
             return;
         }
 
+        if (bot.handleReinforcementChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
         if (bot.handleHousingChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
+        if (bot.handleVillagerChatCommand(requestText, speaker)) {
             GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
             BotPersistence.saveAll(server);
             return;

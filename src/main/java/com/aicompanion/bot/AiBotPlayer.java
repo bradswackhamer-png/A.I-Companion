@@ -180,6 +180,12 @@ public class AiBotPlayer extends ServerPlayer {
     private @Nullable Vec3 conductorMoveStartPos = null;
     private boolean conductorFollowingPlayer = false;
     private @Nullable ServerPlayer conductorTargetPlayer = null;
+    private @Nullable ServerPlayer lastInteractingPlayer = null;
+    private String botSubRole = "unemployed";
+    private @Nullable BlockPos assignedWorkstationPos = null;
+    private int villagerLevel = 1;
+    private int villagerXp = 0;
+    private final BotVillagerMerchant villagerMerchant = new BotVillagerMerchant(this);
     private int trainBoardCooldownTicks = 0;
     private @Nullable String previousRoleBeforeTrain = null;
 
@@ -270,6 +276,10 @@ public class AiBotPlayer extends ServerPlayer {
     private boolean sentryMode = false;
     private @Nullable BlockPos sentryPos = null;
 
+    // Baby Villager configuration
+    private boolean isBaby = false;
+    private int babyAgeTicks = 0;
+
     // Village House Construction
     private @Nullable List<HouseBlueprint.VoxelStep> activeHouseQueue = null;
     private int houseBuildCooldown = 0;
@@ -348,6 +358,59 @@ public class AiBotPlayer extends ServerPlayer {
         this.botName = profile.name();
         this.botRole = (role == null || role.isBlank()) ? "All-Around Survival Companion" : role;
         this.connection = new BotNetHandler(level.getServer(), this);
+        var stepAttr = this.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.STEP_HEIGHT);
+        if (stepAttr != null && stepAttr.getBaseValue() < 1.06) {
+            stepAttr.setBaseValue(1.06);
+        }
+    }
+
+    public synchronized void setBaby(boolean baby, int ageTicks) {
+        this.isBaby = baby;
+        this.babyAgeTicks = baby ? Math.max(1, ageTicks) : 0;
+        var scaleAttr = this.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.SCALE);
+        if (scaleAttr != null) {
+            scaleAttr.setBaseValue(baby ? 0.55 : 1.0);
+        }
+    }
+
+    public synchronized void setBaby(boolean baby) {
+        setBaby(baby, 24000);
+    }
+
+    @Override
+    public boolean isBaby() {
+        return this.isBaby;
+    }
+
+    public int getBabyAgeTicks() {
+        return this.babyAgeTicks;
+    }
+
+    public void setBabyAgeTicks(int ticks) {
+        this.babyAgeTicks = ticks;
+        if (ticks <= 0 && this.isBaby) {
+            growUpToAdult();
+        }
+    }
+
+    public synchronized void growUpToAdult() {
+        this.isBaby = false;
+        this.babyAgeTicks = 0;
+        var scaleAttr = this.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.SCALE);
+        if (scaleAttr != null) {
+            scaleAttr.setBaseValue(1.0);
+        }
+        if (this.level() instanceof ServerLevel sl) {
+            sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 16, 0.4, 0.4, 0.4, 0.1);
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.PLAYER_LEVELUP, SoundSource.PLAYERS, 1.0f, 1.0f);
+        }
+        sayInChat(this.getPlainTextName() + " has grown up into an adult villager!");
+        if (this.botRole.toLowerCase().contains("villager")) {
+            searchAndClaimWorkstation(48);
+        }
+        if (this.level().getServer() != null) {
+            BotPersistence.saveAll(this.level().getServer());
+        }
     }
 
     public String getBotName() {
@@ -358,9 +421,105 @@ public class AiBotPlayer extends ServerPlayer {
         return this.botRole;
     }
 
+    public synchronized String getBotSubRole() {
+        return this.botSubRole != null ? this.botSubRole : "unemployed";
+    }
+
+    public synchronized void setBotSubRole(String subRole) {
+        String formatted = (subRole == null || subRole.isBlank()) ? "unemployed" : subRole.trim().toLowerCase(Locale.ROOT);
+        if (!formatted.equalsIgnoreCase(this.botSubRole)) {
+            this.botSubRole = formatted;
+            if (this.villagerMerchant != null) {
+                this.villagerMerchant.resetOffers();
+            }
+        }
+    }
+
+    public synchronized int getVillagerLevel() {
+        return Math.max(1, Math.min(5, this.villagerLevel));
+    }
+
+    public synchronized void setVillagerLevel(int level) {
+        this.villagerLevel = Math.max(1, Math.min(5, level));
+        if (this.villagerMerchant != null) {
+            this.villagerMerchant.resetOffers();
+        }
+    }
+
+    public synchronized int getVillagerXp() {
+        return Math.max(0, this.villagerXp);
+    }
+
+    public synchronized void setVillagerXp(int xp) {
+        this.villagerXp = Math.max(0, xp);
+    }
+
+    public String getVillagerLevelName() {
+        return switch (getVillagerLevel()) {
+            case 1 -> "Novice";
+            case 2 -> "Apprentice";
+            case 3 -> "Journeyman";
+            case 4 -> "Expert";
+            case 5 -> "Master";
+            default -> "Novice";
+        };
+    }
+
+    public String getVillagerProfessionTitle() {
+        String sub = getBotSubRole();
+        if ("unemployed".equalsIgnoreCase(sub) || "none".equalsIgnoreCase(sub)) {
+            return "Villager";
+        }
+        return capitalize(sub);
+    }
+
+    public void openVillagerTradeScreen(ServerPlayer player) {
+        if (this.isBaby()) {
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                    net.minecraft.sounds.SoundEvents.VILLAGER_NO,
+                    net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.35f);
+            this.sayInChat("I'm still just a baby! I can't trade until I grow up!");
+            return;
+        }
+
+        this.villagerMerchant.setTradingPlayer(player);
+        this.villagerMerchant.ensureOffersInitialized();
+
+        String title = this.getBotName() + " - " + getVillagerProfessionTitle() + " (" + getVillagerLevelName() + ")";
+
+        OptionalInt containerId = player.openMenu(new net.minecraft.world.SimpleMenuProvider(
+                (id, playerInv, p) -> new net.minecraft.world.inventory.MerchantMenu(id, playerInv, this.villagerMerchant),
+                Component.literal(title)
+        ));
+
+        if (containerId.isPresent()) {
+            player.sendMerchantOffers(containerId.getAsInt(), this.villagerMerchant.getOffers(), this.villagerLevel, this.villagerXp, true, true);
+        }
+    }
+
+    public synchronized @Nullable BlockPos getAssignedWorkstationPos() {
+        return this.assignedWorkstationPos;
+    }
+
+    public synchronized void setAssignedWorkstationPos(@Nullable BlockPos pos) {
+        this.assignedWorkstationPos = pos;
+    }
+
     public synchronized void setBotRole(String role) {
         if (role != null && !role.isBlank()) {
+            String prev = this.botRole;
             this.botRole = role.trim();
+            if (!this.botRole.toLowerCase().contains("villager") && prev != null && prev.toLowerCase().contains("villager")) {
+                this.assignedWorkstationPos = null;
+                this.botSubRole = "none";
+            } else if (this.botRole.toLowerCase().contains("villager") && (!prev.toLowerCase().contains("villager") || "none".equals(this.botSubRole))) {
+                if ("none".equals(this.botSubRole)) {
+                    this.botSubRole = "unemployed";
+                }
+                if (!this.isBaby()) {
+                    searchAndClaimWorkstation(48);
+                }
+            }
         }
     }
 
@@ -1290,7 +1449,6 @@ public class AiBotPlayer extends ServerPlayer {
             this.getInventory().add(new ItemStack(Items.BREAD, 16));
             this.autoEquipArmor();
         } else if (r.contains("villager")) {
-            this.getInventory().add(new ItemStack(Items.EMERALD, 4));
             this.getInventory().add(new ItemStack(Items.BREAD, 6));
             this.getInventory().add(new ItemStack(Items.WHEAT, 6));
         }
@@ -1366,7 +1524,36 @@ public class AiBotPlayer extends ServerPlayer {
         this.stopMovement();
     }
 
+    private String lastCompletedActionType = "IDLE";
+
+    public String getCurrentActionTypeForLearning() {
+        if (this.currentAction != null) {
+            return this.currentAction.getNormalizedType();
+        }
+        if (this.conductorFollowingPlayer) {
+            return "FOLLOW";
+        }
+        if (this.sentryMode) {
+            return "SENTRY";
+        }
+        if (this.lastCompletedActionType != null && !this.lastCompletedActionType.equals("IDLE")) {
+            return this.lastCompletedActionType;
+        }
+        String r = this.botRole.toLowerCase(Locale.ROOT);
+        if (r.contains("farm")) return "FARM_AUTONOMOUS";
+        if (r.contains("guard")) return "GUARD_PATROL";
+        if (r.contains("villager")) return "VILLAGER_" + this.getBotSubRole().toUpperCase(Locale.ROOT);
+        if (r.contains("lumber")) return "LUMBER_AUTONOMOUS";
+        if (r.contains("mine")) return "MINE_AUTONOMOUS";
+        if (r.contains("husbandry") || r.contains("ranch")) return "RANCH_AUTONOMOUS";
+        return "AUTONOMOUS_" + r.toUpperCase(Locale.ROOT);
+    }
+
     private void advanceNextAction() {
+        if (this.currentAction != null) {
+            this.lastCompletedActionType = this.currentAction.getNormalizedType();
+            com.aicompanion.bot.learning.HiveMindBrain.applyReinforcementSignal(this, 3.5f, false);
+        }
         if (this.targetBlockPos != null) {
             this.level().destroyBlockProgress(this.getId(), this.targetBlockPos, -1);
             this.targetBlockPos = null;
@@ -1403,6 +1590,27 @@ public class AiBotPlayer extends ServerPlayer {
         this.zo = this.getZ();
         this.doTick();
         this.level().getChunkSource().move(this);
+
+        if (this.isBaby && this.babyAgeTicks > 0) {
+            this.babyAgeTicks--;
+            if (this.babyAgeTicks <= 0) {
+                growUpToAdult();
+            }
+        }
+
+        if (this.tickCount % 40 == 0) {
+            var stepAttr = this.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.STEP_HEIGHT);
+            if (stepAttr != null && stepAttr.getBaseValue() < 1.06) {
+                stepAttr.setBaseValue(1.06);
+            }
+            var scaleAttr = this.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.SCALE);
+            if (scaleAttr != null) {
+                double targetScale = this.isBaby ? 0.55 : 1.0;
+                if (Math.abs(scaleAttr.getBaseValue() - targetScale) > 0.01) {
+                    scaleAttr.setBaseValue(targetScale);
+                }
+            }
+        }
 
         if (!this.isAlive()) {
             return;
@@ -1768,7 +1976,7 @@ public class AiBotPlayer extends ServerPlayer {
 
         // Defend guarded player from nearby provoked monsters
         if (BotConfig.AUTO_DEFEND.getAsBoolean()) {
-            Monster threat = findNearestProvokedThreatNear(target.blockPosition(), hasBow() ? 32.0 : 8.0, target);
+            Monster threat = findNearestProvokedThreatNear(target.blockPosition(), hasBow() ? 36.0 : 20.0, target);
             if (threat != null) {
                 engageTarget(threat);
                 return false;
@@ -2442,7 +2650,7 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         String query = action.getPrimaryTarget().toLowerCase().replace("minecraft:", "").trim();
-        LivingEntity targetMob = findNearestTargetMob(query, 24.0);
+        LivingEntity targetMob = findNearestTargetMob(query, 48.0);
         if (targetMob == null) {
             stopMovement();
             if (this.actionProgressCount > 0) {
@@ -3997,12 +4205,40 @@ public class AiBotPlayer extends ServerPlayer {
         return false;
     }
 
+    public static boolean isStairBlock(BlockState state) {
+        if (state == null || state.isAir()) return false;
+        if (state.getBlock() instanceof net.minecraft.world.level.block.StairBlock) return true;
+        if (state.is(net.minecraft.tags.BlockTags.STAIRS)) return true;
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase(java.util.Locale.ROOT);
+        return path.contains("stairs") || path.contains("stair") || path.contains("loft_stairs")
+                || path.contains("compact_stairs") || path.contains("bulk_stairs")
+                || path.contains("terrace_stairs") || path.contains("skyline_stairs")
+                || path.contains("step");
+    }
+
+    public static boolean isRailingOrBalustrade(BlockState state) {
+        if (state == null || state.isAir()) return false;
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase(java.util.Locale.ROOT);
+        return path.contains("railing") || path.contains("balustrade") || path.contains("balcony")
+                || path.contains("handrail") || path.contains("banister") || path.contains("guardrail");
+    }
+
+    public static boolean isStairOrPlatform(BlockState state) {
+        if (isStairBlock(state)) return true;
+        if (state == null || state.isAir()) return false;
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase(java.util.Locale.ROOT);
+        return path.contains("platform");
+    }
+
     public boolean isFenceOrWall(BlockState state) {
         if (state == null || state.isAir()) return false;
+        // Never treat stairs, stair platforms, railings, or balconies as impenetrable perimeter fence walls!
+        if (isStairOrPlatform(state) || isRailingOrBalustrade(state)) return false;
+
         if (state.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
             return !state.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN);
         }
-        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase();
+        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath().toLowerCase(java.util.Locale.ROOT);
         if (path.contains("fence_gate") || path.contains("gate")) {
             return !isOpenDoorOrGate(state);
         }
@@ -4029,6 +4265,16 @@ public class AiBotPlayer extends ServerPlayer {
                 BlockPos p = new BlockPos(blockX, y, blockZ);
                 BlockState st = this.level().getBlockState(p);
                 if (isFenceOrWall(st) && !isOpenDoorOrGate(st)) {
+                    // Ignore fence/wall blocks if they are directly flanking or part of a walkable stair corridor
+                    if (isStairOrPlatform(st) || isRailingOrBalustrade(st)) continue;
+                    boolean isBesideStairs = false;
+                    for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+                        if (isStairOrPlatform(this.level().getBlockState(p.relative(d)))) {
+                            isBesideStairs = true;
+                            break;
+                        }
+                    }
+                    if (isBesideStairs) continue;
                     return true;
                 }
             }
@@ -4191,7 +4437,7 @@ public class AiBotPlayer extends ServerPlayer {
         BlockState belowState = this.level().getBlockState(pos.below());
         FluidState belowFluid = this.level().getFluidState(pos.below());
         if (isHazardousBlockOrFluid(belowState, belowFluid)) return false;
-        boolean hasFloor = !belowState.isAir() && !belowState.canBeReplaced() && !isFenceOrWall(belowState);
+        boolean hasFloor = !belowState.isAir() && !belowState.canBeReplaced() && !isFenceOrWall(belowState) && !isRailingOrBalustrade(belowState);
         return hasFloor && isPassable(pos) && isPassable(pos.above()) && !isDeepPitAt(pos);
     }
 
@@ -4222,7 +4468,9 @@ public class AiBotPlayer extends ServerPlayer {
                     if (isStandable(p)) {
                         int wallCount = 0;
                         for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
-                            if (!isPassable(p.relative(d).above())) {
+                            BlockPos adjHeadPos = p.relative(d).above();
+                            BlockState adjHeadState = this.level().getBlockState(adjHeadPos);
+                            if (!isPassable(adjHeadPos) && !isRailingOrBalustrade(adjHeadState) && !isStairOrPlatform(adjHeadState)) {
                                 wallCount++;
                             }
                         }
@@ -4247,12 +4495,12 @@ public class AiBotPlayer extends ServerPlayer {
         for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
             BlockPos wallHead = feet.relative(d).above();
             BlockState hs = this.level().getBlockState(wallHead);
-            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs) && !isOpenDoorOrGate(hs)) {
+            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs) && !isOpenDoorOrGate(hs) && !isStairOrPlatform(hs) && !isRailingOrBalustrade(hs)) {
                 solidHeadNeighbors++;
             }
             BlockPos wallFeet = feet.relative(d);
             BlockState fs = this.level().getBlockState(wallFeet);
-            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs) && !isOpenDoorOrGate(fs)) {
+            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs) && !isOpenDoorOrGate(fs) && !isStairOrPlatform(fs) && !isRailingOrBalustrade(fs)) {
                 solidFeetNeighbors++;
             }
         }
@@ -4266,8 +4514,8 @@ public class AiBotPlayer extends ServerPlayer {
         BlockPos feetPos = this.blockPosition();
         BlockState feetState = this.level().getBlockState(feetPos);
         BlockState belowState = this.level().getBlockState(feetPos.below());
-        if (isFenceOrWall(feetState) || isFenceOrWall(belowState)) {
-            return; // Strict boundary: Never place blocks on or climb over fences!
+        if (isFenceOrWall(feetState) || isFenceOrWall(belowState) || isStairOrPlatform(feetState) || isStairOrPlatform(belowState)) {
+            return; // Strict boundary: Never place blocks on or climb over fences or stairs!
         }
         BlockPos aboveHead = feetPos.above(2);
 
@@ -4317,12 +4565,12 @@ public class AiBotPlayer extends ServerPlayer {
         for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
             BlockPos wallHead = feetPos.relative(d).above();
             BlockState hs = this.level().getBlockState(wallHead);
-            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs)) {
+            if (!hs.isAir() && !hs.canBeReplaced() && !isFenceOrWall(hs) && !isStairOrPlatform(hs) && !isRailingOrBalustrade(hs)) {
                 solidHeadNeighbors++;
             }
             BlockPos wallFeet = feetPos.relative(d);
             BlockState fs = this.level().getBlockState(wallFeet);
-            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs)) {
+            if (!fs.isAir() && !fs.canBeReplaced() && !isFenceOrWall(fs) && !isStairOrPlatform(fs) && !isRailingOrBalustrade(fs)) {
                 solidFeetNeighbors++;
             }
         }
@@ -4421,6 +4669,24 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        // C. STAIRS & STEP CLEARANCE:
+        boolean isStairInFront = isStairOrPlatform(frontFeetState) || isStairOrPlatform(frontHeadState);
+        boolean isCurrentOnStair = isStairOrPlatform(this.level().getBlockState(feetPos)) || isStairOrPlatform(this.level().getBlockState(feetPos.below()));
+        if (isStairInFront || isCurrentOnStair) {
+            // We are navigating a staircase! Never treat stair steps as walls or attempt sideways detours into railings!
+            this.setJumping(true);
+            if (this.onGround()) {
+                this.jumpFromGround();
+            }
+            Vec3 mot = this.getDeltaMovement();
+            this.setDeltaMovement(mot.x, Math.max(mot.y, 0.32), mot.z);
+            this.zza = 1.0f;
+            this.xxa = 0.0f;
+            this.stuckTicks = 0;
+            this.moveNoProgressTicks = 0;
+            return;
+        }
+
         boolean isBlockedInFront = (!isPassable(frontFeet) && !isDoorInFront)
                 || (!isPassable(frontHead) && !isDoorInFront);
 
@@ -4430,6 +4696,7 @@ public class AiBotPlayer extends ServerPlayer {
 
             BlockPos bestBypass = null;
             double bestScore = Double.MAX_VALUE;
+            String dim = this.level().dimension().identifier().toString();
 
             // Probe left side
             for (int dist = 1; dist <= 8; dist++) {
@@ -4444,7 +4711,8 @@ public class AiBotPlayer extends ServerPlayer {
                 BlockPos clearFp = findClearBypassAtLateral(probeFeet, dir);
                 if (clearFp != null) {
                     double distToGoal = Vec3.atCenterOf(clearFp).distanceToSqr(originalGoal);
-                    double score = dist * 2.0 + distToGoal;
+                    double learnedBias = com.aicompanion.bot.learning.HiveMindBrain.getNodeScore(dim, clearFp) * 4.0;
+                    double score = dist * 2.0 + distToGoal - learnedBias;
                     if (score < bestScore) {
                         bestScore = score;
                         bestBypass = clearFp;
@@ -4469,7 +4737,8 @@ public class AiBotPlayer extends ServerPlayer {
                 BlockPos clearFp = findClearBypassAtLateral(probeFeet, dir);
                 if (clearFp != null) {
                     double distToGoal = Vec3.atCenterOf(clearFp).distanceToSqr(originalGoal);
-                    double score = dist * 2.0 + distToGoal;
+                    double learnedBias = com.aicompanion.bot.learning.HiveMindBrain.getNodeScore(dim, clearFp) * 4.0;
+                    double score = dist * 2.0 + distToGoal - learnedBias;
                     if (score < bestScore) {
                         bestScore = score;
                         bestBypass = clearFp;
@@ -4608,6 +4877,16 @@ public class AiBotPlayer extends ServerPlayer {
         }
         this.lastCheckedPos = this.position();
 
+        // Hive-Mind Spatial Pheromone & Player Breadcrumb Waypoint Routing
+        if (this.activeBypassWaypoint == null && distToGoalSq > 6.25 && this.tickCount % 6 == 0) {
+            String dim = this.level().dimension().identifier().toString();
+            BlockPos learnedWp = com.aicompanion.bot.learning.HiveMindBrain.findLearnedWaypointTowards(dim, this.blockPosition(), target);
+            if (learnedWp != null) {
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(learnedWp);
+                this.bypassWaypointTicks = 30;
+            }
+        }
+
         // Intermediate Bypass Waypoint Steering
         if (this.activeBypassWaypoint != null) {
             double distToBypassSq = this.position().distanceToSqr(this.activeBypassWaypoint);
@@ -4708,6 +4987,38 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        // 4. Stair Corridor Navigation & 1-Block Wide Shoulder Alignment:
+        BlockPos currentPos = this.blockPosition();
+        BlockPos stairPos = null;
+        if (isStairOrPlatform(this.level().getBlockState(currentPos))) {
+            stairPos = currentPos;
+        } else if (isStairOrPlatform(this.level().getBlockState(currentPos.below()))) {
+            stairPos = currentPos.below();
+        } else if (isStairOrPlatform(frontState)) {
+            stairPos = frontPos;
+        } else if (isStairOrPlatform(this.level().getBlockState(frontPos.above()))) {
+            stairPos = frontPos.above();
+        }
+
+        if (stairPos != null) {
+            // Center bot precisely on the stair block centerline so 0.6-width shoulders don't clip 1-block wide railings
+            double stairCenterX = stairPos.getX() + 0.5;
+            double stairCenterZ = stairPos.getZ() + 0.5;
+            double offX = stairCenterX - this.getX();
+            double offZ = stairCenterZ - this.getZ();
+
+            Vec3 mot = this.getDeltaMovement();
+            if (dir.getAxis() == net.minecraft.core.Direction.Axis.Z) {
+                // Moving North/South along stairs -> align X to stair centerline
+                this.setDeltaMovement(mot.x + offX * 0.35, mot.y, mot.z);
+            } else if (dir.getAxis() == net.minecraft.core.Direction.Axis.X) {
+                // Moving East/West along stairs -> align Z to stair centerline
+                this.setDeltaMovement(mot.x, mot.y, mot.z + offZ * 0.35);
+            } else {
+                this.setDeltaMovement(mot.x + offX * 0.25, mot.y, mot.z + offZ * 0.25);
+            }
+        }
+
         lookAtPos(new Vec3(target.x, target.y + this.getEyeHeight(), target.z));
         this.setSprinting(sprint);
         this.zza = sprint ? 1.0f : 0.8f;
@@ -4768,13 +5079,40 @@ public class AiBotPlayer extends ServerPlayer {
                 || (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock)
                 || isOpenDoorOrGate(frontState) || isOpenDoorOrGate(headState);
         boolean isFenceBarrier = (isFenceOrWall(frontState) || isFenceOrWall(headState)) && !isDoorway;
-        boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier && !isDoorway;
+        boolean isFrontStair = isStairOrPlatform(frontState) || isStairOrPlatform(headState)
+                || isStairOrPlatform(this.level().getBlockState(currentFeet))
+                || isStairOrPlatform(this.level().getBlockState(currentFeet.below()));
+        boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier && !isDoorway && !isFrontStair;
 
         // Jump over 1-block ledges or swim in water/lava/oil (Never jump at 2-block tall solid walls or fences!)
-        boolean stepUpPossible = !frontState.isAir() && headState.isAir() && this.level().getBlockState(headFront.above()).isAir() && !isFenceBarrier && !isDoorway;
+        boolean stepUpPossible = (!frontState.isAir() || isFrontStair)
+                && (headState.isAir() || isStairOrPlatform(headState))
+                && this.level().getBlockState(headFront.above()).isAir()
+                && !isFenceBarrier && !isDoorway;
         boolean wantsToAscend = target.y > this.getY() - 0.2;
+        // Hive-Mind Neural Policy & Learned Node Consultation
+        String dimKey = this.level().dimension().identifier().toString();
+        com.aicompanion.bot.learning.HiveMindBrain.NavNode curNavNode = com.aicompanion.bot.learning.HiveMindBrain.getNode(dimKey, currentFeet);
+        float[] sensoryState = com.aicompanion.bot.learning.HiveMindBrain.extractSensoryState(
+                this, target, this.moveNoProgressTicks, isFrontStair, stairPos != null, isDoorway, false);
+        int neuralAction = com.aicompanion.bot.learning.HiveMindBrain.selectAction(this, sensoryState);
+
+        if ((neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_WALK_CENTERED || sensoryState[23] > 0.3f) && stairPos == null) {
+            double cx = currentFeet.getX() + 0.5 - this.getX();
+            double cz = currentFeet.getZ() + 0.5 - this.getZ();
+            Vec3 mot = this.getDeltaMovement();
+            this.setDeltaMovement(mot.x + cx * 0.25, mot.y, mot.z + cz * 0.25);
+        } else if (neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_STRAFE_LEFT && (this.moveNoProgressTicks >= 6 || this.horizontalCollision) && !isFrontStair) {
+            this.xxa = 0.65f;
+        } else if (neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_STRAFE_RIGHT && (this.moveNoProgressTicks >= 6 || this.horizontalCollision) && !isFrontStair) {
+            this.xxa = -0.65f;
+        }
+
         boolean shouldJump = ((stepUpPossible && (wantsToAscend || this.horizontalCollision))
                 || (this.horizontalCollision && !isTallWall && !isFenceBarrier)
+                || (isFrontStair && wantsToAscend)
+                || (curNavNode != null && curNavNode.jumpRequired && wantsToAscend)
+                || (neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_JUMP_ASCEND && wantsToAscend && !isTallWall)
                 || this.isInWater() || this.isInLava() || this.isInHazardousFluid()) && !isFenceBarrier && !isDoorway;
         if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier && !isDoorway) {
             shouldJump = true;
@@ -4782,6 +5120,14 @@ public class AiBotPlayer extends ServerPlayer {
         this.setJumping(shouldJump);
         if (shouldJump && this.onGround()) {
             this.jumpFromGround();
+        }
+
+        // Smooth ascension assist on stairs
+        if (isFrontStair && wantsToAscend) {
+            Vec3 curMotion = this.getDeltaMovement();
+            if (this.horizontalCollision || curMotion.y < 0.15) {
+                this.setDeltaMovement(curMotion.x, Math.max(curMotion.y, 0.28), curMotion.z);
+            }
         }
 
         if (isFenceBarrier) {
@@ -4812,8 +5158,13 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
+        // Record step & intrinsic reinforcement into the shared Hive-Mind
+        boolean madeProgress = this.moveNoProgressTicks == 0;
+        boolean gotStuck = !isExcavating && this.moveNoProgressTicks >= 16;
+        com.aicompanion.bot.learning.HiveMindBrain.recordBotStep(this, madeProgress, gotStuck, shouldJump);
+
         // Stuck & Area Analysis Engine
-        if (!isExcavating && this.moveNoProgressTicks >= 16) {
+        if (gotStuck) {
             analyzeAndExecuteUnstuckPlan(target);
             this.moveNoProgressTicks = 0;
         }
@@ -5465,12 +5816,20 @@ public class AiBotPlayer extends ServerPlayer {
         return composted;
     }
 
+    public void setLastInteractingPlayer(@Nullable ServerPlayer player) {
+        this.lastInteractingPlayer = player;
+    }
+
+    public @Nullable ServerPlayer getLastInteractingPlayer() {
+        return this.lastInteractingPlayer;
+    }
+
     private boolean isMobReachableAndValid(LivingEntity target) {
         if (target == null || !target.isAlive()) return false;
-        if (this.unreachableMobBlacklist.containsKey(target.getId())) return false;
+        if (this.unreachableMobBlacklist.containsKey(target.getId()) && this.tickCount < this.unreachableMobBlacklist.get(target.getId())) return false;
 
         double vertDiff = Math.abs(target.getY() - this.getY());
-        if (vertDiff > 6.0) return false;
+        if (vertDiff > 28.0) return false;
 
         double hdx = target.getX() - this.getX();
         double hdz = target.getZ() - this.getZ();
@@ -5481,18 +5840,7 @@ public class AiBotPlayer extends ServerPlayer {
             return false;
         }
 
-        // Direct line of sight is always valid
-        if (this.hasLineOfSight(target)) {
-            return true;
-        }
-
-        // If out of line of sight, check if the mob's own vanilla A* PathNavigation can reach us
-        if (target instanceof net.minecraft.world.entity.Mob mob) {
-            net.minecraft.world.level.pathfinder.Path path = mob.getNavigation().createPath(this.blockPosition(), 1);
-            return path != null && path.canReach();
-        }
-
-        return false;
+        return true;
     }
 
     public boolean isProvokedThreat(Monster m, @Nullable ServerPlayer protectedPlayer) {
@@ -5501,10 +5849,12 @@ public class AiBotPlayer extends ServerPlayer {
         if (m.getTarget() == this) return true;
         // 2. Did the monster hurt this bot recently?
         if (this.getLastHurtByMob() == m) return true;
-        // 3. Is the monster actively targeting or hurting the protected player?
+        // 3. Is the monster actively targeting, hurting, or in close proximity to protected player?
         if (protectedPlayer != null) {
             if (m.getTarget() == protectedPlayer) return true;
             if (protectedPlayer.getLastHurtByMob() == m) return true;
+            // Any hostile monster within 14 blocks of protected player is an imminent threat
+            if (m.distanceToSqr(protectedPlayer) < 196.0) return true;
             if (m instanceof net.minecraft.world.entity.monster.Creeper creeper) {
                 if (creeper.getSwellDir() > 0 && creeper.distanceToSqr(protectedPlayer) < 64.0) {
                     return true;
@@ -5521,7 +5871,7 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public @Nullable Monster findNearestProvokedThreatNear(BlockPos center, double radius, @Nullable ServerPlayer protectedPlayer) {
-        AABB box = new AABB(center).inflate(radius, 6.0, radius);
+        AABB box = new AABB(center).inflate(radius, Math.max(24.0, radius * 0.5), radius);
         boolean hasBow = hasBow();
         List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
             if (!isProvokedThreat(m, protectedPlayer)) return false;
@@ -5538,11 +5888,10 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable Monster findNearestMonsterNear(BlockPos center, double radius) {
-        AABB box = new AABB(center).inflate(radius, 6.0, radius);
+        AABB box = new AABB(center).inflate(radius, Math.max(24.0, radius * 0.5), radius);
         boolean hasBow = hasBow();
         List<Monster> monsters = this.level().getEntitiesOfClass(Monster.class, box, m -> {
             if (!isMobReachableAndValid(m)) return false;
-            // Ignore monsters separated by fences/walls unless archer
             if (!hasBow && isLineBlockedByFence(this.position(), m.position())) {
                 return false;
             }
@@ -5556,21 +5905,91 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private @Nullable LivingEntity findNearestTargetMob(String query, double radius) {
-        AABB box = this.getBoundingBox().inflate(radius, 6.0, radius);
-        boolean hasBow = hasBow();
-        List<LivingEntity> list = this.level().getEntitiesOfClass(LivingEntity.class, box, e -> {
-            if (e == this || e instanceof Player || !isMobReachableAndValid(e)) return false;
-            if (!hasBow && isLineBlockedByFence(this.position(), e.position())) {
-                return false;
+        double effectiveRadius = Math.max(48.0, radius);
+        ServerPlayer commander = this.lastInteractingPlayer;
+        if (commander != null && (commander.isRemoved() || commander.level() != this.level())) {
+            commander = null;
+        }
+
+        // 1. Highest priority: mob directly in commander's crosshairs
+        if (commander != null) {
+            LivingEntity crossMob = GeminiService.getEntityInCrosshairs(commander, effectiveRadius);
+            if (crossMob != null && crossMob.isAlive() && matchesMobQuery(crossMob, query)) {
+                return crossMob;
             }
-            if (query.isEmpty() || "hostile".equals(query) || "monsters".equals(query) || "mobs".equals(query)) {
-                return e instanceof Monster;
+        }
+
+        // 2. High priority: mob directly in commander's front field of view
+        if (commander != null) {
+            List<LivingEntity> inFront = GeminiService.getEntitiesInFrontCone(commander, effectiveRadius, 0.35);
+            for (LivingEntity fe : inFront) {
+                if (fe.isAlive() && matchesMobQuery(fe, query)) {
+                    return fe;
+                }
             }
-            String typeId = BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).toString().toLowerCase();
-            return typeId.contains(query);
+        }
+
+        // 3. Search in 3D volume around both bot and commander
+        AABB box = this.getBoundingBox().inflate(effectiveRadius, 32.0, effectiveRadius);
+        List<LivingEntity> list = new ArrayList<>(this.level().getEntitiesOfClass(LivingEntity.class, box, e -> {
+            if (e == this || e instanceof Player || !e.isAlive()) return false;
+            if (this.unreachableMobBlacklist.containsKey(e.getId()) && this.tickCount < this.unreachableMobBlacklist.get(e.getId())) return false;
+            return matchesMobQuery(e, query);
+        }));
+
+        if (commander != null) {
+            AABB cmdBox = commander.getBoundingBox().inflate(effectiveRadius, 32.0, effectiveRadius);
+            List<LivingEntity> cmdList = this.level().getEntitiesOfClass(LivingEntity.class, cmdBox, e -> {
+                if (e == this || e instanceof Player || !e.isAlive()) return false;
+                if (this.unreachableMobBlacklist.containsKey(e.getId()) && this.tickCount < this.unreachableMobBlacklist.get(e.getId())) return false;
+                return matchesMobQuery(e, query);
+            });
+            for (LivingEntity e : cmdList) {
+                if (!list.contains(e)) {
+                    list.add(e);
+                }
+            }
+        }
+
+        if (list.isEmpty()) return null;
+
+        // Sort candidates:
+        // Prioritize monsters actively targeting commander or bot, then by distance to bot/commander
+        final ServerPlayer finalCommander = commander;
+        list.sort((e1, e2) -> {
+            boolean threat1 = isProvokedThreatTarget(e1, finalCommander);
+            boolean threat2 = isProvokedThreatTarget(e2, finalCommander);
+            if (threat1 && !threat2) return -1;
+            if (!threat1 && threat2) return 1;
+
+            double d1 = this.distanceToSqr(e1);
+            double d2 = this.distanceToSqr(e2);
+            if (finalCommander != null) {
+                d1 = Math.min(d1, finalCommander.distanceToSqr(e1));
+                d2 = Math.min(d2, finalCommander.distanceToSqr(e2));
+            }
+            return Double.compare(d1, d2);
         });
-        list.sort(Comparator.comparingDouble(this::distanceToSqr));
-        return list.isEmpty() ? null : list.get(0);
+
+        return list.get(0);
+    }
+
+    private boolean matchesMobQuery(LivingEntity e, String query) {
+        if (query.isEmpty() || "hostile".equals(query) || "monsters".equals(query) || "mobs".equals(query)) {
+            return e instanceof Monster;
+        }
+        String typeId = BuiltInRegistries.ENTITY_TYPE.getKey(e.getType()).toString().toLowerCase();
+        return typeId.contains(query);
+    }
+
+    private boolean isProvokedThreatTarget(LivingEntity e, @Nullable ServerPlayer protectedPlayer) {
+        if (e instanceof net.minecraft.world.entity.Mob mob) {
+            if (mob.getTarget() == this) return true;
+            if (protectedPlayer != null && mob.getTarget() == protectedPlayer) return true;
+        }
+        if (this.getLastHurtByMob() == e) return true;
+        if (protectedPlayer != null && protectedPlayer.getLastHurtByMob() == e) return true;
+        return false;
     }
 
     public @Nullable Monster findSentryTarget(double radius) {
@@ -5870,6 +6289,12 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         boolean result = super.hurtServer(level, damageSource, amount);
+        if (result && damageSource.getEntity() == null) {
+            // Environmental hazard damage (fall, cactus, berry bush, fire, magma): penalize in Hive-Mind!
+            String dim = this.level().dimension().identifier().toString();
+            com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, this.blockPosition(), -10.0f, true, false, false, null);
+            com.aicompanion.bot.learning.HiveMindBrain.applyReinforcementSignal(this, -6.0f, false);
+        }
         if (result && damageSource.getEntity() instanceof LivingEntity attacker && !(attacker instanceof Player)) {
             // Auto-raise shield if available to block consecutive hits
             if (this.getOffhandItem().is(Items.SHIELD)) {
@@ -6971,20 +7396,36 @@ public class AiBotPlayer extends ServerPlayer {
         return "Villager_" + (BotManager.getActiveBots().size() + 1);
     }
 
-    private static final Set<Block> VILLAGER_WORKSTATIONS = Set.of(
-            Blocks.COMPOSTER,
-            Blocks.LECTERN,
-            Blocks.BLAST_FURNACE,
-            Blocks.SMOKER,
-            Blocks.CARTOGRAPHY_TABLE,
-            Blocks.BREWING_STAND,
-            Blocks.FLETCHING_TABLE,
-            Blocks.CAULDRON,
-            Blocks.LOOM,
-            Blocks.SMITHING_TABLE,
-            Blocks.STONECUTTER,
-            Blocks.GRINDSTONE,
-            Blocks.BARREL
+    public static final Map<Block, String> WORKSTATION_PROFESSIONS = Map.ofEntries(
+            Map.entry(Blocks.COMPOSTER, "farmer"),
+            Map.entry(Blocks.LECTERN, "librarian"),
+            Map.entry(Blocks.BLAST_FURNACE, "armorer"),
+            Map.entry(Blocks.SMOKER, "butcher"),
+            Map.entry(Blocks.CARTOGRAPHY_TABLE, "cartographer"),
+            Map.entry(Blocks.BREWING_STAND, "cleric"),
+            Map.entry(Blocks.FLETCHING_TABLE, "fletcher"),
+            Map.entry(Blocks.CAULDRON, "leatherworker"),
+            Map.entry(Blocks.LOOM, "shepherd"),
+            Map.entry(Blocks.SMITHING_TABLE, "weaponsmith"),
+            Map.entry(Blocks.STONECUTTER, "mason"),
+            Map.entry(Blocks.GRINDSTONE, "toolsmith"),
+            Map.entry(Blocks.BARREL, "fisherman")
+    );
+
+    public static final Map<String, net.minecraft.sounds.SoundEvent> PROFESSION_WORK_SOUNDS = Map.ofEntries(
+            Map.entry("farmer", SoundEvents.VILLAGER_WORK_FARMER),
+            Map.entry("librarian", SoundEvents.VILLAGER_WORK_LIBRARIAN),
+            Map.entry("armorer", SoundEvents.VILLAGER_WORK_ARMORER),
+            Map.entry("butcher", SoundEvents.VILLAGER_WORK_BUTCHER),
+            Map.entry("cartographer", SoundEvents.VILLAGER_WORK_CARTOGRAPHER),
+            Map.entry("cleric", SoundEvents.VILLAGER_WORK_CLERIC),
+            Map.entry("fletcher", SoundEvents.VILLAGER_WORK_FLETCHER),
+            Map.entry("leatherworker", SoundEvents.VILLAGER_WORK_LEATHERWORKER),
+            Map.entry("shepherd", SoundEvents.VILLAGER_WORK_SHEPHERD),
+            Map.entry("weaponsmith", SoundEvents.VILLAGER_WORK_WEAPONSMITH),
+            Map.entry("mason", SoundEvents.VILLAGER_WORK_MASON),
+            Map.entry("toolsmith", SoundEvents.VILLAGER_WORK_TOOLSMITH),
+            Map.entry("fisherman", SoundEvents.VILLAGER_WORK_FISHERMAN)
     );
 
     public synchronized boolean tickNightShelterAndSleep() {
@@ -7104,7 +7545,7 @@ public class AiBotPlayer extends ServerPlayer {
         double bestDistSq = Double.MAX_VALUE;
         for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -4, -radius), center.offset(radius, 4, radius))) {
             Block b = this.level().getBlockState(p).getBlock();
-            if (VILLAGER_WORKSTATIONS.contains(b)) {
+            if (WORKSTATION_PROFESSIONS.containsKey(b)) {
                 double d = this.distanceToSqr(Vec3.atCenterOf(p));
                 if (d < bestDistSq) {
                     bestDistSq = d;
@@ -7183,47 +7624,156 @@ public class AiBotPlayer extends ServerPlayer {
         }
     }
 
-    private void tickVillagerWork() {
-        BlockPos workstation = findNearestWorkstation(24);
-        if (workstation != null) {
-            double distSq = this.distanceToSqr(Vec3.atCenterOf(workstation));
-            if (distSq > 4.0) {
-                moveTowards(Vec3.atCenterOf(workstation), false);
-            } else {
-                stopMovement();
-                lookAtPos(Vec3.atCenterOf(workstation));
+    public static String capitalize(String str) {
+        if (str == null || str.isEmpty()) return "";
+        return Character.toUpperCase(str.charAt(0)) + str.substring(1).toLowerCase(Locale.ROOT);
+    }
 
-                if (this.tickCount % 70 == 0) {
-                    BlockState bs = this.level().getBlockState(workstation);
-                    Block b = bs.getBlock();
-                    net.minecraft.sounds.SoundEvent snd = SoundEvents.VILLAGER_WORK_ARMORER;
-                    if (b == Blocks.COMPOSTER) {
-                        snd = SoundEvents.COMPOSTER_FILL;
-                        if (this.isAutoCompostExcessSeeds()) {
-                            compostExcessSeeds(workstation, this.maxSeedsToKeepOnHand);
-                        }
-                    } else if (b == Blocks.LECTERN) {
-                        snd = SoundEvents.BOOK_PAGE_TURN;
-                    } else if (b == Blocks.BLAST_FURNACE || b == Blocks.SMOKER) {
-                        snd = SoundEvents.FURNACE_FIRE_CRACKLE;
-                    } else if (b == Blocks.SMITHING_TABLE) {
-                        snd = SoundEvents.SMITHING_TABLE_USE;
-                    } else if (b == Blocks.STONECUTTER) {
-                        snd = SoundEvents.UI_STONECUTTER_TAKE_RESULT;
-                    } else if (b == Blocks.BREWING_STAND) {
-                        snd = SoundEvents.BREWING_STAND_BREW;
-                    } else if (b == Blocks.BARREL) {
-                        snd = SoundEvents.BARREL_OPEN;
-                    }
+    public static @Nullable Block getWorkstationForProfession(String trait) {
+        if (trait == null) return null;
+        for (var entry : WORKSTATION_PROFESSIONS.entrySet()) {
+            if (entry.getValue().equalsIgnoreCase(trait)) {
+                return entry.getKey();
+            }
+        }
+        return null;
+    }
 
-                    this.level().playSound(null, workstation, snd, SoundSource.BLOCKS, 0.8f, 1.0f);
-                    if (this.level() instanceof ServerLevel sl) {
-                        sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, workstation.getX() + 0.5, workstation.getY() + 1.1, workstation.getZ() + 0.5, 4, 0.3, 0.3, 0.3, 0.05);
+    public boolean isWorkstationClaimedByOther(BlockPos pos) {
+        for (AiBotPlayer other : BotManager.getActiveBots()) {
+            if (other != this && other.level() == this.level() && pos.equals(other.getAssignedWorkstationPos())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public synchronized @Nullable BlockPos findAvailableWorkstation(int radius) {
+        BlockPos center = this.assignedHousePos != null ? this.assignedHousePos
+                : (this.assignedBedPos != null ? this.assignedBedPos : this.blockPosition());
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+
+        for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -6, -radius), center.offset(radius, 6, radius))) {
+            Block b = this.level().getBlockState(p).getBlock();
+            if (WORKSTATION_PROFESSIONS.containsKey(b)) {
+                if (isWorkstationClaimedByOther(p)) {
+                    continue;
+                }
+                boolean accessible = false;
+                for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.Plane.HORIZONTAL) {
+                    BlockPos adj = p.relative(dir);
+                    if (this.level().getBlockState(adj).isAir() || !this.level().getBlockState(adj).isSolid()) {
+                        accessible = true;
+                        break;
                     }
                 }
+                if (!accessible) continue;
+
+                double d = this.distanceToSqr(Vec3.atCenterOf(p));
+                if (d < bestDistSq) {
+                    bestDistSq = d;
+                    best = p.immutable();
+                }
             }
-        } else {
+        }
+        return best;
+    }
+
+    public synchronized boolean searchAndClaimWorkstation(int radius) {
+        if (this.isBaby()) return false;
+        BlockPos available = findAvailableWorkstation(radius);
+        if (available != null) {
+            this.assignedWorkstationPos = available;
+            Block b = this.level().getBlockState(available).getBlock();
+            String trait = WORKSTATION_PROFESSIONS.getOrDefault(b, "villager");
+            this.botSubRole = trait;
+
+            net.minecraft.sounds.SoundEvent snd = PROFESSION_WORK_SOUNDS.getOrDefault(trait, SoundEvents.VILLAGER_YES);
+            this.level().playSound(null, available, snd, SoundSource.BLOCKS, 1.0f, 1.0f);
+            if (this.level() instanceof ServerLevel sl) {
+                sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, available.getX() + 0.5, available.getY() + 1.2, available.getZ() + 0.5, 8, 0.3, 0.3, 0.3, 0.05);
+                sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 8, 0.3, 0.3, 0.3, 0.05);
+            }
+            sayInChat("I discovered a " + b.getName().getString() + " at (" + available.getX() + ", " + available.getY() + ", " + available.getZ() + ")! I am now taking on the '" + capitalize(trait) + "' profession trait under my Villager role!");
+            return true;
+        }
+        return false;
+    }
+
+    private void equipProfessionWorkItem(String trait) {
+        Item itemToHold = switch (trait.toLowerCase(Locale.ROOT)) {
+            case "farmer" -> Items.WHEAT;
+            case "librarian" -> Items.BOOK;
+            case "armorer" -> Items.IRON_INGOT;
+            case "weaponsmith" -> Items.IRON_SWORD;
+            case "toolsmith" -> Items.IRON_PICKAXE;
+            case "fletcher" -> Items.BOW;
+            case "cleric" -> Items.POTION;
+            case "butcher" -> Items.COOKED_BEEF;
+            case "fisherman" -> Items.FISHING_ROD;
+            case "shepherd" -> Items.SHEARS;
+            case "mason" -> Items.STONE_BRICKS;
+            case "cartographer" -> Items.MAP;
+            case "leatherworker" -> Items.LEATHER;
+            default -> null;
+        };
+        if (itemToHold != null && !this.getMainHandItem().is(itemToHold)) {
+            this.setItemSlot(EquipmentSlot.MAINHAND, new ItemStack(itemToHold, 1));
+        }
+    }
+
+    private void tickVillagerWork() {
+        if (this.isBaby()) return;
+
+        // Verify existing workstation
+        if (this.assignedWorkstationPos != null) {
+            BlockState bs = this.level().getBlockState(this.assignedWorkstationPos);
+            String trait = WORKSTATION_PROFESSIONS.get(bs.getBlock());
+            if (trait == null) {
+                this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_NO, SoundSource.NEUTRAL, 1.0f, 1.0f);
+                sayInChat("My work table at (" + this.assignedWorkstationPos.getX() + ", " + this.assignedWorkstationPos.getY() + ", " + this.assignedWorkstationPos.getZ() + ") was removed! I am now unemployed until I find a new work table.");
+                this.assignedWorkstationPos = null;
+                this.botSubRole = "unemployed";
+            } else if (!trait.equalsIgnoreCase(this.botSubRole)) {
+                this.botSubRole = trait;
+                sayInChat("My work table was upgraded to a " + bs.getBlock().getName().getString() + "! My sub-role trait is now " + capitalize(trait) + ".");
+            }
+        }
+
+        // Search for workstation if unemployed
+        if (this.assignedWorkstationPos == null) {
+            if (this.tickCount % 80 == 0) {
+                searchAndClaimWorkstation(48);
+            }
             wanderAroundHomeOrAnchor(16.0);
+            return;
+        }
+
+        BlockPos workstation = this.assignedWorkstationPos;
+        double distSq = this.distanceToSqr(Vec3.atCenterOf(workstation));
+        if (distSq > 4.0) {
+            moveTowards(Vec3.atCenterOf(workstation), false);
+        } else {
+            stopMovement();
+            lookAtPos(Vec3.atCenterOf(workstation));
+            equipProfessionWorkItem(this.botSubRole);
+
+            if (this.tickCount % 60 == 0) {
+                BlockState bs = this.level().getBlockState(workstation);
+                Block b = bs.getBlock();
+                String trait = this.botSubRole;
+                net.minecraft.sounds.SoundEvent snd = PROFESSION_WORK_SOUNDS.getOrDefault(trait, SoundEvents.VILLAGER_WORK_ARMORER);
+
+                if (b == Blocks.COMPOSTER && this.isAutoCompostExcessSeeds()) {
+                    compostExcessSeeds(workstation, this.maxSeedsToKeepOnHand);
+                }
+
+                this.level().playSound(null, workstation, snd, SoundSource.BLOCKS, 0.8f, 1.0f);
+                if (this.level() instanceof ServerLevel sl) {
+                    sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, workstation.getX() + 0.5, workstation.getY() + 1.1, workstation.getZ() + 0.5, 4, 0.3, 0.3, 0.3, 0.05);
+                }
+            }
         }
     }
 
@@ -7262,12 +7812,80 @@ public class AiBotPlayer extends ServerPlayer {
 
         if (this.tickCount - this.lastVillagerAmbientSoundTime > 100) {
             this.lastVillagerAmbientSoundTime = this.tickCount;
-            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 1.0f);
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, this.isBaby ? 1.35f : 1.0f);
         }
 
-        if (this.tickCount % 40 == 0) {
+        if (!this.isBaby && this.tickCount % 40 == 0) {
             checkAndExecuteBreeding(nearestOtherBot);
         }
+    }
+
+    private void tickBabyVillagerPlay() {
+        // Baby villagers playfully explore, run with other companions, and jump on beds!
+        BlockPos bedPos = findNearestBed(16);
+
+        if (bedPos != null && this.distanceToSqr(Vec3.atCenterOf(bedPos)) < 36.0) {
+            double distSq = this.distanceToSqr(Vec3.atCenterOf(bedPos));
+            if (distSq > 1.8) {
+                moveTowards(Vec3.atCenterOf(bedPos), true);
+            } else {
+                // On or beside bed: joyful playful jumping!
+                lookAtPos(Vec3.atCenterOf(bedPos));
+                this.setJumping(true);
+                if (this.onGround()) {
+                    this.jumpFromGround();
+                    this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.WOOL_STEP, SoundSource.BLOCKS, 0.8f, 1.4f);
+                    if (this.level() instanceof ServerLevel sl) {
+                        sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 0.6, this.getZ(), 3, 0.2, 0.2, 0.2, 0.05);
+                    }
+                }
+            }
+        } else {
+            // Play tag with nearby friends or wander playfully
+            AiBotPlayer playmate = null;
+            double bestDist = 25.0 * 25.0;
+            for (AiBotPlayer other : BotManager.getActiveBots()) {
+                if (other != this && other.level() == this.level()) {
+                    double d = this.distanceToSqr(other);
+                    if (d < bestDist) {
+                        bestDist = d;
+                        playmate = other;
+                    }
+                }
+            }
+
+            if (playmate != null && bestDist > 4.0) {
+                moveTowards(playmate.position(), true);
+                if (this.tickCount % 25 == 0 && this.onGround()) {
+                    this.jumpFromGround();
+                }
+            } else {
+                wanderAroundHomeOrAnchor(14.0);
+            }
+        }
+
+        if (this.tickCount % 80 == 0) {
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 1.35f);
+        }
+    }
+
+    public @Nullable BlockPos findNearestBed(int radius) {
+        if (this.assignedBedPos != null && this.distanceToSqr(Vec3.atCenterOf(this.assignedBedPos)) <= radius * radius) {
+            return this.assignedBedPos;
+        }
+        BlockPos center = this.blockPosition();
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+        for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -3, -radius), center.offset(radius, 3, radius))) {
+            if (this.level().getBlockState(p).getBlock() instanceof BedBlock) {
+                double d = center.distSqr(p);
+                if (d < bestDistSq) {
+                    bestDistSq = d;
+                    best = p.immutable();
+                }
+            }
+        }
+        return best;
     }
 
     private void tickVillagerReturnHome() {
@@ -7307,7 +7925,11 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         if (dayTime >= 2000L && dayTime < 9000L) {
-            tickVillagerWork();
+            if (this.isBaby) {
+                tickBabyVillagerPlay();
+            } else {
+                tickVillagerWork();
+            }
             return;
         }
 
@@ -7351,6 +7973,9 @@ public class AiBotPlayer extends ServerPlayer {
 
     public synchronized boolean checkAndExecuteBreeding(@Nullable AiBotPlayer partner) {
         if (!(this.level() instanceof ServerLevel sl)) return false;
+        if (this.isBaby || (partner != null && partner.isBaby())) {
+            return false;
+        }
 
         long now = System.currentTimeMillis();
         if (now - this.lastBreedingTime < 300_000L) {
@@ -7415,14 +8040,107 @@ public class AiBotPlayer extends ServerPlayer {
 
         String babyName = pickRandomAvailableBotName();
         AiBotPlayer baby = BotManager.spawnBot(sl, babyName, "villager", this.getX() + 0.5, this.getY(), this.getZ() + 0.5, this.getYRot(), 0.0f);
+        baby.setBaby(true);
         baby.setAssignedBedPos(vacantBed);
         baby.setAssignedHousePos(vacantBed);
         VillageManager.registerHouse("Compound", vacantBed, vacantBed, babyName);
 
         this.lastBreedingTime = now;
-        sayInChat("A new companion was born into our colony! Welcoming " + baby.getPlainTextName() + " to the village (Role: Villager)!");
+        sayInChat("A new baby companion was born into our colony! Welcoming baby " + baby.getPlainTextName() + " to the village (Role: Baby Villager)!");
         BotPersistence.saveAll(sl.getServer());
         return true;
+    }
+
+    public synchronized void applyPlayerReinforcement(float reward, @Nullable String reason) {
+        String dim = this.level().dimension().identifier().toString();
+        String task = getCurrentActionTypeForLearning();
+        int updatedSteps = com.aicompanion.bot.learning.HiveMindBrain.applyReinforcementSignal(this, reward, true);
+
+        if (reward > 0) {
+            com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, this.blockPosition(), +15.0f, false, false, false, null);
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                    SoundEvents.EXPERIENCE_ORB_PICKUP, SoundSource.PLAYERS, 1.0f, 1.15f);
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                    SoundEvents.VILLAGER_YES, SoundSource.NEUTRAL, 1.0f, 1.0f);
+            if (this.level() instanceof ServerLevel sl) {
+                sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.1, this.getZ(), 14, 0.4, 0.4, 0.4, 0.05);
+            }
+            int iq = com.aicompanion.bot.learning.HiveMindBrain.getHiveIqScore();
+            sayInChat(String.format("Thank you! Shared Hive-Mind reinforced (%+.1f across %d neural steps): locked in my recent route and [%s] task policy! [Hive IQ: %d]",
+                    reward, Math.max(1, updatedSteps), task, iq));
+        } else if (reward < 0) {
+            BlockPos frontObstacle = this.blockPosition().relative(this.getDirection());
+            com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, this.blockPosition(), -15.0f, true, false, false, null);
+            com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, frontObstacle, -18.0f, true, false, false, null);
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                    SoundEvents.VILLAGER_NO, SoundSource.NEUTRAL, 1.0f, 0.9f);
+            if (this.level() instanceof ServerLevel sl) {
+                sl.sendParticles(ParticleTypes.ANGRY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 8, 0.35, 0.35, 0.35, 0.02);
+            }
+            // Immediately recalculate path or detour away from penalized spot
+            if (this.lastMoveTarget != null) {
+                analyzeAndExecuteUnstuckPlan(this.lastMoveTarget);
+            }
+            int iq = com.aicompanion.bot.learning.HiveMindBrain.getHiveIqScore();
+            sayInChat(String.format("Understood! Shared Hive-Mind penalized (%+.1f across %d neural steps): marked (%d, %d, %d) & [%s] as a bad route/action and adjusted weights! [Hive IQ: %d]",
+                    reward, Math.max(1, updatedSteps), this.getBlockX(), this.getBlockY(), this.getBlockZ(), task, iq));
+        }
+
+        if (this.level().getServer() != null) {
+            BotPersistence.saveAll(this.level().getServer());
+        }
+    }
+
+    public synchronized boolean handleReinforcementChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String clean = stripBotReference(text).toLowerCase(Locale.ROOT).replaceAll("[,!?:;.]", " ").replaceAll("\\s+", " ").trim();
+
+        // 1. Check for Player Path Demonstration triggers
+        if (speaker != null) {
+            if (clean.contains("learn this path") || clean.contains("watch how i walk") || clean.contains("record my path")
+                    || clean.contains("follow my footsteps") || clean.contains("trace my path") || clean.equals("learn path")) {
+                com.aicompanion.bot.learning.HiveMindBrain.startPlayerPathRecording(speaker);
+                this.setActionPlan(List.of(new BotAction("FOLLOW", speaker.getPlainTextName(), "", 1)));
+                sayInChat("Hive-Mind Path Learning ENABLED! Walk your route (stairs, doors, jumps) and I will record your golden breadcrumbs! Say 'stop learning path' or run /bot learnpath stop when done.");
+                return true;
+            }
+            if (clean.contains("stop learning path") || clean.contains("done showing path") || clean.contains("finish path")
+                    || clean.contains("stop recording path")) {
+                int recorded = com.aicompanion.bot.learning.HiveMindBrain.stopPlayerPathRecording(speaker);
+                sayInChat("Hive-Mind Path Learning COMPLETE! Saved " + recorded + " golden breadcrumb waypoints. All bots will now use this route!");
+                return true;
+            }
+        }
+
+        // 2. Check for Positive Reinforcement ("good job", "good bot", "well done", "nice pathing", etc.)
+        boolean isPositive = clean.equals("good job") || clean.equals("good bot") || clean.equals("great job")
+                || clean.equals("well done") || clean.equals("nice job") || clean.equals("good work")
+                || clean.equals("smart bot") || clean.equals("good boy") || clean.equals("good girl")
+                || clean.equals("attaboy") || clean.startsWith("good job ") || clean.startsWith("good bot ")
+                || clean.startsWith("great job ") || clean.startsWith("well done ") || clean.startsWith("nice job ")
+                || clean.contains("good pathing") || clean.contains("nice pathing") || clean.contains("good route")
+                || clean.contains("you did a good job") || clean.contains("you did good") || clean.contains("that was good");
+
+        if (isPositive && !clean.contains("not ") && !clean.contains("bad")) {
+            applyPlayerReinforcement(+15.0f, text);
+            return true;
+        }
+
+        // 3. Check for Negative Reinforcement / Punishment ("bad job", "bad bot", "wrong way", "bad path", etc.)
+        boolean isNegative = clean.equals("bad job") || clean.equals("bad bot") || clean.equals("wrong way")
+                || clean.equals("bad path") || clean.equals("bad route") || clean.equals("terrible job")
+                || clean.equals("bad work") || clean.startsWith("bad job ") || clean.startsWith("bad bot ")
+                || clean.startsWith("wrong way") || clean.contains("bad pathing") || clean.contains("wrong path")
+                || clean.contains("dont go that way") || clean.contains("don't go that way")
+                || clean.contains("stop getting stuck") || clean.contains("you did a bad job")
+                || clean.contains("wrong chest");
+
+        if (isNegative) {
+            applyPlayerReinforcement(-15.0f, text);
+            return true;
+        }
+
+        return false;
     }
 
     public synchronized boolean handleHousingChatCommand(String text, @Nullable ServerPlayer speaker) {
@@ -7527,6 +8245,21 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
+        if (lower.contains("grow up") || lower.contains("become adult") || lower.contains("turn into an adult")) {
+            if (this.isBaby) {
+                this.growUpToAdult();
+            } else {
+                sayInChat("I'm already a full-grown adult!");
+            }
+            return true;
+        }
+
+        if (lower.contains("make baby") || lower.contains("turn into baby") || lower.contains("become a baby")) {
+            this.setBaby(true);
+            sayInChat("Goo goo gaga! I am now a baby companion!");
+            return true;
+        }
+
         return false;
     }
 
@@ -7567,6 +8300,71 @@ public class AiBotPlayer extends ServerPlayer {
             sayInChat("Understood! My role has been changed to '" + newRole + "'. I will now focus on my " + newRole + " duties!");
             return true;
         }
+        return false;
+    }
+
+    public synchronized boolean handleVillagerChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        if (lower.contains("find work table") || lower.contains("search for work table") || lower.contains("find a work table")
+                || lower.contains("find workstation") || lower.contains("search for workstation") || lower.contains("find a job")
+                || lower.contains("get a job") || lower.contains("look for work") || lower.contains("search work table")) {
+            if (this.isBaby()) {
+                sayInChat("I'm still just a baby villager! I can't take on a profession until I grow up.");
+                return true;
+            }
+            if (searchAndClaimWorkstation(48)) {
+                return true;
+            } else {
+                sayInChat("I searched within 48 blocks but could not find any unclaimed work tables. I will remain unemployed until a work table is placed!");
+                return true;
+            }
+        }
+
+        if (lower.contains("claim this table") || lower.contains("claim this workstation") || lower.contains("work at this table")
+                || lower.contains("assign workstation") || lower.contains("this is your workstation") || lower.contains("this is your work table")) {
+            if (this.isBaby()) {
+                sayInChat("I'm still just a baby villager! I can't take on a profession until I grow up.");
+                return true;
+            }
+            BlockPos targetPos = null;
+            if (speaker != null) {
+                HitResult hr = speaker.level().clip(new ClipContext(speaker.getEyePosition(), speaker.getEyePosition().add(speaker.getViewVector(1.0F).scale(6.0)), ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, speaker));
+                if (hr.getType() == HitResult.Type.BLOCK && hr instanceof BlockHitResult bhr) {
+                    targetPos = bhr.getBlockPos();
+                }
+            }
+            if (targetPos == null) {
+                targetPos = this.blockPosition();
+            }
+            Block b = this.level().getBlockState(targetPos).getBlock();
+            String trait = WORKSTATION_PROFESSIONS.get(b);
+            if (trait != null) {
+                this.setBotRole("villager");
+                this.assignedWorkstationPos = targetPos;
+                this.botSubRole = trait;
+                net.minecraft.sounds.SoundEvent snd = PROFESSION_WORK_SOUNDS.getOrDefault(trait, SoundEvents.VILLAGER_YES);
+                this.level().playSound(null, targetPos, snd, SoundSource.BLOCKS, 1.0f, 1.0f);
+                if (this.level() instanceof ServerLevel sl) {
+                    sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, targetPos.getX() + 0.5, targetPos.getY() + 1.2, targetPos.getZ() + 0.5, 8, 0.3, 0.3, 0.3, 0.05);
+                }
+                sayInChat("Understood! I claimed the " + b.getName().getString() + " at (" + targetPos.getX() + ", " + targetPos.getY() + ", " + targetPos.getZ() + ") and took on the '" + capitalize(trait) + "' profession trait under my Villager role!");
+                return true;
+            } else {
+                sayInChat("The block at (" + targetPos.getX() + ", " + targetPos.getY() + ", " + targetPos.getZ() + ") is a " + b.getName().getString() + ", which is not a recognized villager work table.");
+                return true;
+            }
+        }
+
+        if (lower.contains("clear workstation") || lower.contains("quit job") || lower.contains("become unemployed") || lower.contains("leave workstation")) {
+            this.assignedWorkstationPos = null;
+            this.botSubRole = "unemployed";
+            this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_NO, SoundSource.NEUTRAL, 1.0f, 1.0f);
+            sayInChat("I have released my workstation and am now an unemployed villager.");
+            return true;
+        }
+
         return false;
     }
 
@@ -7642,6 +8440,558 @@ public class AiBotPlayer extends ServerPlayer {
 
         @Override
         public void setListenerForServerboundHandshake(PacketListener listener) {
+        }
+    }
+
+    public static class BotVillagerMerchant implements net.minecraft.world.item.trading.Merchant {
+        private final AiBotPlayer bot;
+        private @Nullable Player tradingPlayer;
+        private net.minecraft.world.item.trading.@Nullable MerchantOffers offers;
+
+        public BotVillagerMerchant(AiBotPlayer bot) {
+            this.bot = bot;
+        }
+
+        public synchronized void resetOffers() {
+            this.offers = null;
+        }
+
+        @Override
+        public void setTradingPlayer(@Nullable Player player) {
+            this.tradingPlayer = player;
+        }
+
+        @Override
+        public @Nullable Player getTradingPlayer() {
+            return this.tradingPlayer;
+        }
+
+        @Override
+        public synchronized net.minecraft.world.item.trading.MerchantOffers getOffers() {
+            ensureOffersInitialized();
+            return this.offers;
+        }
+
+        @Override
+        public synchronized void overrideOffers(net.minecraft.world.item.trading.MerchantOffers offers) {
+            this.offers = offers;
+        }
+
+        @Override
+        public synchronized void notifyTrade(net.minecraft.world.item.trading.MerchantOffer offer) {
+            offer.increaseUses();
+            int xpEarned = offer.getXp();
+            if (xpEarned <= 0) xpEarned = 2;
+            int currentXp = bot.getVillagerXp() + xpEarned;
+            bot.setVillagerXp(currentXp);
+
+            boolean leveledUp = false;
+            while (bot.getVillagerLevel() < 5 && bot.getVillagerXp() >= getXpThresholdForLevel(bot.getVillagerLevel() + 1)) {
+                int nextLvl = bot.getVillagerLevel() + 1;
+                bot.villagerLevel = nextLvl;
+                populateOffersForLevel(nextLvl);
+                leveledUp = true;
+            }
+
+            if (leveledUp) {
+                bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                        net.minecraft.sounds.SoundEvents.PLAYER_LEVELUP,
+                        net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
+                bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                        net.minecraft.sounds.SoundEvents.VILLAGER_YES,
+                        net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
+                if (bot.level() instanceof ServerLevel sl) {
+                    sl.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                            bot.getX(), bot.getY() + 1.2, bot.getZ(), 16, 0.4, 0.4, 0.4, 0.05);
+                }
+                bot.sayInChat("§aHmm! I leveled up to §6Level " + bot.getVillagerLevel() + " (" + bot.getVillagerLevelName() + ")§a! New trades unlocked!");
+                if (this.tradingPlayer instanceof ServerPlayer sp && sp.containerMenu instanceof net.minecraft.world.inventory.MerchantMenu mm) {
+                    sp.sendMerchantOffers(mm.containerId, this.offers, bot.getVillagerLevel(), bot.getVillagerXp(), true, true);
+                }
+            } else {
+                bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                        net.minecraft.sounds.SoundEvents.VILLAGER_YES,
+                        net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
+                if (bot.level() instanceof ServerLevel sl) {
+                    sl.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                            bot.getX(), bot.getY() + 0.8, bot.getZ(), 6, 0.3, 0.3, 0.3, 0.05);
+                }
+            }
+
+            if (bot.level().getServer() != null) {
+                BotPersistence.saveAll(bot.level().getServer());
+            }
+        }
+
+        @Override
+        public void notifyTradeUpdated(net.minecraft.world.item.ItemStack stack) {
+        }
+
+        @Override
+        public int getVillagerXp() {
+            return bot.getVillagerXp();
+        }
+
+        @Override
+        public void overrideXp(int xp) {
+            bot.setVillagerXp(xp);
+        }
+
+        @Override
+        public boolean showProgressBar() {
+            return true;
+        }
+
+        @Override
+        public net.minecraft.sounds.SoundEvent getNotifyTradeSound() {
+            return net.minecraft.sounds.SoundEvents.VILLAGER_YES;
+        }
+
+        @Override
+        public boolean isClientSide() {
+            return false;
+        }
+
+        @Override
+        public boolean stillValid(Player player) {
+            return player.isAlive() && bot.isAlive() && bot.distanceToSqr(player) <= 64.0;
+        }
+
+        @Override
+        public boolean canRestock() {
+            return true;
+        }
+
+        public static int getXpThresholdForLevel(int level) {
+            return switch (level) {
+                case 2 -> 10;
+                case 3 -> 70;
+                case 4 -> 150;
+                case 5 -> 250;
+                default -> 0;
+            };
+        }
+
+        public synchronized void ensureOffersInitialized() {
+            if (this.offers == null) {
+                this.offers = new net.minecraft.world.item.trading.MerchantOffers();
+                int maxLvl = bot.getVillagerLevel();
+                for (int l = 1; l <= maxLvl; l++) {
+                    populateOffersForLevel(l);
+                }
+            }
+        }
+
+        private static net.minecraft.world.item.Item getItem(String name) {
+            return BuiltInRegistries.ITEM.getValue(Identifier.parse(name));
+        }
+
+        private static net.minecraft.world.item.trading.MerchantOffer trade(net.minecraft.world.item.Item costItem, int costCount, net.minecraft.world.item.Item resultItem, int resultCount, int maxUses, int xp) {
+            return new net.minecraft.world.item.trading.MerchantOffer(
+                    new net.minecraft.world.item.trading.ItemCost(costItem, costCount),
+                    new net.minecraft.world.item.ItemStack(resultItem, resultCount),
+                    maxUses,
+                    xp,
+                    0.05f
+            );
+        }
+
+        private static net.minecraft.world.item.trading.MerchantOffer tradeDual(net.minecraft.world.item.Item costA, int countA, net.minecraft.world.item.Item costB, int countB, net.minecraft.world.item.Item result, int resultCount, int maxUses, int xp) {
+            return new net.minecraft.world.item.trading.MerchantOffer(
+                    new net.minecraft.world.item.trading.ItemCost(costA, countA),
+                    java.util.Optional.of(new net.minecraft.world.item.trading.ItemCost(costB, countB)),
+                    new net.minecraft.world.item.ItemStack(result, resultCount),
+                    maxUses,
+                    xp,
+                    0.05f
+            );
+        }
+
+        private void populateOffersForLevel(int level) {
+            if (this.offers == null) {
+                this.offers = new net.minecraft.world.item.trading.MerchantOffers();
+            }
+            String prof = bot.getBotSubRole().toLowerCase(Locale.ROOT);
+            switch (prof) {
+                case "farmer" -> addFarmerTrades(level);
+                case "librarian" -> addLibrarianTrades(level);
+                case "armorer" -> addArmorerTrades(level);
+                case "weaponsmith" -> addWeaponsmithTrades(level);
+                case "toolsmith" -> addToolsmithTrades(level);
+                case "cleric" -> addClericTrades(level);
+                case "fletcher" -> addFletcherTrades(level);
+                case "butcher" -> addButcherTrades(level);
+                case "fisherman" -> addFishermanTrades(level);
+                case "shepherd" -> addShepherdTrades(level);
+                case "mason", "stone_mason", "stonemason" -> addMasonTrades(level);
+                case "cartographer" -> addCartographerTrades(level);
+                case "leatherworker" -> addLeatherworkerTrades(level);
+                default -> addUnemployedTrades(level);
+            }
+        }
+
+        private void addFarmerTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.WHEAT, 20, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.POTATO, 26, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.CARROT, 22, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.BREAD, 6, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.PUMPKIN, 6, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.PUMPKIN_PIE, 4, 12, 5));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.APPLE, 4, 16, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.MELON, 4, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.COOKIE, 18, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("cake"), 1, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.SUSPICIOUS_STEW, 2, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.GOLDEN_CARROT, 3, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 4, net.minecraft.world.item.Items.GLISTERING_MELON_SLICE, 3, 12, 30));
+                }
+            }
+        }
+
+        private void addLibrarianTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.PAPER, 24, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("bookshelf"), 3, 12, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.BOOK, 4, 12, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.BOOK, 4, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("lantern"), 1, 12, 5));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, net.minecraft.world.item.Items.CLOCK, 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("glass"), 4, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, net.minecraft.world.item.Items.COMPASS, 1, 12, 20));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, net.minecraft.world.item.Items.NAME_TAG, 1, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.LEAD, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 20, net.minecraft.world.item.Items.DIAMOND, 1, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.EXPERIENCE_BOTTLE, 2, 12, 30));
+                }
+            }
+        }
+
+        private void addArmorerTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.COAL, 15, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, net.minecraft.world.item.Items.IRON_HELMET, 1, 12, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 9, net.minecraft.world.item.Items.IRON_CHESTPLATE, 1, 12, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.IRON_INGOT, 4, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 36, getItem("bell"), 1, 12, 5));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 4, net.minecraft.world.item.Items.IRON_BOOTS, 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.LAVA_BUCKET, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.SHIELD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 7, net.minecraft.world.item.Items.IRON_LEGGINGS, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.DIAMOND, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 14, net.minecraft.world.item.Items.DIAMOND_LEGGINGS, 1, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 10, net.minecraft.world.item.Items.DIAMOND_BOOTS, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 12, net.minecraft.world.item.Items.DIAMOND_HELMET, 1, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 18, net.minecraft.world.item.Items.DIAMOND_CHESTPLATE, 1, 12, 30));
+                }
+            }
+        }
+
+        private void addWeaponsmithTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.COAL, 15, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.IRON_AXE, 1, 12, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 2, net.minecraft.world.item.Items.IRON_SWORD, 1, 12, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.IRON_INGOT, 4, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 36, getItem("bell"), 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.FLINT, 24, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.BOW, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.DIAMOND, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 12, net.minecraft.world.item.Items.DIAMOND_AXE, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 15, net.minecraft.world.item.Items.DIAMOND_SWORD, 1, 12, 30));
+                }
+            }
+        }
+
+        private void addToolsmithTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.COAL, 15, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.STONE_AXE, 1, 12, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.STONE_PICKAXE, 1, 12, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.STONE_SHOVEL, 1, 12, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.IRON_INGOT, 4, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 36, getItem("bell"), 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.FLINT, 30, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 6, net.minecraft.world.item.Items.IRON_PICKAXE, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.DIAMOND, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 12, net.minecraft.world.item.Items.DIAMOND_AXE, 1, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 10, net.minecraft.world.item.Items.DIAMOND_SHOVEL, 1, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 4, net.minecraft.world.item.Items.DIAMOND_HOE, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 18, net.minecraft.world.item.Items.DIAMOND_PICKAXE, 1, 12, 30));
+                }
+            }
+        }
+
+        private void addClericTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.ROTTEN_FLESH, 32, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.REDSTONE, 4, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.GOLD_INGOT, 15, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.LAPIS_LAZULI, 2, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.RABBIT_FOOT, 9, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 4, getItem("glowstone"), 2, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.GHAST_TEAR, 2, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, net.minecraft.world.item.Items.ENDER_PEARL, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.NETHER_WART, 3, net.minecraft.world.item.Items.EMERALD, 1, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.EXPERIENCE_BOTTLE, 2, 12, 30));
+                }
+            }
+        }
+
+        private void addFletcherTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.STICK, 32, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.ARROW, 16, 16, 1));
+                    this.offers.add(tradeDual(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.GRAVEL, 10, net.minecraft.world.item.Items.FLINT, 10, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.FLINT, 26, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 2, net.minecraft.world.item.Items.BOW, 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.STRING, 14, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.CROSSBOW, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.FEATHER, 24, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, getItem("target"), 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 8, net.minecraft.world.item.Items.SPECTRAL_ARROW, 16, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 8, net.minecraft.world.item.Items.CROSSBOW, 1, 12, 30));
+                }
+            }
+        }
+
+        private void addButcherTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.CHICKEN, 14, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.PORKCHOP, 14, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.COOKED_CHICKEN, 5, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.COAL, 15, net.minecraft.world.item.Items.EMERALD, 1, 16, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.COOKED_PORKCHOP, 5, 16, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.BEEF, 10, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.MUTTON, 10, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.RABBIT, 10, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.RABBIT_STEW, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.SWEET_BERRIES, 10, net.minecraft.world.item.Items.EMERALD, 1, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 2, net.minecraft.world.item.Items.COOKED_BEEF, 6, 12, 30));
+                }
+            }
+        }
+
+        private void addFishermanTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.COD, 20, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(tradeDual(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.COD, 1, net.minecraft.world.item.Items.COOKED_COD, 1, 16, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("campfire"), 1, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.SALMON, 15, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(tradeDual(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.SALMON, 1, net.minecraft.world.item.Items.COOKED_SALMON, 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.STRING, 15, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 6, net.minecraft.world.item.Items.FISHING_ROD, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.TROPICAL_FISH, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.WATER_BUCKET, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.OAK_BOAT, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 8, net.minecraft.world.item.Items.FISHING_ROD, 1, 12, 30));
+                }
+            }
+        }
+
+        private void addShepherdTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(getItem("white_wool"), 18, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 2, net.minecraft.world.item.Items.SHEARS, 1, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(getItem("black_wool"), 12, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("white_carpet"), 4, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(getItem("white_wool"), 12, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, getItem("white_bed"), 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("white_banner"), 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 2, net.minecraft.world.item.Items.PAINTING, 3, 12, 30));
+                }
+            }
+        }
+
+        private void addMasonTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.CLAY_BALL, 10, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("bricks"), 10, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(getItem("stone"), 20, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("chiseled_stone_bricks"), 4, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(getItem("granite"), 16, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(getItem("andesite"), 16, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("polished_andesite"), 4, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("terracotta"), 2, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("white_glazed_terracotta"), 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.QUARTZ, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("quartz_pillar"), 2, 12, 30));
+                }
+            }
+        }
+
+        private void addCartographerTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.PAPER, 24, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 7, net.minecraft.world.item.Items.MAP, 1, 12, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(getItem("glass_pane"), 11, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.MAP, 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.COMPASS, 1, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 8, net.minecraft.world.item.Items.COMPASS, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 7, getItem("item_frame"), 1, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 12, net.minecraft.world.item.Items.SPYGLASS, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 8, getItem("globe_banner_pattern"), 1, 12, 30));
+                }
+            }
+        }
+
+        private void addLeatherworkerTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.LEATHER, 6, net.minecraft.world.item.Items.EMERALD, 1, 16, 2));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 3, net.minecraft.world.item.Items.LEATHER_LEGGINGS, 1, 12, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 7, net.minecraft.world.item.Items.LEATHER_CHESTPLATE, 1, 12, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.FLINT, 26, net.minecraft.world.item.Items.EMERALD, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, net.minecraft.world.item.Items.LEATHER_HELMET, 1, 12, 5));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 4, net.minecraft.world.item.Items.LEATHER_BOOTS, 1, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.LEATHER, 4, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 6, net.minecraft.world.item.Items.LEATHER_HORSE_ARMOR, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.TURTLE_SCUTE, 4, net.minecraft.world.item.Items.EMERALD, 1, 12, 20));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 6, net.minecraft.world.item.Items.SADDLE, 1, 12, 30));
+                }
+            }
+        }
+
+        private void addUnemployedTrades(int level) {
+            switch (level) {
+                case 1 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.BREAD, 6, 16, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.APPLE, 4, 16, 1));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("torch"), 8, 16, 1));
+                }
+                case 2 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, getItem("oak_sapling"), 4, 12, 5));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 1, net.minecraft.world.item.Items.WHEAT_SEEDS, 4, 12, 5));
+                }
+                case 3 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 2, net.minecraft.world.item.Items.BUCKET, 1, 12, 10));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 2, net.minecraft.world.item.Items.SHEARS, 1, 12, 10));
+                }
+                case 4 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 4, net.minecraft.world.item.Items.CLOCK, 1, 12, 15));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 4, net.minecraft.world.item.Items.COMPASS, 1, 12, 15));
+                }
+                case 5 -> {
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 5, net.minecraft.world.item.Items.LEAD, 1, 12, 30));
+                    this.offers.add(trade(net.minecraft.world.item.Items.EMERALD, 6, net.minecraft.world.item.Items.SADDLE, 1, 12, 30));
+                }
+            }
         }
     }
 }

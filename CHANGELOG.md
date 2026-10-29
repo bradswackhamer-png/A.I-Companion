@@ -4,6 +4,175 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.19] - 2026-10-29
+
+### Added
+- **Shared Hive-Mind Neural Network & Reinforcement Learning (`HiveMindBrain`):**
+  - Implemented a pure-Java Multi-Layer Perceptron (`24 sensory inputs -> 32 hidden -> 16 hidden -> 9 micro-steering actions`) with `LeakyReLU` activations, `tanh` Q-outputs, Eligibility Traces (`γ = 0.92`), Experience Replay, and online backpropagation shared across all companion bots on the server.
+  - Added a persistent **3D Spatial Pheromone & Waypoint Graph** (`DIMENSION_NAV_GRAPHS`) that records successful block traversals, directed neighbor edges, jump requirements, and hazard/stuck zones across dimensions.
+  - Added a **Modded Block Walkability Knowledge Base** (`BLOCK_KNOWLEDGE`) that dynamically learns `walkabilityScore`, `centerAlignmentNeed` (shoulder-centering for narrow 1-block stairs/bridges), and `jumpAssistNeed` per Block Registry ID (such as Macaw's stairs and modded furniture).
+  - Added a **Role & Task Preference Q-Table** (`TASK_Q_VALUES`) that tracks reinforcement scores for `role:actionType` pairs and injects top learned preferences and Hive-Mind IQ telemetry into Gemini AI prompts.
+- **Player Verbal & Command Reinforcement (`/bot reward` & `/bot punish`):**
+  - Players can praise or correct bots naturally in chat (*"good job"*, *"good bot"*, *"well done"*, *"nice pathing"* vs. *"bad job"*, *"bad bot"*, *"wrong way"*, *"bad path"*, *"stop getting stuck"*) or via `/bot reward [name|all] [amount]` and `/bot punish [name|all] [amount]`.
+  - Positive feedback propagates `+15.0` reward backward through the bot's recent 60-step eligibility trace, strengthening neural weights, boosting spatial trail pheromones, and playing villager celebration sounds + happy villager particles.
+  - Negative feedback propagates `-15.0` punishment across the recent trajectory, marking stuck coordinates as hazard zones, triggering immediate lateral rerouting, and playing villager headshake feedback + angry villager particles.
+- **Command-Enabled Player Footstep Imitation (`/bot learnpath`):**
+  - Added `/bot learnpath [start|stop]` (and natural chat triggers *"learn this path"*, *"watch how I walk"*, *"stop learning path"*) allowing players to demonstrate tricky routes, stairs, and jumps. Recorded footsteps are stored as golden breadcrumb nodes (`+35.0` score) in the shared Hive-Mind graph for all bots to follow.
+- **Hive-Mind Diagnostics & 3D Trail Visualizer (`/bot brain`):**
+  - Added `/bot brain [stats|show|reset]` to inspect Hive-Mind IQ, training updates, learned modded block walkability, and top Q-value tasks, or render 3D particles in-world (`END_ROD` for player-taught golden paths, `HAPPY_VILLAGER` for learned trails, and `FLAME` for avoided stuck/hazard zones).
+
+## [1.2.18] - 2026-10-28
+
+### Fixed
+- **Emerald Farming Exploit Protection:**
+  - Removed initial starter emeralds from the Villager role starter kit (`applyRoleStarterKit`).
+  - Newly spawned, converted, or bred Villager companions now start only with food and farming supplies (bread and wheat) and zero emeralds, preventing players from repeatedly spawning bots to harvest free emeralds.
+
+### Changed
+- **Documentation & Quick Start Guide:**
+  - Added a high-contrast, prominent Quick Start Guide to `CURSEFORGE.md`, `CURSEFORGE_PAGE.md`, and `README.md` highlighting the `/bot spawn <name> [role]` command.
+  - Documented the baked-in default AI model (`gemini-3.5-flash-lite`) with copy-paste syntax for `/bot model gemini-3.5-flash-lite`.
+
+## [1.2.17] - 2026-10-28
+
+### Added
+- **Global Squad Command Suite (`/bot all`):**
+  - Added dedicated `/bot all` commands for fast management of all active companion bots at once:
+    - `/bot all remove`: Despawns and clears all active AI companion bots across the server in a single command, updating persistent storage.
+    - `/bot all come` / `/bot all come here` / `/bot all follow`: Commands all active companions to immediately rush to and follow the executing player in Absolute Follow mode.
+    - `/bot all stop`: Places all active companions into immediate Absolute Standby Mode, clearing lingering actions.
+    - `/bot all stay` / `/bot all standby` / `/bot all hold`: Tethers all active companions to hold position at their current locations within a 4-block perimeter.
+    - `/bot all sentry`: Sets all active companions into stationary 360° Sentry Sniper mode.
+    - `/bot all resume` / `/bot all dismiss`: Releases tethers and orders all active companions to resume their normal autonomous role duties.
+    - `/bot all shelter [true|false]`: Toggles or sets night shelter and bed-seeking behaviors for all companions simultaneously.
+    - `/bot all tp`: Teleports all active companions directly to the player's location.
+- **Authentic Vanilla Merchant Trading GUI (`MerchantMenu`):**
+  - Sneak right-clicking (Shift + Right-Click) any adult companion in the `"villager"` role now opens the authentic vanilla Minecraft Merchant trade interface.
+  - Generates full authentic tiered trade offers matching the companion's claimed profession trait (Farmer, Librarian, Armorer, Weaponsmith, Toolsmith, Cleric, Fletcher, Butcher, Fisherman, Shepherd, Mason, Cartographer, Leatherworker, or Unemployed/Wandering).
+  - Baby villager companions reject trades with a villager headshake (`VILLAGER_NO`) and remind the player they must grow up before trading.
+- **Villager Merchant Leveling & Progression System:**
+  - Companions earn trading experience (`villagerXp`) with every completed trade in the trader GUI.
+  - Progression spans all 5 authentic vanilla tiers:
+    - **Level 1 (Novice):** 0 XP
+    - **Level 2 (Apprentice):** 10 XP
+    - **Level 3 (Journeyman):** 70 XP
+    - **Level 4 (Expert):** 150 XP
+    - **Level 5 (Master):** 250 XP
+  - Leveling up triggers `PLAYER_LEVELUP` and `VILLAGER_YES` sound effects, happy villager particle sparkles, announces promotion in chat, unlocks the next tier of trades, and dynamically updates the player's active merchant menu.
+  - Trading level (`villagerLevel`) and experience points (`villagerXp`) are saved to and loaded from `BotPersistence`.
+
+## [1.2.16] - 2026-10-28
+
+### Added
+- **Workstation Searching & Profession Sub-Role Assignment:**
+  - Adult companions in the `"villager"` role now search in a 48-block radius for unclaimed villager workstations/work tables (like vanilla villagers).
+  - Upon discovering an unclaimed work table, the companion claims the block position and adopts that table's villager trait as an authentic sub-role under their Villager role (e.g. `Role: Villager`, `Sub-Role: Librarian`).
+  - Supported 13 Workstation Professions:
+    - `Composter` -> **Farmer**
+    - `Lectern` -> **Librarian**
+    - `Blast Furnace` -> **Armorer**
+    - `Smoker` -> **Butcher**
+    - `Cartography Table` -> **Cartographer**
+    - `Brewing Stand` -> **Cleric**
+    - `Fletching Table` -> **Fletcher**
+    - `Cauldron` -> **Leatherworker**
+    - `Loom` -> **Shepherd**
+    - `Smithing Table` -> **Weaponsmith**
+    - `Stonecutter` -> **Mason**
+    - `Grindstone` -> **Toolsmith**
+    - `Barrel` -> **Fisherman**
+- **Single Workstation Claim Enforcement:**
+  - Companions verify that a workstation is not already claimed by another companion before taking it, ensuring each companion has their own unique job site table.
+- **Dynamic Workstation Loss & Re-Employment:**
+  - If a companion's work table is broken or replaced, they emit a sad villager sigh (`VILLAGER_NO`), reset their sub-role to Unemployed, announce the loss in chat, and resume searching for an available work table.
+- **Authentic Work Hours & Handheld Profession Items:**
+  - During work hours (2000-9000 ticks), companions walk to their claimed work table, face it, hold their profession item (Librarian holds a Book, Weaponsmith holds an Iron Sword, Fletcher holds a Bow, Farmer holds Wheat, Mason holds Stone Bricks, etc.), and play profession-specific ambient work audio with green happy sparkles.
+- **Profession-Specific Emerald Trading:**
+  - Right-clicking a villager companion with an Emerald now rewards trades authentic to their profession (e.g. Librarian offers Books, Armorer offers Iron Ingots, Fletcher offers Arrows, Cleric offers Redstone, Weaponsmith offers Iron Swords).
+- **Commands & Chat Integration:**
+  - Added `/bot profession <name> [trait|clear|search]` and `/bot workstation <name> [assign|clear|search]`.
+  - Companions respond to conversational requests (*"search for a work table"*, *"claim this table"*, *"become a librarian"*, *"clear workstation"*).
+  - `/bot status` and the companion GUI dashboard now display `Role: Villager (Sub-Role: Librarian)` and the assigned workstation coordinates.
+- **Full Persistence:**
+  - Sub-roles and assigned workstation block coordinates are fully serialized and restored via `BotPersistence`.
+
+---
+
+## [1.2.15] - 2026-10-28
+
+### Added
+- **Speaker Crosshair & Line-of-Sight Raycast Perception:**
+  - Companions and the Gemini LLM engine now track exact entities in the player/speaker's crosshairs with raycast collision detection up to 48 blocks away.
+  - Crosshair targets are explicitly highlighted in the telemetry prompt (`>>> SPEAKER DIRECT CROSSHAIR TARGET`), informing the companion of the player's exact visual focus.
+- **Speaker Front Vision Cone Detection:**
+  - Companions now detect and catalog all entities situated in front of the speaker within a wide ~140-degree front vision cone up to 40 blocks away.
+  - When a player says *"zombie in front of me"*, *"watch out ahead"*, or points out a mob, the bot's perception instantly confirms the mob's presence, location, and distance.
+- **Relative Cardinal Directions & Spatial Awareness:**
+  - Nearby entities in telemetry are enriched with cardinal directions (North, South, East, West, North-East, etc.) relative to the companion and relative tags to the player (`[IN FRONT OF SPEAKER]`, `[BEHIND SPEAKER]`, `[VISIBLE TO BOT]`).
+- **Player Crosshair Priority Targeting:**
+  - When a companion receives an attack or hunt command, it first checks if the commanding player is looking directly at a matching mob in their crosshairs or front vision cone, immediately locking onto that target.
+- **Enhanced Offline Combat & Threat Intent Recognition:**
+  - The offline rule-based parser now understands conversational mob alerts (*"zombie in front of me"*, *"there's a zombie ahead"*, *"kill that zombie"*, *"can you see that zombie?"*), immediately triggering attack and bodyguard engagement.
+
+### Changed
+- **Expanded Perception & Surroundings Radius:**
+  - Entity scan volume expanded from 24m horizontal / 12m vertical to **48m horizontal and 28m vertical**, scanning both around the bot and around the speaker.
+- **Bodyguard Auto-Defend Engagement Range:**
+  - Increased melee bodyguard threat engagement radius around the guarded player from 8.0m to **20.0m** (and up to 36.0m for archers).
+- **Proactive Threat Assessment:**
+  - Hostile monsters within 14 blocks of the guarded player are now classified as imminent threats even before the mob's vanilla target acquisition delay completes.
+
+### Fixed
+- **"I can't see any zombies" Blind Spot:**
+  - Fixed an issue where companions claimed they could not see zombies or mobs situated 10 blocks away in front of the player due to limited 24m/12m bot-centric bounding boxes and missing player view telemetry.
+- **Vertical Elevation Blindness (`vertDiff > 6.0`):**
+  - Fixed `findNearestTargetMob`, `findNearestMonsterNear`, and `findNearestProvokedThreatNear` whose vertical search box was restricted to only 6.0 blocks, which caused mobs on stairs, terraces, hills, or in ravines to be completely ignored.
+- **Reachable Mob Validation Failure (`isMobReachableAndValid`):**
+  - Removed flawed mob-to-bot path navigation checks that caused bots to reject targets whenever the mob could not pathfind through closed gates or railings.
+- **Fence Line-of-Sight Rejection in Combat:**
+  - Removed strict fence blockage rejection from `findNearestTargetMob`, allowing companions to engage and approach mobs across fences, railings, or through gates when ordered to fight.
+
+---
+
+## [1.2.14] - 2026-10-28
+
+### Added
+- **Baby Bot Villagers & Authentic Colony Life Cycle:**
+  - **Newborn Baby Villagers**: All newly spawned companion villagers (from villager breeding or spawned with the `"villager"` role) start out as adorable baby bot villagers!
+  - **Vanilla Attribute Scaling (`Attributes.SCALE`)**: Baby bots feature proportional scaling via vanilla Minecraft's `generic.scale` attribute set to `0.55`, shrinking model size, eye height, reach, and collision boxes to true baby proportions.
+  - **Playful Daytime Routine**: Baby villagers do not work adult workstations; during work hours (2000-9000 ticks) they play tag with nearby companions, joyfully jump on nearby beds with wool bounce audio, and emit ambient baby villager chirps at higher pitch (`1.35f`).
+  - **Natural Aging into Adulthood**: Baby companions age over 20 minutes (24000 ticks, 1 in-game day) just like vanilla baby villagers. Upon maturing, they emit `HAPPY_VILLAGER` sparkles, play level-up sounds, scale back to adult size (1.0), announce their coming of age in chat, and begin taking on adult villager duties.
+  - **Feeding & Growth Acceleration**: Right-clicking a baby bot with Wheat, Bread, Carrots, or Potatoes feeds them, emitting sparkles and accelerating their growth by 10% (2400 ticks / 2 minutes) per feeding.
+  - **Baby Commands & Status**: Added `/bot baby <name> [true|false]` and chat commands (*"make <name> a baby"*, *"<name> grow up"*). `/bot status` displays the companion's developmental stage and remaining minutes until adulthood.
+  - **Trading & Breeding Safeguards**: Baby villagers cannot trade emeralds or breed until reaching adulthood, politely declining emerald trades with high-pitched audio.
+  - **Full Persistence**: Baby state and remaining age ticks are fully saved and restored across world reloads via `BotPersistence`.
+
+---
+
+## [1.2.13] - 2026-10-28
+
+### Added
+- **Comprehensive Stair, Railing & Balustrade Recognition (`isStairBlock`, `isRailingOrBalustrade`, `isStairOrPlatform`):**
+  - Built-in recognition for all vanilla and modded stairs (Macaw's Stairs including Loft Stairs, Compact Stairs, Bulk Stairs, Terrace Stairs, Skyline Stairs, platforms, and balconies).
+  - Explicit recognition for stair railings, balustrades, balconies, handrails, banisters, and guardrails across modded stairs and architectural mods.
+- **1-Block Wide Stair Corridor Alignment & Shoulder Centering:**
+  - Added dynamic corridor alignment and shoulder centering when navigating staircases. When traversing a 1-block wide staircase flanked by railings, walls, or balustrades, companions automatically align and steer along the exact centerline of the stair axis, preventing their 0.6-block wide player collision box from snagging on tall railing collision boundaries.
+- **Enhanced Step-Up Capacity & Smooth Ascension Momentum:**
+  - Configured companion `Attributes.STEP_HEIGHT` to `1.06` blocks, allowing bots to natively step up 1-block elevation changes, complex stair profiles, and modded stair lips without stutter.
+  - Added gentle upward momentum assist (`0.28` vertical boost) when ascending stairs under horizontal pressure, guaranteeing fluid, continuous stair ascension even on steep or compact stairs.
+
+### Fixed
+- **Macaw's Stairs & Modded Staircase Navigation & Pathing:**
+  - Resolved an issue where companions were unable to pathfind or climb Macaw's Stairs (`mcw-stairs`) and modded stair blocks.
+  - Fixed `isTallWall` and `stepUpPossible` checks that previously misidentified the next ascending stair step as an impassable 2-block high solid wall, which suppressed jumping and caused bots to walk directly into steps and halt.
+  - Fixed `analyzeAndExecuteUnstuckPlan` treating stair steps as obstacles and attempting sideways detours into railings or retreating backwards down the stairs. The unstuck engine now recognizes active stair ascent and boosts the bot up and over the step.
+- **Stair Railings Misclassified as Impenetrable Fence Barriers:**
+  - Fixed `isFenceOrWall` treating stair railings and balustrades as perimeter fences, which previously caused companions to halt (`stopMovement()`) or abort to search for distant fence gates.
+  - Fixed `isLineBlockedByFence` flagging false-positive line blockage when navigating stair corridors bordered by railings or banisters.
+  - Fixed `isEnclosedInHole` and hole-escape pillar jumping falsely detecting stair corridors flanked by railings as trapped holes.
+
+---
+
 ## [1.2.12] - 2026-10-28
 
 ### Added

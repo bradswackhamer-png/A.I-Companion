@@ -40,7 +40,15 @@ public class BotDashboardMenu extends AbstractContainerMenu {
         this.data = data;
         this.bot = bot;
         this.botName = bot != null ? bot.getBotName() : "Companion";
-        this.botRole = bot != null ? bot.getBotRole() : "Helper";
+        if (bot != null) {
+            String roleStr = bot.getBotRole();
+            if (roleStr.equalsIgnoreCase("villager") && bot.getBotSubRole() != null && !bot.getBotSubRole().isBlank() && !bot.getBotSubRole().equalsIgnoreCase("unemployed")) {
+                roleStr = "Villager (" + AiBotPlayer.capitalize(bot.getBotSubRole()) + ")";
+            }
+            this.botRole = roleStr;
+        } else {
+            this.botRole = "Helper";
+        }
 
         checkContainerDataCount(data, DATA_COUNT);
         this.addDataSlots(data);

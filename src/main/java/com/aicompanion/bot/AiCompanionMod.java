@@ -92,22 +92,121 @@ public class AiCompanionMod {
                     event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
                     return;
                 }
+                if (bot.isBaby() && (held.is(net.minecraft.world.item.Items.WHEAT) || held.is(net.minecraft.world.item.Items.BREAD)
+                        || held.is(net.minecraft.world.item.Items.CARROT) || held.is(net.minecraft.world.item.Items.POTATO))) {
+                    if (!player.isCreative()) {
+                        held.shrink(1);
+                    }
+                    bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                            net.minecraft.sounds.SoundEvents.VILLAGER_YES,
+                            net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.35f);
+                    if (bot.level() instanceof ServerLevel sl) {
+                        sl.sendParticles(net.minecraft.core.particles.ParticleTypes.HAPPY_VILLAGER, bot.getX(), bot.getY() + 0.6, bot.getZ(), 8, 0.3, 0.3, 0.3, 0.05);
+                    }
+                    bot.setBabyAgeTicks(Math.max(0, bot.getBabyAgeTicks() - 2400));
+                    int minutesRemaining = Math.max(1, (bot.getBabyAgeTicks() + 1199) / 1200);
+                    bot.sayInChat("Yum! Thank you! I am growing bigger (~" + minutesRemaining + "m until adult)!");
+                    BotPersistence.saveAll(player.level().getServer());
+                    event.setCanceled(true);
+                    event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+                    return;
+                }
+                if (bot.getBotRole().toLowerCase().contains("villager") && (player.isShiftKeyDown() || player.isCrouching())) {
+                    if (bot.isBaby()) {
+                        bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                                net.minecraft.sounds.SoundEvents.VILLAGER_NO,
+                                net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.35f);
+                        bot.sayInChat("I'm still just a baby! I can't trade until I grow up!");
+                    } else {
+                        bot.openVillagerTradeScreen(player);
+                    }
+                    event.setCanceled(true);
+                    event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+                    return;
+                }
                 if (bot.getBotRole().toLowerCase().contains("villager") && held.is(net.minecraft.world.item.Items.EMERALD)) {
+                    if (bot.isBaby()) {
+                        bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
+                                net.minecraft.sounds.SoundEvents.VILLAGER_NO,
+                                net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.35f);
+                        bot.sayInChat("I'm still just a baby! I can't trade emeralds until I grow up!");
+                        event.setCanceled(true);
+                        event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
+                        return;
+                    }
                     if (!player.isCreative()) {
                         held.shrink(1);
                     }
                     bot.getInventory().add(new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.EMERALD, 1));
-                    net.minecraft.world.item.ItemStack tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.BREAD, 4);
-                    if (bot.countMatching(s -> s.is(net.minecraft.world.item.Items.WHEAT)) >= 6) {
-                        bot.consumeMatching(s -> s.is(net.minecraft.world.item.Items.WHEAT), 6);
-                    } else if (bot.countMatching(s -> s.is(net.minecraft.world.item.Items.BREAD)) >= 4) {
-                        bot.consumeMatching(s -> s.is(net.minecraft.world.item.Items.BREAD), 4);
+                    String sub = bot.getBotSubRole().toLowerCase(java.util.Locale.ROOT);
+                    net.minecraft.world.item.ItemStack tradeReward;
+                    String tradeDesc;
+
+                    switch (sub) {
+                        case "librarian" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.BOOK, 2);
+                            tradeDesc = "2 Books";
+                        }
+                        case "armorer" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.IRON_INGOT, 2);
+                            tradeDesc = "2 Iron Ingots";
+                        }
+                        case "weaponsmith" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.IRON_SWORD, 1);
+                            tradeDesc = "1 Iron Sword";
+                        }
+                        case "toolsmith" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.IRON_PICKAXE, 1);
+                            tradeDesc = "1 Iron Pickaxe";
+                        }
+                        case "fletcher" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.ARROW, 16);
+                            tradeDesc = "16 Arrows";
+                        }
+                        case "cleric" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.REDSTONE, 4);
+                            tradeDesc = "4 Redstone Dust";
+                        }
+                        case "butcher" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COOKED_BEEF, 4);
+                            tradeDesc = "4 Cooked Beef";
+                        }
+                        case "fisherman" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.COOKED_COD, 6);
+                            tradeDesc = "6 Cooked Cod";
+                        }
+                        case "farmer" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.BREAD, 6);
+                            tradeDesc = "6 Bread";
+                        }
+                        case "shepherd" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.core.registries.BuiltInRegistries.ITEM.getValue(net.minecraft.resources.Identifier.parse("white_wool")), 4);
+                            tradeDesc = "4 White Wool";
+                        }
+                        case "mason" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.STONE_BRICKS, 8);
+                            tradeDesc = "8 Stone Bricks";
+                        }
+                        case "cartographer" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.MAP, 1);
+                            tradeDesc = "1 Empty Map";
+                        }
+                        case "leatherworker" -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.LEATHER, 4);
+                            tradeDesc = "4 Leather";
+                        }
+                        default -> {
+                            tradeReward = new net.minecraft.world.item.ItemStack(net.minecraft.world.item.Items.BREAD, 4);
+                            tradeDesc = "4 Bread";
+                        }
                     }
+
                     player.getInventory().add(tradeReward);
                     bot.level().playSound(null, bot.getX(), bot.getY(), bot.getZ(),
                             net.minecraft.sounds.SoundEvents.VILLAGER_YES,
                             net.minecraft.sounds.SoundSource.NEUTRAL, 1.0f, 1.0f);
-                    bot.sayInChat("Hmm! Pleasure trading with you, " + player.getPlainTextName() + "! [Trade: 1 Emerald -> 4 Bread]");
+                    String profLabel = "unemployed".equalsIgnoreCase(sub) || "none".equalsIgnoreCase(sub) ? "Villager" : AiBotPlayer.capitalize(sub);
+                    bot.sayInChat("Hmm! Pleasure trading with you, " + player.getPlainTextName() + "! [" + profLabel + " Trade: 1 Emerald -> " + tradeDesc + "]");
                     BotPersistence.saveAll(player.level().getServer());
                     event.setCanceled(true);
                     event.setCancellationResult(net.minecraft.world.InteractionResult.SUCCESS);
@@ -131,6 +230,15 @@ public class AiCompanionMod {
         String rawText = event.getRawText();
         // ServerChatEvent fires on the Netty network thread in 26.3; always schedule world access onto the main ServerThread!
         player.level().getServer().execute(() -> BotManager.handleChatMessage(player, rawText));
+    }
+
+    @SubscribeEvent
+    public void onServerTick(net.neoforged.neoforge.event.tick.ServerTickEvent.Post event) {
+        for (ServerPlayer player : event.getServer().getPlayerList().getPlayers()) {
+            if (!(player instanceof AiBotPlayer)) {
+                com.aicompanion.bot.learning.HiveMindBrain.tickPlayerPathRecording(player);
+            }
+        }
     }
 
     @SubscribeEvent

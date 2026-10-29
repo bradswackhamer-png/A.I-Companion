@@ -38,6 +38,12 @@ import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.level.ClipContext;
+import java.util.LinkedHashSet;
+import java.util.Optional;
+import java.util.Set;
 import org.slf4j.Logger;
 
 public class GeminiService {
@@ -103,6 +109,7 @@ public class GeminiService {
               * If you need to mine stone or coal_ore and don't have a pickaxe, first MINE 3 "log", then CRAFT 1 "wooden_pickaxe", then MINE the stone!
               * If you need to mine iron_ore and don't have a stone/iron/diamond pickaxe, make sure you get a stone_pickaxe first!
               * If the player says "bring me...", "give me...", or "get me...", ALWAYS append a "GIVE" action at the end of your "actions" array with "target" set to the requesting player's name!
+            - MOB AWARENESS & PERCEPTION: When the player refers to a mob (e.g. "zombie in front of me", "look at that creeper", "kill that", "can you see that zombie?"), refer to the "SPEAKER INFO & SIGHT CONE" and "NEARBY MOBS & ENTITIES" telemetry sections! If a mob is listed in front of the speaker or near the speaker/bot, you CAN see it! NEVER claim you cannot see it. If asked to fight, protect, or eliminate it, issue an "ATTACK" action with the mob type immediately!
             - If the player just asks a question (e.g. "what's in your inventory?", "where are you?", "how's your health?"), answer accurately in "reply" using the LIVE TELEMETRY below and leave "actions": [] empty (so you don't interrupt your current task unless asked).
             - Keep "reply" natural, in-character, and concise.
             """;
@@ -169,6 +176,15 @@ public class GeminiService {
                     bot.getConductorDestinationStation(), bot.getConductorReturnStation(),
                     bot.getConductorFreightItem(), bot.getConductorFreightCount(), bot.isConductorReturning()));
         }
+        if (bot.getBotRole().toLowerCase().contains("villager")) {
+            String wsInfo = bot.getAssignedWorkstationPos() != null
+                    ? String.format("Assigned Workstation: %s at (%d, %d, %d)",
+                    bot.level().getBlockState(bot.getAssignedWorkstationPos()).getBlock().getName().getString(),
+                    bot.getAssignedWorkstationPos().getX(), bot.getAssignedWorkstationPos().getY(), bot.getAssignedWorkstationPos().getZ())
+                    : "No Workstation Assigned (Unemployed - searching nearby work tables)";
+            sb.append(String.format("Villager Profession (Sub-Role Trait): %s | %s\n",
+                    bot.getBotSubRole(), wsInfo));
+        }
         if (TractorCompat.isAvailable()) {
             net.minecraft.world.entity.Entity nearbyTractor = TractorCompat.findNearbyTractor(level, bot.position(), 24.0);
             sb.append(String.format("JaneMoose Tractor Mod: Available (Riding Tractor=%b, Nearby Tractor Detected=%b)\n",
@@ -212,9 +228,35 @@ public class GeminiService {
         if (speaker != null) {
             BlockPos spPos = speaker.blockPosition();
             double dist = Math.sqrt(bot.distanceToSqr(speaker));
-            sb.append("\n=== SPEAKER INFO ===\n");
+            sb.append("\n=== SPEAKER INFO & SIGHT CONE ===\n");
             sb.append(String.format("Speaker Name: %s | Position: (%d, %d, %d) | Distance: %.1f blocks | Holding: %s\n",
                     speaker.getPlainTextName(), spPos.getX(), spPos.getY(), spPos.getZ(), dist, formatStack(speaker.getMainHandItem())));
+
+            LivingEntity crossTarget = getEntityInCrosshairs(speaker, 48.0);
+            if (crossTarget != null) {
+                String host = (crossTarget instanceof Monster) ? "[HOSTILE]" : "[PASSIVE/NEUTRAL]";
+                sb.append(String.format(">>> SPEAKER DIRECT CROSSHAIR TARGET: %s %s at (%d, %d, %d), %.1fm from speaker, %.1fm from bot (Visible to bot: %s)\n",
+                        BuiltInRegistries.ENTITY_TYPE.getKey(crossTarget.getType()), host,
+                        crossTarget.getBlockX(), crossTarget.getBlockY(), crossTarget.getBlockZ(),
+                        Math.sqrt(speaker.distanceToSqr(crossTarget)),
+                        Math.sqrt(bot.distanceToSqr(crossTarget)),
+                        bot.hasLineOfSight(crossTarget) ? "YES" : "NO"));
+            }
+
+            List<LivingEntity> inFront = getEntitiesInFrontCone(speaker, 40.0, 0.35);
+            if (!inFront.isEmpty()) {
+                sb.append("Entities In Front of Speaker's View:\n");
+                for (LivingEntity fe : inFront) {
+                    if (fe == bot) continue;
+                    String host = (fe instanceof Monster) ? "[HOSTILE]" : "[PASSIVE/NEUTRAL]";
+                    sb.append(String.format("- %s %s at (%d, %d, %d) | %.1fm in front of speaker | %.1fm from bot (Visible to bot: %s)\n",
+                            BuiltInRegistries.ENTITY_TYPE.getKey(fe.getType()), host,
+                            fe.getBlockX(), fe.getBlockY(), fe.getBlockZ(),
+                            Math.sqrt(speaker.distanceToSqr(fe)),
+                            Math.sqrt(bot.distanceToSqr(fe)),
+                            bot.hasLineOfSight(fe) ? "YES" : "NO"));
+                }
+            }
         }
 
         // Other players & bots
@@ -275,21 +317,49 @@ public class GeminiService {
             sb.append(String.join("; ", blockSummaries.subList(0, limit))).append("\n");
         }
 
-        // Nearby entities
-        AABB box = new AABB(botPos).inflate(24.0, 12.0, 24.0);
-        List<LivingEntity> entities = level.getEntitiesOfClass(LivingEntity.class, box, e -> e != bot && !(e instanceof ServerPlayer) && e.isAlive());
-        sb.append("\n=== NEARBY MOBS & ENTITIES (within 24m) ===\n");
-        if (entities.isEmpty()) {
+        // Nearby entities (Perception radius: 48m horizontal, 28m vertical around bot and speaker)
+        AABB botBox = new AABB(botPos).inflate(48.0, 28.0, 48.0);
+        List<LivingEntity> botEntities = level.getEntitiesOfClass(LivingEntity.class, botBox, e -> e != bot && !(e instanceof ServerPlayer) && e.isAlive());
+
+        Set<LivingEntity> allEntities = new LinkedHashSet<>(botEntities);
+        if (speaker != null) {
+            AABB spBox = new AABB(speaker.blockPosition()).inflate(48.0, 28.0, 48.0);
+            List<LivingEntity> spEntities = level.getEntitiesOfClass(LivingEntity.class, spBox, e -> e != bot && !(e instanceof ServerPlayer) && e.isAlive());
+            allEntities.addAll(spEntities);
+        }
+
+        sb.append("\n=== NEARBY MOBS & ENTITIES (within 48m) ===\n");
+        if (allEntities.isEmpty()) {
             sb.append("None nearby.\n");
         } else {
-            entities.sort(Comparator.comparingDouble(bot::distanceToSqr));
-            int limit = Math.min(15, entities.size());
+            List<LivingEntity> sortedEntities = new ArrayList<>(allEntities);
+            sortedEntities.sort((e1, e2) -> {
+                boolean m1 = e1 instanceof Monster;
+                boolean m2 = e2 instanceof Monster;
+                if (m1 && !m2) return -1;
+                if (!m1 && m2) return 1;
+                double d1 = Math.min(bot.distanceToSqr(e1), speaker != null ? speaker.distanceToSqr(e1) : Double.MAX_VALUE);
+                double d2 = Math.min(bot.distanceToSqr(e2), speaker != null ? speaker.distanceToSqr(e2) : Double.MAX_VALUE);
+                return Double.compare(d1, d2);
+            });
+
+            int limit = Math.min(25, sortedEntities.size());
             for (int i = 0; i < limit; i++) {
-                LivingEntity e = entities.get(i);
+                LivingEntity e = sortedEntities.get(i);
                 Identifier typeId = BuiltInRegistries.ENTITY_TYPE.getKey(e.getType());
                 String hostility = (e instanceof Monster) ? "[HOSTILE]" : "[PASSIVE/NEUTRAL]";
-                sb.append(String.format("- %s %s at (%d, %d, %d) dist=%.1fm HP=%.1f\n",
-                        typeId, hostility, e.getBlockX(), e.getBlockY(), e.getBlockZ(), Math.sqrt(bot.distanceToSqr(e)), e.getHealth()));
+                double botDist = Math.sqrt(bot.distanceToSqr(e));
+                String cardinal = getRelativeCardinalDirection(bot.position(), e.position());
+                String speakerInfo = "";
+                if (speaker != null) {
+                    double spDist = Math.sqrt(speaker.distanceToSqr(e));
+                    boolean inFrontOfSp = isEntityInFront(speaker, e, 0.35);
+                    speakerInfo = String.format(" | %.1fm from speaker%s", spDist, inFrontOfSp ? " [IN FRONT OF SPEAKER]" : "");
+                }
+                sb.append(String.format("- %s %s at (%d, %d, %d) dist=%.1fm from bot (%s)%s HP=%.1f (Visible to bot: %s)\n",
+                        typeId, hostility, e.getBlockX(), e.getBlockY(), e.getBlockZ(),
+                        botDist, cardinal, speakerInfo, e.getHealth(),
+                        bot.hasLineOfSight(e) ? "YES" : "NO"));
             }
         }
 
@@ -346,6 +416,9 @@ public class GeminiService {
                 sb.append("• Learned Recipe: ").append(r.toString()).append("\n");
             }
         }
+
+        sb.append("\n=== SHARED HIVE-MIND NEURAL & REINFORCEMENT LEARNING ===\n");
+        sb.append(com.aicompanion.bot.learning.HiveMindBrain.getTelemetryContextForGemini(bot.getBotRole())).append("\n");
 
         sb.append("\n=== NEW REQUEST FROM ").append(speaker != null ? speaker.getPlainTextName() : "Player").append(" ===\n");
         sb.append(userMessage).append("\n");
@@ -574,18 +647,31 @@ public class GeminiService {
             else if (lower.contains("coal")) item = "coal";
             actions.add(new BotAction("GIVE", speakerName, item, count == 1 ? 64 : count));
             res.reply = "Bringing you my " + item + "!";
-        } else if (lower.contains("attack") || lower.contains("kill") || lower.contains("fight") || lower.contains("hunt")) {
+        } else if (lower.contains("attack") || lower.contains("kill") || lower.contains("fight") || lower.contains("hunt")
+                || lower.contains("shoot") || lower.contains("eliminate") || lower.contains("target")
+                || ((lower.contains("zombie") || lower.contains("skeleton") || lower.contains("creeper") || lower.contains("spider")
+                     || lower.contains("monster") || lower.contains("mob") || lower.contains("witch") || lower.contains("enderman"))
+                    && (lower.contains("front") || lower.contains("ahead") || lower.contains("see") || lower.contains("look")
+                        || lower.contains("watch") || lower.contains("there") || lower.contains("near") || lower.contains("get")))) {
             String mob = "hostile";
             if (lower.contains("zombie")) mob = "zombie";
             else if (lower.contains("skeleton")) mob = "skeleton";
             else if (lower.contains("creeper")) mob = "creeper";
             else if (lower.contains("spider")) mob = "spider";
+            else if (lower.contains("witch")) mob = "witch";
+            else if (lower.contains("enderman")) mob = "enderman";
+            else if (lower.contains("drowned")) mob = "drowned";
+            else if (lower.contains("husk")) mob = "husk";
             else if (lower.contains("cow")) mob = "cow";
             else if (lower.contains("pig")) mob = "pig";
             else if (lower.contains("sheep")) mob = "sheep";
             else if (lower.contains("chicken")) mob = "chicken";
             actions.add(new BotAction("ATTACK", mob, "", Math.max(3, count)));
-            res.reply = "Hunting nearby " + mob + "!";
+            if (lower.contains("in front of") || lower.contains("front") || lower.contains("ahead") || lower.contains("see")) {
+                res.reply = "I see the " + mob + "! Engaging now!";
+            } else {
+                res.reply = "Hunting nearby " + mob + "!";
+            }
         } else if (lower.contains("chest") || lower.contains("store") || lower.contains("deposit")) {
             actions.add(new BotAction("CHEST_STORE", "all", "", 1));
             res.reply = "Storing my gathered items into the nearest chest!";
@@ -594,5 +680,87 @@ public class GeminiService {
         }
         res.actions = actions;
         return res;
+    }
+
+    public static @org.jetbrains.annotations.Nullable LivingEntity getEntityInCrosshairs(ServerPlayer player, double maxDist) {
+        Vec3 eyePos = player.getEyePosition();
+        Vec3 viewVec = player.getViewVector(1.0F);
+        Vec3 reachEnd = eyePos.add(viewVec.scale(maxDist));
+        AABB searchBox = player.getBoundingBox().expandTowards(viewVec.scale(maxDist)).inflate(1.5);
+
+        List<LivingEntity> candidates = player.level().getEntitiesOfClass(LivingEntity.class, searchBox,
+                e -> e != player && e.isAlive() && !(e instanceof ServerPlayer && ((ServerPlayer) e).isSpectator()));
+
+        LivingEntity bestEntity = null;
+        double bestDistSq = maxDist * maxDist;
+
+        for (LivingEntity candidate : candidates) {
+            AABB entityBox = candidate.getBoundingBox().inflate(0.35);
+            Optional<Vec3> hitOpt = entityBox.clip(eyePos, reachEnd);
+            if (hitOpt.isPresent()) {
+                Vec3 hit = hitOpt.get();
+                double dSq = eyePos.distanceToSqr(hit);
+                if (dSq < bestDistSq) {
+                    HitResult blockHit = player.level().clip(new ClipContext(eyePos, hit, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player));
+                    if (blockHit.getType() == HitResult.Type.MISS || eyePos.distanceToSqr(blockHit.getLocation()) >= dSq) {
+                        bestDistSq = dSq;
+                        bestEntity = candidate;
+                    }
+                }
+            }
+        }
+        return bestEntity;
+    }
+
+    public static List<LivingEntity> getEntitiesInFrontCone(ServerPlayer player, double maxDist, double minDot) {
+        Vec3 eyePos = player.getEyePosition();
+        Vec3 viewVec = player.getViewVector(1.0F).normalize();
+        AABB searchBox = player.getBoundingBox().inflate(maxDist, 18.0, maxDist);
+
+        List<LivingEntity> result = new ArrayList<>();
+        List<LivingEntity> candidates = player.level().getEntitiesOfClass(LivingEntity.class, searchBox,
+                e -> e != player && e.isAlive() && !(e instanceof ServerPlayer));
+
+        for (LivingEntity c : candidates) {
+            Vec3 toCandidate = c.getEyePosition().subtract(eyePos);
+            double dist = toCandidate.length();
+            if (dist <= maxDist && dist > 0.001) {
+                Vec3 dir = toCandidate.scale(1.0 / dist);
+                double dot = viewVec.dot(dir);
+                if (dot >= minDot) {
+                    result.add(c);
+                }
+            }
+        }
+        result.sort(Comparator.comparingDouble(player::distanceToSqr));
+        if (result.size() > 10) {
+            return result.subList(0, 10);
+        }
+        return result;
+    }
+
+    public static boolean isEntityInFront(ServerPlayer player, LivingEntity entity, double minDot) {
+        Vec3 eyePos = player.getEyePosition();
+        Vec3 viewVec = player.getViewVector(1.0F).normalize();
+        Vec3 toTarget = entity.getEyePosition().subtract(eyePos);
+        double dist = toTarget.length();
+        if (dist < 0.001) return true;
+        double dot = viewVec.dot(toTarget.scale(1.0 / dist));
+        return dot >= minDot;
+    }
+
+    public static String getRelativeCardinalDirection(Vec3 from, Vec3 to) {
+        double dx = to.x - from.x;
+        double dz = to.z - from.z;
+        double angle = Math.toDegrees(Math.atan2(-dx, dz));
+        if (angle < 0) angle += 360.0;
+        if (angle >= 337.5 || angle < 22.5) return "South";
+        if (angle >= 22.5 && angle < 67.5) return "South-West";
+        if (angle >= 67.5 && angle < 112.5) return "West";
+        if (angle >= 112.5 && angle < 157.5) return "North-West";
+        if (angle >= 157.5 && angle < 202.5) return "North";
+        if (angle >= 202.5 && angle < 247.5) return "North-East";
+        if (angle >= 247.5 && angle < 292.5) return "East";
+        return "South-East";
     }
 }

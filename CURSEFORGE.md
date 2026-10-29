@@ -6,6 +6,40 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
 
 ---
 
+# 🚀 QUICK START GUIDE: HOW TO SPAWN YOUR FIRST BOT
+
+## 🟢 Step 1: Spawn a Companion in Chat!
+To spawn your first companion immediately, type or copy-paste this command in game chat:
+# `▶ /bot spawn Alex`
+
+> Want a specific profession or role right away? Just add the role name:
+> * **Guard (Defender):** `/bot spawn Alex guard`
+> * **Miner (Excavation):** `/bot spawn Steve miner`
+> * **Farmer (Crops):** `/bot spawn Emma farmer`
+> * **Builder (Cottages/Blueprints):** `/bot spawn Bob builder`
+> * **Lumberjack (Forestry):** `/bot spawn John lumberjack`
+> * **Rancher (Husbandry):** `/bot spawn Daisy husbandry`
+> * **Villager (Workstations & Trades):** `/bot spawn Sarah villager`
+> * **Conductor (Trains):** `/bot spawn Thomas conductor`
+
+---
+
+## 🧠 Step 2: Baked-In AI Model & Model Command
+The mod comes pre-configured with the default baked-in model:
+# `▶ /bot model gemini-3.5-flash-lite`
+
+> **Copy & paste this into game chat to set or refresh your model:**
+> ```
+> /bot model gemini-3.5-flash-lite
+> ```
+> * **Baked-In Default:** `gemini-3.5-flash-lite` *(ultra-low latency, blazing fast responses, and minimal token/quota usage)*.
+> * **Other Supported Models:**
+>   * `/bot model gemini-2.5-flash`
+>   * `/bot model gemini-1.5-flash`
+>   * `/bot model gemini-1.5-pro`
+
+---
+
 ## ⚡ Zero Configuration Needed (Offline Tactical Engine)
 **No API key? No problem!** The mod features a built-in offline tactical decision engine. The moment you install the mod and spawn a companion, they can immediately:
 * Drop custom skins into `aicompanion/skins` for automatic role-themed dressing with Alex/Steve dual-layer support
@@ -19,6 +53,113 @@ Works in **Singleplayer** and **Dedicated Multiplayer Servers**!
 * Farm crops, breed livestock, and operate trains and tractors
 
 *(Optional)* Want full conversational AI personality, banter, and contextual planning? Add a 100% free Google Gemini API key in 30 seconds!
+
+---
+
+### 🧠 Shared Hive-Mind Neural Network & Reinforcement Learning *(New in v1.2.19)*
+* **Collective Hive-Mind Brain (`24 -> 32 -> 16 -> 9` Pure-Java MLP)**:
+  * Every companion shares a persistent **Hive-Mind Neural Network**, **3D Spatial Pheromone Waypoint Graph**, **Modded Block Walkability Table**, and **Task Preference Q-Table** saved in `aicompanion_memory.json`.
+  * When one bot learns how to navigate a tricky staircase (like Macaw's narrow stairs/railings), avoid a trap, or optimize a task, **every bot on the server immediately benefits**.
+* **Verbal & Command Reinforcement (`"good job"` / `"bad job"`)**:
+  * Praise a bot in chat (*"good job"*, *"good bot"*, *"well done"*, *"nice pathing"*) or run `/bot reward [name|all]` to send a `+15.0` reward signal backward through its recent 60-step Eligibility Trace, permanently reinforcing that route and task!
+  * Correct a bot in chat (*"bad job"*, *"bad bot"*, *"wrong way"*, *"stop getting stuck"*) or run `/bot punish [name|all]` to penalize its recent path (`-15.0`), mark the obstacle in the spatial hazard graph, and force an immediate reroute.
+* **Player Footstep Imitation (`/bot learnpath`)**:
+  * Run `/bot learnpath start` (or say *"learn this path"* / *"watch how I walk"*) and walk up complex stairs, bridges, or doorways. Your footsteps and jumps are recorded as **Golden Breadcrumb Waypoints** that bots automatically follow!
+* **3D Brain Visualizer (`/bot brain`)**:
+  * Run `/bot brain stats` to view your squad's **Hive-Mind IQ**, training steps, learned modded blocks, and top task Q-values, or `/bot brain show` to visualize learned trails and hazard zones with 3D particles in-world.
+
+---
+
+### 👥 Global Squad Commands & Traditional Trader GUI *(New in v1.2.17)*
+* **Global Squad Commands (`/bot all`)**:
+  * Added dedicated `/bot all` commands for fast management of all active companion bots at once:
+    * `/bot all remove` - Despawn and remove all active companion bots across the server in one command.
+    * `/bot all come` / `/bot all come here` / `/bot all follow` - Order all active companions to immediately rush to and follow you.
+    * `/bot all stop` - Put all active companions into immediate Absolute Standby Mode.
+    * `/bot all stay` / `/bot all standby` / `/bot all hold` - Tether all active companions to hold position at their current location within a 4m perimeter.
+    * `/bot all sentry` - Set all active companions into stationary 360° Sentry Sniper mode.
+    * `/bot all resume` / `/bot all dismiss` - Release tethers and order all companions to resume their normal autonomous role duties.
+    * `/bot all shelter [true|false]` - Enable or disable night shelter and bed sleeping for all companions at once.
+    * `/bot all tp` - Teleport all active companions directly to your position.
+* **Traditional Trader GUI (`MerchantMenu`)**:
+  * **Sneak + Right-Click** (Shift + Right-Click) any companion in the `"villager"` role to open the authentic vanilla Minecraft Merchant trading interface!
+  * Displays tiered trades tailored to the companion's claimed profession trait (Farmer, Librarian, Armorer, Weaponsmith, Toolsmith, Cleric, Fletcher, Butcher, Fisherman, Shepherd, Mason, Cartographer, Leatherworker, or Unemployed/Wandering).
+  * Baby villager companions shake their head (`VILLAGER_NO`) and remind you they must grow up before trading.
+* **Villager Merchant Leveling & Progression System**:
+  * Companions gain trading experience (`villagerXp`) with every trade executed in the GUI.
+  * Progress through all 5 authentic vanilla tiers: **Novice** (Level 1) $\to$ **Apprentice** (Level 2) $\to$ **Journeyman** (Level 3) $\to$ **Expert** (Level 4) $\to$ **Master** (Level 5).
+  * Leveling up plays `PLAYER_LEVELUP` and `VILLAGER_YES` sound effects, displays green sparkles, announces promotion in chat, and dynamically unlocks new tier trades directly in the open trading screen!
+  * Trading level and experience points are saved and restored seamlessly across server reboots via `BotPersistence`.
+* **Exploit Protection (Zero Starter Emeralds)**:
+  * Villager companions spawn and breed with zero emeralds (starting only with basic bread and wheat), protecting survival economies from free emerald spawning exploits.
+
+---
+
+### 🏛️ Workstation Searching & Villager Profession Sub-Roles *(New in v1.2.16)*
+* **Workstation Searching & Profession Sub-Role Adoption**:
+  * Companions in the `"villager"` role autonomously search within a 48-block radius for unclaimed villager work tables (like vanilla villagers).
+  * Upon finding an available work table, the companion claims the block and adopts that table's profession trait as an authentic sub-role under their Villager role (e.g. `Role: Villager`, `Sub-Role: Librarian`).
+  * Supports all 13 vanilla work tables:
+    * `Composter` -> **Farmer** | `Lectern` -> **Librarian** | `Blast Furnace` -> **Armorer** | `Smoker` -> **Butcher**
+    * `Cartography Table` -> **Cartographer** | `Brewing Stand` -> **Cleric** | `Fletching Table` -> **Fletcher**
+    * `Cauldron` -> **Leatherworker** | `Loom` -> **Shepherd** | `Smithing Table` -> **Weaponsmith**
+    * `Stonecutter` -> **Mason** | `Grindstone` -> **Toolsmith** | `Barrel` -> **Fisherman**
+* **Single Workstation Claim Enforcement**:
+  * Companions ensure a work table isn't already claimed by another companion before taking it, ensuring every villager companion has their own unique job site.
+* **Dynamic Workstation Loss & Re-Employment**:
+  * If a work table is broken or replaced, the companion sighs (`VILLAGER_NO`), resets to Unemployed, announces the loss in chat, and automatically resumes searching for an available work table.
+* **Authentic Work Hours & Handheld Tools**:
+  * During work hours (2000-9000 ticks), companions walk to their claimed work table, face it, hold their profession item (Librarian holds a Book, Weaponsmith holds an Iron Sword, Fletcher holds a Bow, Farmer holds Wheat, Mason holds Stone Bricks, etc.), and play profession-specific ambient work audio with green happy sparkles.
+* **Profession-Specific Emerald Trades**:
+  * Right-clicking a companion with an Emerald grants authentic trades matching their profession trait (e.g. Books from Librarians, Iron Ingots from Armorers, Arrows from Fletchers, Redstone from Clerics, Cooked Beef from Butchers, Stone Bricks from Masons).
+* **Commands & GUI Status**:
+  * Configure or inspect via `/bot profession <name> [trait|clear|search]` or `/bot workstation <name> [assign|clear|search]`, or chat (*"search for a work table"*, *"claim this table"*, *"become a librarian"*, *"clear workstation"*).
+  * Displays `Role: Villager (Sub-Role: Librarian)` and assigned workstation coordinates in `/bot status` and the companion dashboard GUI.
+
+---
+
+### 👁️ Enhanced Perception, Sight Cones & Crosshair Targeting *(New in v1.2.15)*
+* **Player Crosshair Raycast Perception**:
+  * Companions and the Gemini LLM engine directly track what entity the player/speaker is looking at via line-of-sight raycasting up to 48 blocks away.
+  * Crosshairs targets are highlighted in telemetry and prioritized in combat orders, allowing you to simply look at a mob and say *"attack!"* or *"take that out!"* for instant target acquisition.
+* **Player Front Vision Cone Detection**:
+  * Companions now analyze a wide ~140-degree field of view in front of the player up to 40 blocks away.
+  * When you say *"zombie in front of me"*, *"watch out ahead"*, or *"can you see that zombie?"*, the companion immediately confirms the mob's presence, location, and distance instead of claiming it can't see it.
+* **Expanded 48m Surroundings Perception Volume**:
+  * Perception volume expanded from 24m horizontal / 12m vertical to **48m horizontal and 28m vertical**, scanning around both the bot and the player.
+  * Telemetry enriches all nearby entities with relative cardinal directions (North, South, East, West, etc.) and player-relative tags (`[IN FRONT OF SPEAKER]`, `[DIRECT CROSSHAIR TARGET]`, `[VISIBLE TO BOT]`).
+* **Fixed Vertical Elevation Blindness & Fence Rejections**:
+  * Removed restrictive 6-block vertical search caps (`vertDiff > 6.0`), allowing companions to spot and target mobs on hills, cliffs, terraces, and staircases up to 28+ blocks vertically.
+  * Fixed attack commands being rejected if a fence or railing was situated along the line of sight.
+* **Expanded Bodyguard Auto-Defend Range**:
+  * Melee bodyguard engagement range around guarded players increased from 8m to **20m** (and up to 36m for archers), proactively neutralizing threats within 14 blocks before they reach the player.
+
+---
+
+### 👶 Baby Bot Villagers & Colony Life Cycle *(New in v1.2.14)*
+* **Newborns Start as Babies**:
+  * All new companion villagers born through breeding or spawned with the `"villager"` role start out as adorable baby bot villagers.
+  * Scaled to authentic baby size (`Attributes.SCALE = 0.55`) using vanilla Minecraft attribute scaling, proportionally shrinking their model, reach, eye level, and hitbox.
+* **Playful Schedule & Bed Jumping**:
+  * Baby villagers don't work adult jobs; during daytime work hours (2000-9000 ticks) they play tag with nearby friends and jump joyfully up and down on beds with authentic wool bounce sounds and sparkles!
+* **Natural Growth & Feeding**:
+  * Baby companions age over 20 minutes (24000 ticks) into full adults. Right-clicking a baby bot with Wheat, Bread, Carrots, or Potatoes feeds them, accelerating their growth by 10% (2 minutes) per feeding.
+* **Baby Commands & Status**:
+  * Toggle baby/adult stage via `/bot baby <name> [true|false]` or chat (*"make <name> a baby"*, *"<name> grow up"*). View developmental stage and remaining growth time in `/bot status <name>`.
+
+---
+
+### 🪜 Macaw's Stairs & Modded Staircase Pathfinding *(New in v1.2.13)*
+* **Full Compatibility with Macaw's Stairs & Modded Stairs**:
+  * Companions natively recognize all Macaw's Stairs variants (Loft Stairs, Compact Stairs, Bulk Stairs, Terrace Stairs, Skyline Stairs, Balcony stairs, and platforms) as walkable paths.
+  * Eliminates false wall detection where ascending stair steps were previously misclassified as solid 2-block tall walls.
+* **1-Block Wide Stair Corridor Navigation & Shoulder Centering**:
+  * When ascending or descending narrow 1-block wide staircases flanked by side railings, walls, or balustrades, companions automatically align and steer along the exact center axis of the staircase corridor.
+  * Prevents 0.6-block wide player collision hitboxes from scraping or getting snagged against tall railing hitboxes.
+* **Smart Stair Railing & Balustrade Classification**:
+  * Stair railings, balustrades, handrails, and balconies are recognized as stair accessories rather than impenetrable perimeter fence walls, preventing companions from halting or getting distracted searching for fence gates.
+* **Native 1.06m Step-Up Capacity & Ascension Boost**:
+  * Companions now feature `Attributes.STEP_HEIGHT` configured to 1.06 blocks with smooth vertical momentum assist (`0.28` lift) when climbing stairs, providing seamless ascent even over steep modded steps.
 
 ---
 
@@ -324,6 +465,7 @@ You can speak to your companions directly in public chat:
 | Command | Description |
 | :--- | :--- |
 | `/bot spawn <name> [role]` | Spawn a new companion (`farmer`, `husbandry`, `guard`, `builder`, `miner`, `lumberjack`, `conductor`, `courier`, `villager`) |
+| `/bot all <remove\|come\|stop\|stay\|sentry\|resume\|shelter\|tp>` | Global squad commands: remove all, come here, stop, stay/hold, sentry sniper, resume duties, toggle shelter, or teleport all |
 | `/bot role <name> <role>` | Switch companion role (e.g. `villager`, `guard`, `farmer`, `miner`) |
 | `/bot bed assign <name> [pos]` | Assign personal bed for nightly sleep |
 | `/bot bed clear <name>` | Clear assigned bed |
@@ -358,9 +500,14 @@ You can speak to your companions directly in public chat:
 | `/bot untether <name>` | Release tether and resume normal autonomous duties |
 | `/bot sentry [name]` | Lock companion to post: stationary sniper scanning 360° up to 48m |
 | `/bot command <name> <order>` | Direct order override (follow, stop, hold, attack, resume) |
+| `/bot reward [name\|all] [amount]` | Reinforce a companion's recent pathing & task in the shared Hive-Mind Neural Net |
+| `/bot punish [name\|all] [amount]` | Penalize a companion's recent route/behavior and trigger immediate rerouting |
+| `/bot learnpath [start\|stop]` | Record your footsteps & jumps as Golden Breadcrumbs in the Hive-Mind path graph |
+| `/bot brain [stats\|show\|reset]` | View Hive-Mind IQ & neural stats, render 3D trail particles, or reset the brain |
 | `/bot tp <name>` | Teleport companion to your position |
 | `/bot ask <name> <request>` | Send a direct task/question to a companion |
 | `/bot apikey [key]` | View API key status or set your personal/server Gemini key |
+| `/bot model <modelName>` | Set the active Gemini model (default baked-in: `gemini-3.5-flash-lite`) |
 | `/bot waypoint <name>` | Save your current coordinates as a named bot waypoint |
 
 ---

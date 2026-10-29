@@ -30,6 +30,7 @@ import net.minecraft.commands.arguments.coordinates.BlockPosArgument;
 import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.BlockHitResult;
 import net.minecraft.world.level.block.BedBlock;
+import net.minecraft.world.level.block.Block;
 import com.aicompanion.bot.village.VillageManager;
 import java.util.Locale;
 import com.aicompanion.bot.area.SavedArea;
@@ -44,8 +45,10 @@ public class BotCommands {
         return SharedSuggestionProvider.suggest(names, builder);
     };
 
-    private static final SuggestionProvider<CommandSourceStack> ROLE_SUGGESTIONS = (ctx, builder) ->
-            SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher", "conductor", "villager"), builder);
+    private static final SuggestionProvider<CommandSourceStack> ROLE_SUGGESTIONS = (ctx, builder) -> SharedSuggestionProvider.suggest(java.util.List.of("miner", "guard", "lumberjack", "builder", "courier", "farmer", "husbandry", "rancher", "conductor", "villager"), builder);
+
+    private static final SuggestionProvider<CommandSourceStack> PROFESSION_SUGGESTIONS = (ctx, builder) -> SharedSuggestionProvider.suggest(java.util.List.of("armorer", "butcher", "cartographer", "cleric", "farmer", "fisherman", "fletcher", "leatherworker", "librarian", "mason", "shepherd", "toolsmith", "weaponsmith", "unemployed"), builder);
+
 
     private static final SuggestionProvider<CommandSourceStack> AREA_SUGGESTIONS = (ctx, builder) -> {
         var names = BotPersistence.getAllAreas().values().stream().map(a -> a.name).toList();
@@ -83,6 +86,67 @@ public class BotCommands {
                                         .executes(ctx -> spawnBot(ctx,
                                                 StringArgumentType.getString(ctx, "name"),
                                                 StringArgumentType.getString(ctx, "role"))))))
+                .then(Commands.literal("all")
+                        .then(Commands.literal("remove")
+                                .executes(BotCommands::removeAllBotsCmd))
+                        .then(Commands.literal("come")
+                                .executes(BotCommands::allBotsFollowCmd)
+                                .then(Commands.literal("here")
+                                        .executes(BotCommands::allBotsFollowCmd)))
+                        .then(Commands.literal("follow")
+                                .executes(BotCommands::allBotsFollowCmd))
+                        .then(Commands.literal("stop")
+                                .executes(BotCommands::allBotsStopCmd))
+                        .then(Commands.literal("stay")
+                                .executes(BotCommands::allBotsStayCmd))
+                        .then(Commands.literal("standby")
+                                .executes(BotCommands::allBotsStayCmd))
+                        .then(Commands.literal("hold")
+                                .executes(BotCommands::allBotsStayCmd))
+                        .then(Commands.literal("sentry")
+                                .executes(BotCommands::allBotsSentryCmd))
+                        .then(Commands.literal("resume")
+                                .executes(BotCommands::allBotsResumeCmd))
+                        .then(Commands.literal("dismiss")
+                                .executes(BotCommands::allBotsResumeCmd))
+                        .then(Commands.literal("shelter")
+                                .executes(ctx -> allBotsShelterCmd(ctx, null))
+                                .then(Commands.argument("enabled", BoolArgumentType.bool())
+                                        .executes(ctx -> allBotsShelterCmd(ctx, BoolArgumentType.getBool(ctx, "enabled")))))
+                        .then(Commands.literal("tp")
+                                .executes(BotCommands::tpAllBots)))
+                .then(Commands.literal("reward")
+                        .executes(ctx -> reinforceBotCmd(ctx, null, 15.0f))
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> reinforceBotCmd(ctx, StringArgumentType.getString(ctx, "name"), 15.0f))
+                                .then(Commands.argument("amount", DoubleArgumentType.doubleArg(1.0, 50.0))
+                                        .executes(ctx -> reinforceBotCmd(ctx,
+                                                StringArgumentType.getString(ctx, "name"),
+                                                (float) DoubleArgumentType.getDouble(ctx, "amount"))))))
+                .then(Commands.literal("punish")
+                        .executes(ctx -> reinforceBotCmd(ctx, null, -15.0f))
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> reinforceBotCmd(ctx, StringArgumentType.getString(ctx, "name"), -15.0f))
+                                .then(Commands.argument("amount", DoubleArgumentType.doubleArg(1.0, 50.0))
+                                        .executes(ctx -> reinforceBotCmd(ctx,
+                                                StringArgumentType.getString(ctx, "name"),
+                                                -(float) DoubleArgumentType.getDouble(ctx, "amount"))))))
+                .then(Commands.literal("learnpath")
+                        .executes(ctx -> learnPathCmd(ctx, "toggle"))
+                        .then(Commands.literal("start")
+                                .executes(ctx -> learnPathCmd(ctx, "start")))
+                        .then(Commands.literal("stop")
+                                .executes(ctx -> learnPathCmd(ctx, "stop"))))
+                .then(Commands.literal("brain")
+                        .executes(ctx -> brainCmd(ctx, "stats"))
+                        .then(Commands.literal("stats")
+                                .executes(ctx -> brainCmd(ctx, "stats")))
+                        .then(Commands.literal("show")
+                                .executes(ctx -> brainCmd(ctx, "show")))
+                        .then(Commands.literal("reset")
+                                .executes(ctx -> brainCmd(ctx, "reset"))))
                 .then(Commands.literal("remove")
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
@@ -172,6 +236,44 @@ public class BotCommands {
                                         .executes(ctx -> setShelterCmd(ctx,
                                                 StringArgumentType.getString(ctx, "botName"),
                                                 BoolArgumentType.getBool(ctx, "enabled"))))))
+                .then(Commands.literal("profession")
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> showProfessionCmd(ctx, StringArgumentType.getString(ctx, "botName")))
+                                .then(Commands.literal("search")
+                                        .executes(ctx -> searchWorkstationCmd(ctx, StringArgumentType.getString(ctx, "botName"))))
+                                .then(Commands.literal("clear")
+                                        .executes(ctx -> clearProfessionCmd(ctx, StringArgumentType.getString(ctx, "botName"))))
+                                .then(Commands.argument("trait", StringArgumentType.word())
+                                        .suggests(PROFESSION_SUGGESTIONS)
+                                        .executes(ctx -> setProfessionCmd(ctx,
+                                                StringArgumentType.getString(ctx, "botName"),
+                                                StringArgumentType.getString(ctx, "trait"))))))
+                .then(Commands.literal("workstation")
+                        .then(Commands.literal("assign")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> assignWorkstationCmd(ctx, StringArgumentType.getString(ctx, "botName"), null))
+                                        .then(Commands.argument("pos", BlockPosArgument.blockPos())
+                                                .executes(ctx -> assignWorkstationCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
+                                                        BlockPosArgument.getLoadedBlockPos(ctx, "pos"))))))
+                        .then(Commands.literal("search")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> searchWorkstationCmd(ctx, StringArgumentType.getString(ctx, "botName")))))
+                        .then(Commands.literal("clear")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> clearProfessionCmd(ctx, StringArgumentType.getString(ctx, "botName"))))))
+                .then(Commands.literal("baby")
+                        .then(Commands.argument("botName", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> setBotBabyCmd(ctx, StringArgumentType.getString(ctx, "botName"), null))
+                                .then(Commands.argument("isBaby", BoolArgumentType.bool())
+                                        .executes(ctx -> setBotBabyCmd(ctx,
+                                                StringArgumentType.getString(ctx, "botName"),
+                                                BoolArgumentType.getBool(ctx, "isBaby"))))))
                 .then(Commands.literal("farm")
                         .then(Commands.literal("autohay")
                                 .then(Commands.argument("botName", StringArgumentType.word())
@@ -700,9 +802,7 @@ public class BotCommands {
     private static int removeBot(CommandContext<CommandSourceStack> ctx, String name) {
         CommandSourceStack source = ctx.getSource();
         if ("all".equalsIgnoreCase(name)) {
-            int removed = BotManager.removeAllBots();
-            source.sendSuccess(() -> Component.literal("Removed " + removed + " AI bot(s).").withStyle(ChatFormatting.YELLOW), true);
-            return removed;
+            return removeAllBotsCmd(ctx);
         }
         if (BotManager.removeBot(name)) {
             source.sendSuccess(() -> Component.literal("Removed AI bot " + name + ".").withStyle(ChatFormatting.YELLOW), true);
@@ -711,6 +811,118 @@ public class BotCommands {
             source.sendFailure(Component.literal("No active bot named '" + name + "' found."));
             return 0;
         }
+    }
+
+    private static int removeAllBotsCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        int removed = BotManager.removeAllBots();
+        if (removed > 0) {
+            BotPersistence.saveAll(source.getServer());
+            source.sendSuccess(() -> Component.literal("Successfully removed all " + removed + " AI companion bot(s).").withStyle(ChatFormatting.YELLOW), true);
+        } else {
+            source.sendFailure(Component.literal("No active AI bots to remove."));
+        }
+        return removed;
+    }
+
+    private static int allBotsFollowCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.literal("Only players can command bots to follow them."));
+            return 0;
+        }
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            source.sendFailure(Component.literal("No active AI companions found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            bot.setAbsoluteFollow(player);
+            bot.sayInChat("On my way! Following you now, " + player.getPlainTextName() + ".");
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("All active AI companions (" + bots.size() + ") are now following " + player.getPlainTextName() + ".").withStyle(ChatFormatting.GREEN), false);
+        return bots.size();
+    }
+
+    private static int allBotsStopCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            source.sendFailure(Component.literal("No active AI companions found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            bot.setAbsoluteStop();
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Stopped all active AI companions (" + bots.size() + ") in Absolute Standby Mode.").withStyle(ChatFormatting.GREEN), false);
+        return bots.size();
+    }
+
+    private static int allBotsStayCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            source.sendFailure(Component.literal("No active AI companions found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            bot.setAbsoluteTether(bot.blockPosition(), 4.0);
+            bot.sayInChat("Holding my current position on standby!");
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("All active AI companions (" + bots.size() + ") are now staying at their current positions (Standby Tether 4m).").withStyle(ChatFormatting.GREEN), false);
+        return bots.size();
+    }
+
+    private static int allBotsSentryCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            source.sendFailure(Component.literal("No active AI companions found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            bot.setAbsoluteSentry();
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("All active AI companions (" + bots.size() + ") are now set to Sentry Mode.").withStyle(ChatFormatting.GREEN), false);
+        return bots.size();
+    }
+
+    private static int allBotsResumeCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            source.sendFailure(Component.literal("No active AI companions found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            bot.clearTether();
+            bot.resumeAutonomous();
+            bot.sayInChat("Resuming normal duties!");
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("All active AI companions (" + bots.size() + ") have resumed autonomous role duties.").withStyle(ChatFormatting.GREEN), false);
+        return bots.size();
+    }
+
+    private static int allBotsShelterCmd(CommandContext<CommandSourceStack> ctx, @Nullable Boolean enabled) {
+        CommandSourceStack source = ctx.getSource();
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            source.sendFailure(Component.literal("No active AI companions found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            boolean target = enabled != null ? enabled : !bot.isNightShelterEnabled();
+            bot.setNightShelterEnabled(target);
+        }
+        BotPersistence.saveAll(source.getServer());
+        String state = (enabled == null ? "toggled" : (enabled ? "enabled" : "disabled"));
+        source.sendSuccess(() -> Component.literal("Night shelter mode " + state + " for all active AI companions (" + bots.size() + ").").withStyle(ChatFormatting.GREEN), false);
+        return bots.size();
     }
 
     private static int listBots(CommandContext<CommandSourceStack> ctx) {
@@ -762,10 +974,26 @@ public class BotCommands {
         if (bot.getAssignedBedPos() != null) {
             extra.append(String.format("Assigned Bed: (%d, %d, %d)\n", bot.getAssignedBedPos().getX(), bot.getAssignedBedPos().getY(), bot.getAssignedBedPos().getZ()));
         }
+        if (bot.getBotRole().toLowerCase().contains("villager")) {
+            extra.append(String.format("Villager Profession (Sub-Role): %s\n", AiBotPlayer.capitalize(bot.getBotSubRole())));
+            if (bot.getAssignedWorkstationPos() != null) {
+                String wsName = bot.level().getBlockState(bot.getAssignedWorkstationPos()).getBlock().getName().getString();
+                extra.append(String.format("Assigned Workstation: %s at (%d, %d, %d)\n",
+                        wsName, bot.getAssignedWorkstationPos().getX(), bot.getAssignedWorkstationPos().getY(), bot.getAssignedWorkstationPos().getZ()));
+            } else {
+                extra.append("Assigned Workstation: None (Unemployed - Searching for Work Table)\n");
+            }
+        }
         if (bot.getAssignedHousePos() != null) {
             extra.append(String.format("Assigned House: (%d, %d, %d)%s\n",
                     bot.getAssignedHousePos().getX(), bot.getAssignedHousePos().getY(), bot.getAssignedHousePos().getZ(),
                     bot.getAssignedHouseAreaName() != null ? " [" + bot.getAssignedHouseAreaName() + "]" : ""));
+        }
+        if (bot.isBaby()) {
+            int mins = Math.max(1, (bot.getBabyAgeTicks() + 1199) / 1200);
+            extra.append(String.format("Stage: Baby (~%d min until adult)\n", mins));
+        } else {
+            extra.append("Stage: Adult\n");
         }
         extra.append(String.format("Night Shelter: %b | AutoHay: %b | AbsoluteMode: %b\n",
                 bot.isNightShelterEnabled(), bot.isAutoCompactWheatToHay(), bot.isAbsoluteCommandMode()));
@@ -968,6 +1196,25 @@ public class BotCommands {
         return 1;
     }
 
+    private static int setBotBabyCmd(CommandContext<CommandSourceStack> ctx, String botName, @Nullable Boolean isBaby) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        boolean targetBaby = (isBaby != null) ? isBaby : !bot.isBaby();
+        if (targetBaby) {
+            bot.setBaby(true);
+            source.sendSuccess(() -> Component.literal(bot.getPlainTextName() + " is now a baby companion!").withStyle(ChatFormatting.GREEN), false);
+        } else {
+            bot.growUpToAdult();
+            source.sendSuccess(() -> Component.literal(bot.getPlainTextName() + " has grown up into an adult!").withStyle(ChatFormatting.GREEN), false);
+        }
+        BotPersistence.saveAll(source.getServer());
+        return 1;
+    }
+
     private static int assignBedCmd(CommandContext<CommandSourceStack> ctx, String botName, @Nullable BlockPos pos) {
         CommandSourceStack source = ctx.getSource();
         AiBotPlayer bot = BotManager.getBot(botName);
@@ -1053,6 +1300,109 @@ public class BotCommands {
         }
     }
 
+    private static int showProfessionCmd(CommandContext<CommandSourceStack> ctx, String botName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        String prof = AiBotPlayer.capitalize(bot.getBotSubRole());
+        String ws = bot.getAssignedWorkstationPos() != null
+                ? String.format("%s at (%d, %d, %d)",
+                bot.level().getBlockState(bot.getAssignedWorkstationPos()).getBlock().getName().getString(),
+                bot.getAssignedWorkstationPos().getX(), bot.getAssignedWorkstationPos().getY(), bot.getAssignedWorkstationPos().getZ())
+                : "None (Unemployed)";
+        source.sendSuccess(() -> Component.literal(bot.getPlainTextName() + " Profession: " + prof + " | Workstation: " + ws).withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int searchWorkstationCmd(CommandContext<CommandSourceStack> ctx, String botName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        if (bot.isBaby()) {
+            source.sendFailure(Component.literal(bot.getPlainTextName() + " is still a baby villager and cannot take on a profession."));
+            return 0;
+        }
+        bot.setBotRole("villager");
+        boolean ok = bot.searchAndClaimWorkstation(48);
+        BotPersistence.saveAll(source.getServer());
+        if (ok) {
+            source.sendSuccess(() -> Component.literal(bot.getPlainTextName() + " found and claimed a workstation! Profession: " + AiBotPlayer.capitalize(bot.getBotSubRole())).withStyle(ChatFormatting.GREEN), false);
+        } else {
+            source.sendFailure(Component.literal("No unclaimed work tables found within 48 blocks of " + bot.getPlainTextName() + "."));
+        }
+        return ok ? 1 : 0;
+    }
+
+    private static int clearProfessionCmd(CommandContext<CommandSourceStack> ctx, String botName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setAssignedWorkstationPos(null);
+        bot.setBotSubRole("unemployed");
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Cleared workstation and set " + bot.getPlainTextName() + " to Unemployed.").withStyle(ChatFormatting.YELLOW), false);
+        return 1;
+    }
+
+    private static int setProfessionCmd(CommandContext<CommandSourceStack> ctx, String botName, String trait) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setBotRole("villager");
+        bot.setBotSubRole(trait);
+        Block targetBlock = AiBotPlayer.getWorkstationForProfession(trait);
+        if (targetBlock != null) {
+            BlockPos nearest = bot.findNearestBlockType(targetBlock, 48);
+            if (nearest != null && !bot.isWorkstationClaimedByOther(nearest)) {
+                bot.setAssignedWorkstationPos(nearest);
+            }
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Set " + bot.getPlainTextName() + " profession to '" + AiBotPlayer.capitalize(trait) + "' under Villager role!").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int assignWorkstationCmd(CommandContext<CommandSourceStack> ctx, String botName, @Nullable BlockPos target) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        if (target == null) {
+            if (source.getEntity() != null) {
+                target = source.getEntity().blockPosition();
+            } else {
+                target = bot.blockPosition();
+            }
+        }
+        Block b = bot.level().getBlockState(target).getBlock();
+        String trait = AiBotPlayer.WORKSTATION_PROFESSIONS.get(b);
+        if (trait == null) {
+            BlockPos finalT = target;
+            source.sendFailure(Component.literal("Block at (" + finalT.getX() + ", " + finalT.getY() + ", " + finalT.getZ() + ") is " + b.getName().getString() + ", which is not a villager work table."));
+            return 0;
+        }
+        bot.setBotRole("villager");
+        bot.setAssignedWorkstationPos(target);
+        bot.setBotSubRole(trait);
+        BotPersistence.saveAll(source.getServer());
+        BlockPos finalTarget = target;
+        source.sendSuccess(() -> Component.literal("Assigned " + b.getName().getString() + " at (" + finalTarget.getX() + ", " + finalTarget.getY() + ", " + finalTarget.getZ() + ") to " + bot.getPlainTextName() + "! Profession: " + AiBotPlayer.capitalize(trait)).withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
     private static int clearHouseCmd(CommandContext<CommandSourceStack> ctx, String botName) {
         CommandSourceStack source = ctx.getSource();
         AiBotPlayer bot = BotManager.getBot(botName);
@@ -1509,6 +1859,9 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot shelter <name> [true|false]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Enable or disable night shelter and bed sleeping").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot baby <name> [true|false]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Toggle baby status or set baby/adult stage").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot farm autohay <name> [true|false]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Toggle automatic wheat-to-hay compaction").withStyle(ChatFormatting.GRAY)), false);
@@ -1521,6 +1874,9 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot gui [name]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Open interactive Speedometer Dashboard & Inventory").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot all <remove|come|stop|stay|sentry|resume|shelter|tp>")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Global squad commands: remove, come here, stop, stay, sentry, resume, shelter, tp").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot stop [name|all]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Stop bot's tasks immediately into Absolute Standby Mode").withStyle(ChatFormatting.GRAY)), false);
@@ -1551,6 +1907,15 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot train [name] <instruction>")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Teach bot a custom recipe, rule, or guideline").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot reward [name] | /bot punish [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Reinforce or penalize bot's recent route & actions in the Hive-Mind Neural Net").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot learnpath [start|stop]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Record your footsteps & jumps into the Hive-Mind path graph").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot brain [stats|show|reset]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Inspect or visualize the shared Hive-Mind neural network & trails").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot memory book [global|<name>]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Export an in-game Written Book of recorded recipes & rules").withStyle(ChatFormatting.GRAY)), false);
@@ -1715,6 +2080,105 @@ public class BotCommands {
         BotPersistence.saveAll(bot.level().getServer());
         source.sendSuccess(() -> Component.literal("Set nickname for " + bot.getBotName() + " to '" + clean + "'!")
                 .withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int reinforceBotCmd(CommandContext<CommandSourceStack> ctx, @Nullable String botName, float reward) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if ("all".equalsIgnoreCase(botName)) {
+            int count = 0;
+            for (AiBotPlayer b : BotManager.getActiveBots()) {
+                b.applyPlayerReinforcement(reward, reward >= 0 ? "/bot reward all" : "/bot punish all");
+                count++;
+            }
+            if (count == 0) {
+                ctx.getSource().sendFailure(Component.literal("No active bots found."));
+                return 0;
+            }
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            return count;
+        }
+
+        AiBotPlayer target = null;
+        if (botName != null && !botName.isBlank()) {
+            target = BotManager.getBot(botName);
+            if (target == null) {
+                ctx.getSource().sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+                return 0;
+            }
+        } else if (player != null) {
+            target = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        } else if (!BotManager.getActiveBots().isEmpty()) {
+            target = BotManager.getActiveBots().iterator().next();
+        }
+
+        if (target == null) {
+            ctx.getSource().sendFailure(Component.literal("No active companion bots found."));
+            return 0;
+        }
+
+        target.applyPlayerReinforcement(reward, reward >= 0 ? "/bot reward" : "/bot punish");
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        final String targetName = target.getBotName();
+        ctx.getSource().sendSuccess(() -> Component.literal((reward >= 0 ? "Rewarded " : "Penalized ") + targetName
+                + " (" + String.format("%+.1f", reward) + " RL signal applied to shared Hive-Mind Brain).")
+                .withStyle(reward >= 0 ? ChatFormatting.GREEN : ChatFormatting.GOLD), false);
+        return 1;
+    }
+
+    private static int learnPathCmd(CommandContext<CommandSourceStack> ctx, String mode) {
+        ServerPlayer player = ctx.getSource().getPlayer();
+        if (player == null) {
+            ctx.getSource().sendFailure(Component.literal("Only a player can record footsteps with /bot learnpath."));
+            return 0;
+        }
+        boolean currentlyRecording = com.aicompanion.bot.learning.HiveMindBrain.isPlayerRecordingPath(player.getUUID());
+        boolean startNow;
+        if ("start".equalsIgnoreCase(mode)) {
+            startNow = true;
+        } else if ("stop".equalsIgnoreCase(mode)) {
+            startNow = false;
+        } else {
+            startNow = !currentlyRecording;
+        }
+
+        if (startNow) {
+            com.aicompanion.bot.learning.HiveMindBrain.startPlayerPathRecording(player);
+            ctx.getSource().sendSuccess(() -> Component.literal("Started Hive-Mind Path Imitation! Walk your desired route (stairs, bridges, doors) and bots will learn your exact footsteps and jumps. Run '/bot learnpath stop' when finished.")
+                    .withStyle(ChatFormatting.GREEN), false);
+        } else {
+            int nodes = com.aicompanion.bot.learning.HiveMindBrain.stopPlayerPathRecording(player);
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            ctx.getSource().sendSuccess(() -> Component.literal("Stopped Hive-Mind Path Imitation! Saved " + nodes
+                    + " golden waypoint nodes into the shared Hive-Mind spatial graph.")
+                    .withStyle(ChatFormatting.AQUA), false);
+        }
+        return 1;
+    }
+
+    private static int brainCmd(CommandContext<CommandSourceStack> ctx, String sub) {
+        if ("reset".equalsIgnoreCase(sub)) {
+            com.aicompanion.bot.learning.HiveMindBrain.resetBrain();
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            ctx.getSource().sendSuccess(() -> Component.literal("Reset the shared Hive-Mind Neural Network, spatial pheromone graph, and Q-tables to a fresh state.")
+                    .withStyle(ChatFormatting.YELLOW), true);
+            return 1;
+        }
+        if ("show".equalsIgnoreCase(sub)) {
+            ServerPlayer player = ctx.getSource().getPlayer();
+            if (player == null) {
+                ctx.getSource().sendFailure(Component.literal("Must be in-game to visualize Hive-Mind trails."));
+                return 0;
+            }
+            int rendered = com.aicompanion.bot.learning.HiveMindBrain.visualizeBrainAroundPlayer(player, 32);
+            ctx.getSource().sendSuccess(() -> Component.literal("Rendered " + rendered + " learned Hive-Mind nodes within 32m! "
+                    + "(End Rod = Player-Taught Golden Path, Green = High-Score Learned Trail, Flame = Stuck/Hazard Zone)")
+                    .withStyle(ChatFormatting.AQUA), false);
+            return rendered;
+        }
+
+        String summary = com.aicompanion.bot.learning.HiveMindBrain.getBrainStatsSummary();
+        ctx.getSource().sendSuccess(() -> Component.literal(summary).withStyle(ChatFormatting.AQUA), false);
         return 1;
     }
 }
