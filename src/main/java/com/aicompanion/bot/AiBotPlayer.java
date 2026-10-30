@@ -1652,7 +1652,8 @@ public class AiBotPlayer extends ServerPlayer {
             net.minecraft.world.phys.AABB gateBox = new net.minecraft.world.phys.AABB(this.lastOpenedGatePos).inflate(0.25);
             boolean stillInGate = this.getBoundingBox().intersects(gateBox);
 
-            if (!stillInGate && (this.gateCloseTimer <= 0 || distSq > 4.5)) {
+            boolean clearedGate = !stillInGate && (distSq > 3.0 || (this.gateCloseTimer <= 0 && distSq > 1.5));
+            if (clearedGate) {
                 BlockState gs = this.level().getBlockState(this.lastOpenedGatePos);
                 if (gs.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && gs.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
                     this.level().setBlockAndUpdate(this.lastOpenedGatePos, gs.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, false));
@@ -1668,7 +1669,8 @@ public class AiBotPlayer extends ServerPlayer {
             net.minecraft.world.phys.AABB doorBox = new net.minecraft.world.phys.AABB(this.lastOpenedDoorPos).inflate(0.25);
             boolean stillInDoor = this.getBoundingBox().intersects(doorBox);
 
-            if (!stillInDoor && (this.doorCloseTimer <= 0 || distSq > 4.5)) {
+            boolean clearedDoor = !stillInDoor && (distSq > 3.0 || (this.doorCloseTimer <= 0 && distSq > 1.5));
+            if (clearedDoor) {
                 BlockState ds = this.level().getBlockState(this.lastOpenedDoorPos);
                 if (ds.getBlock() instanceof DoorBlock door && ds.getValue(DoorBlock.OPEN)) {
                     door.setOpen(this, this.level(), ds, this.lastOpenedDoorPos, false);
@@ -4205,6 +4207,31 @@ public class AiBotPlayer extends ServerPlayer {
         return false;
     }
 
+    /**
+     * Determines the primary passage axis through a doorway, fence gate, or opening.
+     * For doors and fence gates, the facing property indicates the orientation:
+     * - If facing North or South, passage is along the Z axis (North-South).
+     * - If facing East or West, passage is along the X axis (East-West).
+     */
+    public net.minecraft.core.Direction.Axis getDoorwayPassageAxis(BlockPos pos, BlockState state) {
+        if (state.hasProperty(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING)) {
+            return state.getValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.HORIZONTAL_FACING).getAxis();
+        }
+        // Fallback: check adjacent horizontal neighbors to see which axis has solid walls/fences
+        boolean hasNorthSouthObstacle = isFenceOrWall(this.level().getBlockState(pos.north())) || isFenceOrWall(this.level().getBlockState(pos.south()))
+                || !this.level().getBlockState(pos.north()).isAir() || !this.level().getBlockState(pos.south()).isAir();
+        boolean hasEastWestObstacle = isFenceOrWall(this.level().getBlockState(pos.east())) || isFenceOrWall(this.level().getBlockState(pos.west()))
+                || !this.level().getBlockState(pos.east()).isAir() || !this.level().getBlockState(pos.west()).isAir();
+
+        if (hasEastWestObstacle && !hasNorthSouthObstacle) {
+            return net.minecraft.core.Direction.Axis.Z; // Walls on East/West -> passage is along Z
+        }
+        if (hasNorthSouthObstacle && !hasEastWestObstacle) {
+            return net.minecraft.core.Direction.Axis.X; // Walls on North/South -> passage is along X
+        }
+        return this.getDirection().getAxis();
+    }
+
     public static boolean isStairBlock(BlockState state) {
         if (state == null || state.isAir()) return false;
         if (state.getBlock() instanceof net.minecraft.world.level.block.StairBlock) return true;
@@ -4610,8 +4637,23 @@ public class AiBotPlayer extends ServerPlayer {
         BlockState frontHeadState = this.level().getBlockState(frontHead);
 
         // A. DOORWAY & FENCE GATE CHECK:
+        BlockState currentFeetState = this.level().getBlockState(feetPos);
+        boolean isCurrentInDoorOrGate = (currentFeetState.getBlock() instanceof DoorBlock)
+                || (currentFeetState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock)
+                || isOpenDoorOrGate(currentFeetState);
         boolean isDoorInFront = (frontFeetState.getBlock() instanceof DoorBlock) || (frontHeadState.getBlock() instanceof DoorBlock);
         boolean isGateInFront = (frontFeetState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock);
+
+        if (isCurrentInDoorOrGate) {
+            net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(feetPos, currentFeetState);
+            net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
+                    ? ((originalGoal.z >= feetPos.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
+                    : ((originalGoal.x >= feetPos.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
+            this.activeBypassWaypoint = Vec3.atBottomCenterOf(feetPos.relative(throughDir, 2));
+            this.bypassWaypointTicks = 40;
+            return;
+        }
+
         if (isDoorInFront) {
             BlockPos doorPos = (frontFeetState.getBlock() instanceof DoorBlock) ? frontFeet : frontHead;
             BlockState ds = this.level().getBlockState(doorPos);
@@ -4620,7 +4662,11 @@ public class AiBotPlayer extends ServerPlayer {
                 this.lastOpenedDoorPos = doorPos;
                 this.doorCloseTimer = 60;
             }
-            this.activeBypassWaypoint = Vec3.atBottomCenterOf(doorPos.relative(dir));
+            net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(doorPos, ds);
+            net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
+                    ? ((originalGoal.z >= doorPos.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
+                    : ((originalGoal.x >= doorPos.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
+            this.activeBypassWaypoint = Vec3.atBottomCenterOf(doorPos.relative(throughDir, 2));
             this.bypassWaypointTicks = 40;
             return;
         }
@@ -4640,7 +4686,11 @@ public class AiBotPlayer extends ServerPlayer {
                     this.lastOpenedGatePos = gatePos;
                     this.gateCloseTimer = 60;
                 }
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(gatePos.relative(dir));
+                net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gatePos, gs);
+                net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
+                        ? ((originalGoal.z >= gatePos.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
+                        : ((originalGoal.x >= gatePos.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(gatePos.relative(throughDir, 2));
                 this.bypassWaypointTicks = 40;
                 return;
             }
@@ -4658,7 +4708,12 @@ public class AiBotPlayer extends ServerPlayer {
             // Seek an existing opening or fence gate along the perimeter.
             BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(feetPos, originalGoal, 24);
             if (gateOrOpening != null) {
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening);
+                BlockState gs = this.level().getBlockState(gateOrOpening);
+                net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gateOrOpening, gs);
+                net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
+                        ? ((originalGoal.z >= gateOrOpening.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
+                        : ((originalGoal.x >= gateOrOpening.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
+                this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening.relative(throughDir, 2));
                 this.bypassWaypointTicks = 60;
                 this.level().sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 4, 0.2, 0.2, 0.2, 0.05);
                 return;
@@ -4829,17 +4884,18 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         // 1. Line-of-sight Fence Boundary Check: If direct line to target is blocked by fence, route through gate/opening!
-        boolean nearGate = false;
+        boolean nearGateOrDoor = false;
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
-                if (this.level().getBlockState(this.blockPosition().offset(dx, 0, dz)).getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
-                    nearGate = true;
+                BlockState s = this.level().getBlockState(this.blockPosition().offset(dx, 0, dz));
+                if (s.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock || s.getBlock() instanceof DoorBlock || isOpenDoorOrGate(s)) {
+                    nearGateOrDoor = true;
                     break;
                 }
             }
         }
 
-        if (!nearGate && isLineBlockedByFence(this.position(), target)) {
+        if (!nearGateOrDoor && isLineBlockedByFence(this.position(), target)) {
             if (this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy) {
                 // In combat, sentry, or standby: never leave fence perimeter!
                 this.stopMovement();
@@ -4848,8 +4904,12 @@ public class AiBotPlayer extends ServerPlayer {
             if (this.activeBypassWaypoint == null) {
                 BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
                 if (gateOrOpening != null) {
-                    Vec3 toGoal = target.subtract(Vec3.atCenterOf(gateOrOpening)).normalize();
-                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening).add(toGoal.x * 1.5, 0, toGoal.z * 1.5);
+                    BlockState gs = this.level().getBlockState(gateOrOpening);
+                    net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gateOrOpening, gs);
+                    net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
+                            ? ((target.z >= gateOrOpening.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
+                            : ((target.x >= gateOrOpening.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
+                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening.relative(throughDir, 2));
                     this.bypassWaypointTicks = 80;
                 }
             }
@@ -4899,7 +4959,7 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        // 2. 1x2 Doorway Navigation & Shoulder Alignment:
+        // 2. 1x2 Doorway & Fence Gate Navigation & Lateral Shoulder Alignment:
         BlockPos currentFeet = this.blockPosition();
         net.minecraft.core.Direction dir = this.getDirection();
         BlockPos frontPos = currentFeet.relative(dir);
@@ -4922,29 +4982,6 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        if (doorwayPos != null) {
-            BlockState ds = this.level().getBlockState(doorwayPos);
-            if (ds.getBlock() instanceof DoorBlock door) {
-                // Open wooden door if closed
-                if (!ds.getValue(DoorBlock.OPEN) && door.type().canOpenByHand()) {
-                    door.setOpen(this, this.level(), ds, doorwayPos, true);
-                    this.lastOpenedDoorPos = doorwayPos;
-                    this.doorCloseTimer = 40;
-                }
-
-                // Centering: Guide bot through center of the 1x2 doorway
-                Vec3 doorCenter = Vec3.atBottomCenterOf(doorwayPos);
-                double distToDoorSq = this.distanceToSqr(doorCenter);
-                if (distToDoorSq > 0.04 && distToDoorSq < 3.24) {
-                    double nudgeX = (doorCenter.x - this.getX()) * 0.35;
-                    double nudgeZ = (doorCenter.z - this.getZ()) * 0.35;
-                    Vec3 mot = this.getDeltaMovement();
-                    this.setDeltaMovement(mot.x + nudgeX, mot.y, mot.z + nudgeZ);
-                }
-            }
-        }
-
-        // 3. Fence Gate Interaction & Passage:
         BlockPos gatePos = null;
         if (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
             gatePos = frontPos;
@@ -4961,6 +4998,22 @@ public class AiBotPlayer extends ServerPlayer {
                 }
             }
         }
+
+        BlockPos activeChokepointPos = doorwayPos != null ? doorwayPos : gatePos;
+        net.minecraft.core.Direction chokepointThroughDir = null;
+
+        if (doorwayPos != null) {
+            BlockState ds = this.level().getBlockState(doorwayPos);
+            if (ds.getBlock() instanceof DoorBlock door) {
+                // Open wooden door if closed
+                if (!ds.getValue(DoorBlock.OPEN) && door.type().canOpenByHand()) {
+                    door.setOpen(this, this.level(), ds, doorwayPos, true);
+                    this.lastOpenedDoorPos = doorwayPos;
+                    this.doorCloseTimer = 40;
+                }
+            }
+        }
+
         if (gatePos != null) {
             BlockState gs = this.level().getBlockState(gatePos);
             if (gs.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
@@ -4976,13 +5029,30 @@ public class AiBotPlayer extends ServerPlayer {
                     this.lastOpenedGatePos = gatePos;
                     this.gateCloseTimer = 60;
                 }
-                Vec3 gateCenter = Vec3.atBottomCenterOf(gatePos);
-                double distToGateSq = this.distanceToSqr(gateCenter);
-                if (distToGateSq < 3.5) {
-                    double nudgeX = (gateCenter.x - this.getX()) * 0.35;
-                    double nudgeZ = (gateCenter.z - this.getZ()) * 0.35;
+            }
+        }
+
+        if (activeChokepointPos != null) {
+            BlockState chokepointState = this.level().getBlockState(activeChokepointPos);
+            net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(activeChokepointPos, chokepointState);
+            Vec3 center = Vec3.atBottomCenterOf(activeChokepointPos);
+            double distSq = this.distanceToSqr(center);
+
+            if (passageAxis == net.minecraft.core.Direction.Axis.Z) {
+                chokepointThroughDir = (target.z >= center.z) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH;
+                // Pure lateral alignment along X axis (NEVER apply backward drag to Z movement axis!)
+                if (distSq < 3.5) {
+                    double offX = center.x - this.getX();
                     Vec3 mot = this.getDeltaMovement();
-                    this.setDeltaMovement(mot.x + nudgeX, mot.y, mot.z + nudgeZ);
+                    this.setDeltaMovement(mot.x + Mth.clamp(offX * 0.35, -0.15, 0.15), mot.y, mot.z);
+                }
+            } else {
+                chokepointThroughDir = (target.x >= center.x) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST;
+                // Pure lateral alignment along Z axis (NEVER apply backward drag to X movement axis!)
+                if (distSq < 3.5) {
+                    double offZ = center.z - this.getZ();
+                    Vec3 mot = this.getDeltaMovement();
+                    this.setDeltaMovement(mot.x, mot.y, mot.z + Mth.clamp(offZ * 0.35, -0.15, 0.15));
                 }
             }
         }
@@ -5019,7 +5089,18 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        lookAtPos(new Vec3(target.x, target.y + this.getEyeHeight(), target.z));
+        boolean passingDoorway = false;
+        if (activeChokepointPos != null && chokepointThroughDir != null) {
+            double distSq = this.distanceToSqr(Vec3.atBottomCenterOf(activeChokepointPos));
+            if (distSq < 2.5) {
+                passingDoorway = true;
+                Vec3 straightAhead = this.position().add(chokepointThroughDir.getStepX() * 2.0, 0, chokepointThroughDir.getStepZ() * 2.0);
+                lookAtPos(straightAhead);
+            }
+        }
+        if (!passingDoorway) {
+            lookAtPos(new Vec3(target.x, target.y + this.getEyeHeight(), target.z));
+        }
         this.setSprinting(sprint);
         this.zza = sprint ? 1.0f : 0.8f;
         this.xxa = 0.0f;
@@ -5077,7 +5158,12 @@ public class AiBotPlayer extends ServerPlayer {
         BlockState headState = this.level().getBlockState(headFront);
         boolean isDoorway = (frontState.getBlock() instanceof DoorBlock) || (headState.getBlock() instanceof DoorBlock)
                 || (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock)
-                || isOpenDoorOrGate(frontState) || isOpenDoorOrGate(headState);
+                || (this.level().getBlockState(currentFeet).getBlock() instanceof DoorBlock)
+                || (this.level().getBlockState(currentFeet).getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock)
+                || isOpenDoorOrGate(frontState) || isOpenDoorOrGate(headState)
+                || isOpenDoorOrGate(this.level().getBlockState(currentFeet))
+                || isOpenDoorOrGate(this.level().getBlockState(currentFeet.above()))
+                || activeChokepointPos != null;
         boolean isFenceBarrier = (isFenceOrWall(frontState) || isFenceOrWall(headState)) && !isDoorway;
         boolean isFrontStair = isStairOrPlatform(frontState) || isStairOrPlatform(headState)
                 || isStairOrPlatform(this.level().getBlockState(currentFeet))
@@ -5097,7 +5183,7 @@ public class AiBotPlayer extends ServerPlayer {
                 this, target, this.moveNoProgressTicks, isFrontStair, stairPos != null, isDoorway, false);
         int neuralAction = com.aicompanion.bot.learning.HiveMindBrain.selectAction(this, sensoryState);
 
-        if ((neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_WALK_CENTERED || sensoryState[23] > 0.3f) && stairPos == null) {
+        if ((neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_WALK_CENTERED || sensoryState[23] > 0.3f) && stairPos == null && !isDoorway) {
             double cx = currentFeet.getX() + 0.5 - this.getX();
             double cz = currentFeet.getZ() + 0.5 - this.getZ();
             Vec3 mot = this.getDeltaMovement();
@@ -5116,6 +5202,9 @@ public class AiBotPlayer extends ServerPlayer {
                 || this.isInWater() || this.isInLava() || this.isInHazardousFluid()) && !isFenceBarrier && !isDoorway;
         if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier && !isDoorway) {
             shouldJump = true;
+        }
+        if (isDoorway || activeChokepointPos != null) {
+            shouldJump = false;
         }
         this.setJumping(shouldJump);
         if (shouldJump && this.onGround()) {
@@ -5140,8 +5229,12 @@ public class AiBotPlayer extends ServerPlayer {
             if (this.activeBypassWaypoint == null) {
                 BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
                 if (gateOrOpening != null) {
-                    Vec3 toGoal = target.subtract(Vec3.atCenterOf(gateOrOpening)).normalize();
-                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening).add(toGoal.x * 1.5, 0, toGoal.z * 1.5);
+                    BlockState gs = this.level().getBlockState(gateOrOpening);
+                    net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gateOrOpening, gs);
+                    net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
+                            ? ((target.z >= gateOrOpening.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
+                            : ((target.x >= gateOrOpening.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
+                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening.relative(throughDir, 2));
                     this.bypassWaypointTicks = 80;
                     return;
                 }

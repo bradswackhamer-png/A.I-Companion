@@ -56,7 +56,21 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🧠 Shared Hive-Mind Neural Network & Reinforcement Learning *(New in v1.2.19)*
+### 🚪 Seamless Doorway & Fence Gate Navigation *(New in v1.2.20)*
+* **Zero-Catch Doorway & Gate Navigation**:
+  * Companions now walk seamlessly through any doorway, open fence gate, trapdoor, and 1-block chokepoints without stuttering, stalling, or bouncing up and down.
+* **Pure Lateral Alignment (No Drag)**:
+  * Replaced bidirectional attractor forces with intelligent cross-axis centering. Centering now aligns the bot strictly to the doorway centerline without reducing forward walking velocity or pulling the bot backward.
+* **Corridor Passage Alignment**:
+  * When traversing a doorway or fence gate, bots align their bodies and movement vectors straight along the passage axis until clearing the opening. This prevents premature diagonal rotation where a 0.6-block character expands to an effective 0.85-block diagonal width and catches on doorframes or 1.5-block high fence posts.
+* **Doorway Jump Suppression**:
+  * Suppressed unnecessary vertical hopping inside doorway and fence gate thresholds, preventing head-bonking on doorway lintels and ensuring smooth forward passage.
+* **Straight-Through Unstuck Clearance**:
+  * Unstuck routines automatically project bypass waypoints 2 blocks straight through the opening along the corridor axis if a companion is ever obstructed.
+
+---
+
+### 🧠 Shared Hive-Mind Neural Network & Reinforcement Learning *(v1.2.19)*
 * **Collective Hive-Mind Brain (`24 -> 32 -> 16 -> 9` Pure-Java MLP)**:
   * Every companion shares a persistent **Hive-Mind Neural Network**, **3D Spatial Pheromone Waypoint Graph**, **Modded Block Walkability Table**, and **Task Preference Q-Table** saved in `aicompanion_memory.json`.
   * When one bot learns how to navigate a tricky staircase (like Macaw's narrow stairs/railings), avoid a trap, or optimize a task, **every bot on the server immediately benefits**.

@@ -4,6 +4,17 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.20] - 2026-10-29
+
+### Fixed
+- **Doorway & Fence Gate Navigation & Shoulder Collision:**
+  - Resolved an issue where companion bots became stuck or wedged in doorways, open fence gates, and 1-block chokepoints and hopped continuously in place.
+  - **Strict Lateral-Only Alignment**: Replaced bidirectional center attractor spring forces with pure lateral alignment along the doorway cross-axis. Centering forces now only align the bot to the doorway centerline without applying backward drag or halting forward walking momentum.
+  - **Passage Axis Corridor Alignment**: When entering, standing inside, or clearing a doorway or fence gate, bots now orient and walk strictly parallel to the opening's orientation (getDoorwayPassageAxis) rather than turning prematurely toward off-axis/diagonal targets. This preserves their narrow 0.6-block profile through the 0.8125-block door clearance and prevents shoulder clipping against doorframes and fence posts.
+  - **Doorway Jump Suppression**: Jumping is now strictly suppressed while the bot is inside or traversing doorway and fence gate bounding boxes, preventing head collisions with door lintels and repetitive jumping against 1.5-block high fence collision boundaries.
+  - **Straight-Through Unstuck Bypass Waypoints**: Unstuck routine now projects bypass waypoints 2 blocks straight through the opening along the passage corridor rather than at the bot's angled facing yaw, preventing waypoints from landing inside adjacent solid walls or fence posts.
+  - **Auto-Close Clearance Buffer**: Adjusted doorway and gate auto-close logic so doors and fence gates do not swing shut until the bot is completely clear of the passage threshold.
+
 ## [1.2.19] - 2026-10-29
 
 ### Added
