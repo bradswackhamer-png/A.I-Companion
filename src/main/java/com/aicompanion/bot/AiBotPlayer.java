@@ -383,6 +383,7 @@ public class AiBotPlayer extends ServerPlayer {
         this.botName = profile.name();
         this.botRole = (role == null || role.isBlank()) ? "All-Around Survival Companion" : role;
         this.connection = new BotNetHandler(level.getServer(), this);
+        this.getEntityData().set(DATA_PLAYER_MODE_CUSTOMISATION, (byte) 0x7F);
         var stepAttr = this.getAttribute(net.minecraft.world.entity.ai.attributes.Attributes.STEP_HEIGHT);
         if (stepAttr != null && stepAttr.getBaseValue() < 1.06) {
             stepAttr.setBaseValue(1.06);

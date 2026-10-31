@@ -9,7 +9,11 @@ import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.Identifier;
 
-public record SyncBotSkinPayload(UUID botUuid, String skinName) implements CustomPacketPayload {
+public record SyncBotSkinPayload(UUID botUuid, String skinName, byte[] skinBytes) implements CustomPacketPayload {
+    public SyncBotSkinPayload(UUID botUuid, String skinName) {
+        this(botUuid, skinName, BotSkinManager.readSkinBytes(skinName));
+    }
+
     public static final CustomPacketPayload.Type<SyncBotSkinPayload> TYPE =
             new CustomPacketPayload.Type<>(Identifier.fromNamespaceAndPath(AiCompanionMod.MODID, "sync_bot_skin"));
 
@@ -17,6 +21,7 @@ public record SyncBotSkinPayload(UUID botUuid, String skinName) implements Custo
             StreamCodec.composite(
                     UUIDUtil.STREAM_CODEC, SyncBotSkinPayload::botUuid,
                     ByteBufCodecs.STRING_UTF8, SyncBotSkinPayload::skinName,
+                    ByteBufCodecs.byteArray(512 * 1024), SyncBotSkinPayload::skinBytes,
                     SyncBotSkinPayload::new
             );
 

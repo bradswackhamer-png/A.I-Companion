@@ -41,7 +41,9 @@ public class AiCompanionClient {
 
     private static void onRegisterClientPayloads(net.neoforged.neoforge.client.network.event.RegisterClientPayloadHandlersEvent event) {
         event.register(com.aicompanion.bot.skin.SyncBotSkinPayload.TYPE, (payload, context) -> {
-            BotClientSkinManager.setBotSkin(payload.botUuid(), payload.skinName());
+            context.enqueueWork(() -> {
+                BotClientSkinManager.handleSyncPayload(payload.botUuid(), payload.skinName(), payload.skinBytes());
+            });
         });
     }
 

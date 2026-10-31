@@ -56,7 +56,17 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 👶 Authentic Villager Colony Breeding *(New in v1.2.22)*
+### 🎨 Custom Skin Rendering, Legacy 64x32 Support & Live Hot-Reload Fix *(New in v1.2.23)*
+* **Fixed Custom Skin Texture Lookup & Render-Thread Hot-Reloading**:
+  * Resolved an issue in v1.2.22 where custom skins in `aicompanion/skins` were detected by `/bot skin list` and assigned by `/bot skin set`, but companions continued displaying default skins due to a `ClientAsset.ResourceTexture` path mismatch and `ServerThread` vs. Render-Thread texture upload during `/bot skin reload`.
+* **Full 64x32 Legacy Skin Auto-Conversion**:
+  * Legacy **64x32** PNG skins (as well as standard **64x64** and 2:1 HD skins) are now automatically converted into **64x64** format on load—mirroring right arm/leg UVs to left limbs, stripping solid legacy hat backgrounds, and enabling all 3D outer skin layers (hat, jacket, sleeves, and pants).
+* **Instant Detection & Server-to-Client Skin Sync**:
+  * Dropping a new `.png` file into `aicompanion/skins` and running `/bot skin set <botName> <skinName>` or `/bot skin reload` now rescans the folder immediately and streams the texture bytes directly to the client renderer without restarting the world or game.
+
+---
+
+### 👶 Authentic Villager Colony Breeding *(v1.2.22)*
 * **Strict Two-Parent Breeding**:
   * Fixed an issue where single bots could breed alone; breeding strictly requires two adult villager companions in close proximity (within 16 blocks).
 * **Colony Requirements (50-Block Radius)**:

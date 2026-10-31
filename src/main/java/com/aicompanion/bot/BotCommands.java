@@ -466,7 +466,7 @@ public class BotCommands {
                         .then(Commands.literal("set")
                                 .then(Commands.argument("botName", StringArgumentType.word())
                                         .suggests(BOT_NAME_SUGGESTIONS)
-                                        .then(Commands.argument("skinName", StringArgumentType.string())
+                                        .then(Commands.argument("skinName", StringArgumentType.greedyString())
                                                 .suggests(SKIN_SUGGESTIONS)
                                                 .executes(ctx -> setBotSkinCmd(ctx,
                                                         StringArgumentType.getString(ctx, "botName"),
@@ -1988,11 +1988,12 @@ public class BotCommands {
 
     private static int listSkinsCmd(CommandContext<CommandSourceStack> ctx) {
         com.aicompanion.bot.skin.BotSkinManager.ensureDirectoriesExist();
+        com.aicompanion.bot.skin.BotSkinManager.scanSkins();
         var skins = com.aicompanion.bot.skin.BotSkinManager.getAvailableSkinNames();
         if (skins.isEmpty()) {
             ctx.getSource().sendSuccess(() -> Component.literal("No custom skins found in /aicompanion/skins.\n")
                     .withStyle(ChatFormatting.YELLOW)
-                    .append(Component.literal("Drop any 64x64 .png skin files into: " + com.aicompanion.bot.skin.BotSkinManager.getSkinsDirectory())
+                    .append(Component.literal("Drop any 64x64 or 64x32 .png skin files into: " + com.aicompanion.bot.skin.BotSkinManager.getSkinsDirectory())
                             .withStyle(ChatFormatting.GRAY)), false);
             return 0;
         }
@@ -2017,16 +2018,22 @@ public class BotCommands {
         if (net.neoforged.fml.loading.FMLEnvironment.getDist().isClient()) {
             com.aicompanion.bot.client.BotClientSkinManager.loadAllSkins();
         }
+        net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(
+                new com.aicompanion.bot.skin.SyncBotSkinPayload(new java.util.UUID(0L, 0L), "__reload__", new byte[0]));
 
         for (AiBotPlayer bot : BotManager.getActiveBots()) {
-            if (bot.getCustomSkinName().isBlank()) {
+            String exactNameSkin = com.aicompanion.bot.skin.BotSkinManager.resolveSkinKey(bot.getBotName());
+            if (bot.getCustomSkinName().isBlank() || com.aicompanion.bot.skin.BotSkinManager.resolveSkinKey(bot.getCustomSkinName()) == null) {
                 String assigned = com.aicompanion.bot.skin.BotSkinManager.determineSkinForBot(bot.getBotName(), bot.getBotRole(), bot.getAliases(), bot.getUUID());
                 bot.setCustomSkinName(assigned);
+            } else if (exactNameSkin != null) {
+                bot.setCustomSkinName(exactNameSkin);
             }
             if (!bot.getCustomSkinName().isBlank()) {
                 net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), bot.getCustomSkinName()));
             }
         }
+        BotPersistence.saveAll(ctx.getSource().getServer());
 
         ctx.getSource().sendSuccess(() -> Component.literal("Reloaded custom companion skins! Found " + count + " skins across role categories.")
                 .withStyle(ChatFormatting.GREEN), true);
@@ -2040,11 +2047,18 @@ public class BotCommands {
             return 0;
         }
 
-        bot.setCustomSkinName(skinName);
-        BotPersistence.saveAll(ctx.getSource().getServer());
-        net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), skinName));
+        String cleanInput = skinName != null ? skinName.trim() : "";
+        if (cleanInput.startsWith("\"") && cleanInput.endsWith("\"") && cleanInput.length() >= 2) {
+            cleanInput = cleanInput.substring(1, cleanInput.length() - 1).trim();
+        }
+        String resolvedKey = com.aicompanion.bot.skin.BotSkinManager.resolveSkinKey(cleanInput);
+        String effectiveSkin = resolvedKey != null ? resolvedKey : cleanInput;
 
-        ctx.getSource().sendSuccess(() -> Component.literal("Updated " + bot.getBotName() + "'s skin to '" + skinName + "'!")
+        bot.setCustomSkinName(effectiveSkin);
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        net.neoforged.neoforge.network.PacketDistributor.sendToAllPlayers(new com.aicompanion.bot.skin.SyncBotSkinPayload(bot.getUUID(), effectiveSkin));
+
+        ctx.getSource().sendSuccess(() -> Component.literal("Updated " + bot.getBotName() + "'s skin to '" + effectiveSkin + "'!")
                 .withStyle(ChatFormatting.GREEN), true);
         return 1;
     }

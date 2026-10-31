@@ -169,6 +169,59 @@ public class BotSkinManager {
         return new ArrayList<>(getDiscoveredSkins().keySet());
     }
 
+    public static synchronized String resolveSkinKey(String skinName) {
+        if (skinName == null || skinName.isBlank() || "__reload__".equalsIgnoreCase(skinName)) {
+            return null;
+        }
+        ensureDirectoriesExist();
+        String match = findSkinKeyInternal(skinName);
+        if (match == null) {
+            scanSkins();
+            match = findSkinKeyInternal(skinName);
+        }
+        return match;
+    }
+
+    public static synchronized Path resolveSkinPath(String skinName) {
+        String key = resolveSkinKey(skinName);
+        return key != null ? DISCOVERED_SKINS.get(key) : null;
+    }
+
+    public static synchronized byte[] readSkinBytes(String skinName) {
+        if (skinName == null || skinName.isBlank() || "__reload__".equalsIgnoreCase(skinName)) {
+            return new byte[0];
+        }
+        try {
+            Path path = resolveSkinPath(skinName);
+            if (path != null && Files.isRegularFile(path) && Files.size(path) <= 512 * 1024) {
+                return Files.readAllBytes(path);
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Failed to read skin bytes for '{}': {}", skinName, e.getMessage());
+        }
+        return new byte[0];
+    }
+
+    private static String findSkinKeyInternal(String rawName) {
+        String clean = rawName.trim().replace('\\', '/').toLowerCase(Locale.ROOT);
+        if (clean.startsWith("\"") && clean.endsWith("\"") && clean.length() >= 2) {
+            clean = clean.substring(1, clean.length() - 1).trim();
+        }
+        if (DISCOVERED_SKINS.containsKey(clean)) {
+            return clean;
+        }
+        if (!clean.endsWith(".png") && DISCOVERED_SKINS.containsKey(clean + ".png")) {
+            return clean + ".png";
+        }
+        String targetBase = getBaseName(clean);
+        for (String key : DISCOVERED_SKINS.keySet()) {
+            if (getBaseName(key).equals(targetBase) || key.endsWith("/" + clean) || key.endsWith("/" + clean + ".png")) {
+                return key;
+            }
+        }
+        return null;
+    }
+
     public static synchronized String determineSkinForBot(String botName, String role, List<String> aliases, UUID botUuid) {
         ensureDirectoriesExist();
         if (DISCOVERED_SKINS.isEmpty()) {

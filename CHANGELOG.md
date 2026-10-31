@@ -4,6 +4,16 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.23] - 2026-10-31
+
+### Fixed
+- **Custom Companion Skin Rendering, Legacy 64x32 Skin Conversion & Hot-Reloading (`BotClientSkinManager`, `BotSkinManager`, `SyncBotSkinPayload`):**
+  - Fixed a `ClientAsset.ResourceTexture` texture path mismatch in `BotClientSkinManager` where the single-argument `new ClientAsset.ResourceTexture(textureId)` constructor prepended `"textures/"` and appended `".png"` to `texturePath()`, causing `AvatarRenderer` to look up an unregistered `Identifier` instead of the `DynamicTexture` registered in `TextureManager`.
+  - Fixed a thread-context bug in `/bot skin reload` where `BotClientSkinManager.loadAllSkins()` was invoked on the `ServerThread` instead of the Client Render Thread, causing OpenGL/RenderPearl `DynamicTexture` creation to fail and clearing all loaded client skins so companions fell back to default skins.
+  - Added full vanilla-authentic legacy **64x32** (and 2:1 HD legacy) PNG skin conversion to **64x64** (`processSkinImage`), automatically mirroring right-arm and right-leg textures into the left-limb UV regions, applying the Notch hat overlay transparency fix, and enforcing opaque alpha on base skin regions.
+  - Upgraded `SyncBotSkinPayload` to transmit raw PNG bytes alongside the skin name from server to client and auto-rescan `aicompanion/skins` when `/bot skin set <botName> <skinName>`, `/bot skin list`, or `/bot skin reload` is executed, so newly dropped skin files apply immediately in both Singleplayer and Multiplayer without requiring a game restart.
+  - Enabled all 3D outer skin overlay layers (`HAT`, `JACKET`, `LEFT_SLEEVE`, `RIGHT_SLEEVE`, `LEFT_PANTS_LEG`, `RIGHT_PANTS_LEG`) on `AiBotPlayer` and `AvatarRenderState`, and synchronized custom skins into client `PlayerInfo` lookups.
+
 ## [1.2.22] - 2026-10-30
 
 ### Fixed
