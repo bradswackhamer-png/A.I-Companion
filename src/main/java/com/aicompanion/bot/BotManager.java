@@ -370,7 +370,9 @@ public class BotManager {
                     || lower.contains("bad bot") || lower.contains("well done") || lower.contains("nice job")
                     || lower.contains("wrong way") || lower.contains("bad path") || lower.contains("good path")
                     || lower.contains("nice path") || lower.contains("learn this path") || lower.contains("watch how i walk")
-                    || lower.contains("stop learning path") || lower.contains("done showing path")) {
+                    || lower.contains("stop learning path") || lower.contains("done showing path")
+                    || lower.contains("stop jumping") || lower.contains("quit jumping") || lower.contains("use the door")
+                    || lower.contains("go through the door") || lower.contains("why are you jumping")) {
                 AiBotPlayer nearest = findNearestBot(speaker, bots);
                 if (nearest != null) targets.add(nearest);
             } else if (bots.size() == 1 && BotConfig.LISTEN_ALL_WHEN_SINGLE_BOT.getAsBoolean()) {
@@ -462,12 +464,13 @@ public class BotManager {
             // Immediate Stop: only triggers on standalone stop/halt/cancel words (NOT "stop combining...", "stop farming...")
             if (cmdClean.equals("stop") || cmdClean.equals("halt") || cmdClean.equals("cancel")
                     || cmdClean.equals("pause") || cmdClean.equals("freeze") || cmdClean.equals("stop it")
-                    || cmdClean.equals("stop all") || cmdClean.equals("stop current task") || cmdClean.equals("stop working")) {
+                    || cmdClean.equals("stop all") || cmdClean.equals("stop current task") || cmdClean.equals("stop working")
+                    || cmdClean.equals("stop moving")) {
                 bot.clearActions();
                 bot.stopMovement();
-                bot.setStandingBy(false);
+                bot.setStandingBy(true);
                 bot.setAbsoluteCommandMode(false);
-                bot.sayInChat("Stopped current tasks.");
+                bot.sayInChat("Stopped all movement and tasks. Standing by! (Say 'resume' to continue autonomous duties)");
                 GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
                 BotPersistence.saveAll(server);
                 return;

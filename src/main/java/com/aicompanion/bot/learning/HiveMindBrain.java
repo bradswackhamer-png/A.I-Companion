@@ -834,6 +834,11 @@ public class HiveMindBrain {
         return bp != null ? bp.centerAlignmentNeed : 0.0f;
     }
 
+    public static float getBlockWalkability(String blockId) {
+        BlockProfile bp = BLOCK_KNOWLEDGE.get(blockId);
+        return bp != null ? bp.walkabilityScore : 0.0f;
+    }
+
     // =========================================================================
     // TASK & ROUTINE PREFERENCE Q-TABLE
     // =========================================================================

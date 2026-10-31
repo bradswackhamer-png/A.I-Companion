@@ -56,17 +56,25 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🚪 Seamless Doorway & Fence Gate Navigation *(New in v1.2.20)*
-* **Zero-Catch Doorway & Gate Navigation**:
-  * Companions now walk seamlessly through any doorway, open fence gate, trapdoor, and 1-block chokepoints without stuttering, stalling, or bouncing up and down.
-* **Pure Lateral Alignment (No Drag)**:
-  * Replaced bidirectional attractor forces with intelligent cross-axis centering. Centering now aligns the bot strictly to the doorway centerline without reducing forward walking velocity or pulling the bot backward.
-* **Corridor Passage Alignment**:
-  * When traversing a doorway or fence gate, bots align their bodies and movement vectors straight along the passage axis until clearing the opening. This prevents premature diagonal rotation where a 0.6-block character expands to an effective 0.85-block diagonal width and catches on doorframes or 1.5-block high fence posts.
-* **Doorway Jump Suppression**:
-  * Suppressed unnecessary vertical hopping inside doorway and fence gate thresholds, preventing head-bonking on doorway lintels and ensuring smooth forward passage.
-* **Straight-Through Unstuck Clearance**:
-  * Unstuck routines automatically project bypass waypoints 2 blocks straight through the opening along the corridor axis if a companion is ever obstructed.
+### 👶 Authentic Villager Colony Breeding *(New in v1.2.22)*
+* **Strict Two-Parent Breeding**:
+  * Fixed an issue where single bots could breed alone; breeding strictly requires two adult villager companions in close proximity (within 16 blocks).
+* **Colony Requirements (50-Block Radius)**:
+  * Minimum of 2 adult villagers within a 50-block radius.
+  * Number of beds must equal or exceed total bot population + 1, with a vacant bed ready for the newborn.
+  * Both parents must have hunger at 90% or higher (`>= 18 / 20`) and breeding food (wheat, bread, carrots, potatoes, or beetroots) in their inventory. Food is consumed from both parents upon birth.
+
+---
+
+### 🚪 Vanilla Villager A* Pathfinding & Zero Erratic Jumping *(v1.2.21)*
+* **Base 3D Voxel A* Pathfinder (`BotPathfinder`) + Hive-Mind Layer**:
+  * Built on a deterministic 3D Voxel A* pathfinder modeled after vanilla Villager & Mob navigation (`WalkNodeEvaluator`), with `HiveMindBrain` learned trail pheromones and obstacle penalties layered on top.
+  * Bots automatically route around exterior house walls, approach doors along their cardinal passage axis, open closed wooden doors and fence gates, and walk inside to reach beds and workstations—never pushing into outside house corners!
+* **Repetitive-Loop Insanity Guard**:
+  * If a companion is obstructed in the same spot for >1.2 seconds, it automatically penalizes the wall/corner in the Hive-Mind and recalculates a full A* route around the structure. Sealed/unreachable targets are automatically blacklisted so bots never push endlessly against walls.
+* **Zero Erratic Ground Jumping**:
+  * Utilizing native `1.06` step-height physics, bots walk smoothly up 1-block ledges and stairs without hopping. Jumping is strictly reserved for swimming in water/lava or crossing 1-block pit gaps.
+  * Saying *"stop jumping"*, *"use the door"*, or *"stop"* immediately halts erratic movement, penalizes the obstacle in the Hive-Mind, and updates real-time task telemetry.
 
 ---
 

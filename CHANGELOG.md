@@ -4,6 +4,35 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.22] - 2026-10-30
+
+### Fixed
+- **Villager Colony Breeding Requirements & Autonomous Self-Breeding Prevention:**
+  - Fixed a logic bug where a single bot with food and a spare bed could reproduce by itself.
+  - Enforced authentic two-parent pairing: breeding strictly requires two non-baby villager companions standing within 16 blocks of each other.
+  - Added 50-block radius population density check: breeding only occurs if there are at least 2 adult villagers within a 50-block radius (`countVillagersIn50Radius >= 2`).
+  - Added strict 90%+ hunger threshold: both villager companions must have a hunger level of at least 18/20 (`foodLevel >= 18`) before breeding hearts can activate.
+  - Enforced bed surplus condition: total beds in the 50-block range must equal or exceed total bot population + 1 (`totalBeds >= botCount + 1`) with an unassigned, vacant bed available.
+  - Breeding food (3 wheat, 3 bread, 12 carrots, 12 potatoes, or 12 beetroots) is now consumed from *both* partner inventories upon birth.
+
+## [1.2.21] - 2026-10-30
+
+### Added
+- **Vanilla Villager / Mob 3D Voxel A* Pathfinder (`BotPathfinder`):**
+  - Implemented a deterministic 3D Voxel A* pathfinder modeled directly after Minecraft's `WalkNodeEvaluator` and `GroundPathNavigation` as the base navigation layer, with `HiveMindBrain` learned trail pheromones and hazard penalties layered on top as edge-cost modifiers.
+  - Treats closed wooden doors (`DoorBlock`) and closed fence gates (`FenceGateBlock`) as openable passageways, enforces strict cardinal alignment through door/gate passages, and forbids corner-clipping diagonal transitions when either adjacent cardinal block is solid.
+  - Automatically routes bots around exterior house walls and through front doors to reach indoor beds and workstations instead of walking in a straight line into the outside wall or corner of a house.
+- **Repetitive-Loop / Insanity Guard & Unreachable Target Blacklisting:**
+  - Added real-time stagnation detection (`insanityStuckTicks`): if a bot fails to advance >1.2 blocks within 25 ticks while trying to move, it automatically penalizes the obstructed corner/wall in `HiveMindBrain` and forces a fresh A* path calculation. If a target remains unreachable after 90 ticks (or is inside a completely sealed building with no door), it is blacklisted for 30 seconds and the bot stops pushing against the wall.
+
+### Fixed
+- **Eliminated Erratic Ground Jumping:**
+  - Removed all ground-jumping triggers on `horizontalCollision`, staircases, neural exploration (`ACT_JUMP_ASCEND`), unstuck fallbacks, and baby villager play routines. Because bots have `STEP_HEIGHT = 1.06`, they step up 1-block ledges and stairs smoothly without jumping; jumping now only occurs when swimming in water/lava/fluids or crossing a verified 1-block pit gap.
+  - Reset `setJumping(false)` every tick on dry land so jump state can never remain stuck on.
+- **Accurate Passive Task Telemetry & Immediate `"stop jumping"` / `"stop"` Response:**
+  - Updated `getCurrentTaskSummary()` to report active passive states (e.g., walking indoors to bed, sheltering, or moving autonomously) instead of reporting `"Idle (waiting for orders)"` during passive movement, preventing Gemini from falsely claiming the bot is standing still.
+  - Added immediate handling for `"stop jumping"`, `"quit jumping"`, `"use the door"`, and `"stop"` so bots immediately halt jumping/movement, set `standingBy = true`, and penalize the stuck spot in the Hive-Mind.
+
 ## [1.2.20] - 2026-10-29
 
 ### Fixed

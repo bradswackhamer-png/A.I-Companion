@@ -196,6 +196,31 @@ public class AiBotPlayer extends ServerPlayer {
     private @Nullable String assignedAreaName = null;
     private int holeEscapeTicks = 0;
 
+    // Base Vanilla-Style A* Pathfinding & Repetitive-Loop Insanity Guard
+    private List<BlockPos> currentAStarPath = Collections.emptyList();
+    private int currentAStarPathIndex = 0;
+    private @Nullable BlockPos lastAStarGoalBlock = null;
+    private int lastAStarComputeTick = -999;
+    private @Nullable Vec3 insanityCheckPos = null;
+    private int insanityStuckTicks = 0;
+    private final Map<Long, Integer> unreachableTargetBlacklist = new java.util.HashMap<>();
+    private String activePassiveActivity = "";
+
+    public boolean isTargetBlacklisted(BlockPos pos) {
+        if (pos == null) return false;
+        Integer expiry = this.unreachableTargetBlacklist.get(pos.asLong());
+        return expiry != null && this.tickCount < expiry;
+    }
+
+    public void invalidatePath() {
+        this.currentAStarPath = Collections.emptyList();
+        this.currentAStarPathIndex = 0;
+        this.lastAStarGoalBlock = null;
+        this.lastAStarComputeTick = -999;
+        this.activeBypassWaypoint = null;
+        this.bypassWaypointTicks = 0;
+    }
+
     public @Nullable String getAssignedAreaName() {
         return this.assignedAreaName;
     }
@@ -1456,7 +1481,20 @@ public class AiBotPlayer extends ServerPlayer {
 
     public String getCurrentTaskSummary() {
         if (currentAction == null && actionQueue.isEmpty()) {
-            return "Idle (waiting for orders)";
+            if (this.isSleeping()) {
+                return "Sleeping in bed at (" + this.getBlockX() + ", " + this.getBlockY() + ", " + this.getBlockZ() + ")";
+            }
+            if (this.standingBy) {
+                return "Standing by (stationary)";
+            }
+            boolean physicallyMoving = this.zza > 0.01f || this.getDeltaMovement().horizontalDistanceSqr() > 0.002;
+            if (!this.activePassiveActivity.isBlank()) {
+                return this.activePassiveActivity + (physicallyMoving ? " [actively walking]" : " [at position]");
+            }
+            if (physicallyMoving) {
+                return "Autonomous movement (Role: " + this.botRole + ")";
+            }
+            return "Idle (standing still, waiting for orders)";
         }
         StringBuilder sb = new StringBuilder();
         if (currentAction != null) {
@@ -1488,8 +1526,11 @@ public class AiBotPlayer extends ServerPlayer {
                 if (a != null && !a.getNormalizedType().isEmpty()) {
                     if ("STOP".equals(a.getNormalizedType())) {
                         this.clearActions();
+                        this.standingBy = true;
+                        this.stopMovement();
                         return;
                     }
+                    this.standingBy = false;
                     this.actionQueue.addLast(a);
                 }
             }
@@ -1631,6 +1672,9 @@ public class AiBotPlayer extends ServerPlayer {
             if (this.isEyeInFluid(FluidTags.WATER) || this.getAirSupply() < 200) {
                 escapeWaterToDryLand();
             }
+        } else {
+            // Default jumping to false on dry land every tick so jump state can NEVER get stuck on!
+            this.setJumping(false);
         }
 
         if (this.attackCooldown > 0) {
@@ -4728,13 +4772,8 @@ public class AiBotPlayer extends ServerPlayer {
         boolean isStairInFront = isStairOrPlatform(frontFeetState) || isStairOrPlatform(frontHeadState);
         boolean isCurrentOnStair = isStairOrPlatform(this.level().getBlockState(feetPos)) || isStairOrPlatform(this.level().getBlockState(feetPos.below()));
         if (isStairInFront || isCurrentOnStair) {
-            // We are navigating a staircase! Never treat stair steps as walls or attempt sideways detours into railings!
-            this.setJumping(true);
-            if (this.onGround()) {
-                this.jumpFromGround();
-            }
-            Vec3 mot = this.getDeltaMovement();
-            this.setDeltaMovement(mot.x, Math.max(mot.y, 0.32), mot.z);
+            // We are navigating a staircase! STEP_HEIGHT = 1.06 climbs stairs smoothly without jumping.
+            this.setJumping(false);
             this.zza = 1.0f;
             this.xxa = 0.0f;
             this.stuckTicks = 0;
@@ -4847,12 +4886,19 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        // 4. GENERAL UNSTUCK FALLBACK:
-        this.xxa = ((this.tickCount / 10) % 2 == 0) ? 0.9f : -0.9f;
-        this.setJumping(true);
-        if (this.onGround()) {
-            this.jumpFromGround();
-        }
+        // 4. GENERAL UNSTUCK FALLBACK: Never jump against walls; force fresh A* path calculation and strafe clear!
+        this.invalidatePath();
+        this.xxa = ((this.tickCount / 10) % 2 == 0) ? 0.85f : -0.85f;
+        this.setJumping(false);
+    }
+
+    private boolean hasUnobstructedReachToTarget(BlockPos targetPos) {
+        if (Math.abs(this.getY() - targetPos.getY()) > 1.5) return false;
+        Vec3 from = this.getEyePosition();
+        Vec3 to = Vec3.atCenterOf(targetPos).add(0, 0.25, 0);
+        BlockHitResult hit = this.level().clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this));
+        if (hit.getType() == HitResult.Type.MISS) return true;
+        return hit.getBlockPos().equals(targetPos) || hit.getBlockPos().distManhattan(targetPos) <= 1 && this.level().getBlockState(hit.getBlockPos()).getBlock() instanceof BedBlock;
     }
 
     private void moveTowards(Vec3 target, boolean sprint) {
@@ -4880,6 +4926,29 @@ public class AiBotPlayer extends ServerPlayer {
                         target = center;
                     }
                 }
+            }
+        }
+
+        Vec3 finalDestination = target;
+        BlockPos finalGoalBlock = BlockPos.containing(finalDestination);
+
+        // 0. Repetitive-Loop / Insanity Guard: Stop bots from endlessly pushing into corners or walls
+        if (this.insanityCheckPos == null || this.position().distanceToSqr(this.insanityCheckPos) > 1.44) {
+            this.insanityCheckPos = this.position();
+            this.insanityStuckTicks = 0;
+        } else {
+            this.insanityStuckTicks++;
+            if (this.insanityStuckTicks == 25) {
+                // Penalize current stuck corner/wall in Hive-Mind and force fresh A* path around the building
+                String dim = this.level().dimension().identifier().toString();
+                com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, this.blockPosition(), -12.0f, true, false, false, null);
+                com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, this.blockPosition().relative(this.getDirection()), -15.0f, true, false, false, null);
+                this.invalidatePath();
+            } else if (this.insanityStuckTicks >= 90) {
+                // Target is completely unreachable or blocked after multiple A* attempts — blacklist for 30s and stop pushing!
+                this.unreachableTargetBlacklist.put(finalGoalBlock.asLong(), this.tickCount + 600);
+                this.stopMovement();
+                return;
             }
         }
 
@@ -4937,13 +5006,61 @@ public class AiBotPlayer extends ServerPlayer {
         }
         this.lastCheckedPos = this.position();
 
-        // Hive-Mind Spatial Pheromone & Player Breadcrumb Waypoint Routing
-        if (this.activeBypassWaypoint == null && distToGoalSq > 6.25 && this.tickCount % 6 == 0) {
-            String dim = this.level().dimension().identifier().toString();
-            BlockPos learnedWp = com.aicompanion.bot.learning.HiveMindBrain.findLearnedWaypointTowards(dim, this.blockPosition(), target);
-            if (learnedWp != null) {
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(learnedWp);
-                this.bypassWaypointTicks = 30;
+        // 1B. BASE VANILLA VILLAGER / MOB 3D VOXEL A* PATHFINDER (with Hive-Mind learned costs layered on top)
+        if (this.activeBypassWaypoint == null && distToGoalSq > 1.69) {
+            boolean needPathRefresh = this.currentAStarPath.isEmpty()
+                    || this.currentAStarPathIndex >= this.currentAStarPath.size()
+                    || this.lastAStarGoalBlock == null
+                    || !this.lastAStarGoalBlock.closerThan(finalGoalBlock, 1.5)
+                    || (this.tickCount - this.lastAStarComputeTick >= 20);
+
+            if (needPathRefresh) {
+                this.currentAStarPath = com.aicompanion.bot.navigation.BotPathfinder.findPath(
+                        this, this.blockPosition(), finalGoalBlock, 1024);
+                this.currentAStarPathIndex = 0;
+                this.lastAStarGoalBlock = finalGoalBlock.immutable();
+                this.lastAStarComputeTick = this.tickCount;
+            }
+
+            // Advance along A* waypoints as the bot steps onto each block
+            while (this.currentAStarPathIndex < this.currentAStarPath.size()) {
+                BlockPos wp = this.currentAStarPath.get(this.currentAStarPathIndex);
+                double dx = (wp.getX() + 0.5) - this.getX();
+                double dz = (wp.getZ() + 0.5) - this.getZ();
+                double horizSq = dx * dx + dz * dz;
+                if (horizSq < 0.36 && Math.abs(wp.getY() - this.getY()) <= 1.6) {
+                    this.currentAStarPathIndex++;
+                } else {
+                    break;
+                }
+            }
+
+            if (this.currentAStarPathIndex < this.currentAStarPath.size()) {
+                BlockPos activeWp = this.currentAStarPath.get(this.currentAStarPathIndex);
+                // Proactively open any wooden door or fence gate along the A* path ahead
+                for (int lookAhead = 0; lookAhead <= 1 && (this.currentAStarPathIndex + lookAhead) < this.currentAStarPath.size(); lookAhead++) {
+                    BlockPos aheadPos = this.currentAStarPath.get(this.currentAStarPathIndex + lookAhead);
+                    if (this.distanceToSqr(Vec3.atBottomCenterOf(aheadPos)) < 5.0) {
+                        BlockState as = this.level().getBlockState(aheadPos);
+                        if (as.getBlock() instanceof DoorBlock door && !as.getValue(DoorBlock.OPEN) && door.type().canOpenByHand()) {
+                            door.setOpen(this, this.level(), as, aheadPos, true);
+                            this.lastOpenedDoorPos = aheadPos;
+                            this.doorCloseTimer = 50;
+                        } else if (as.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && !as.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
+                            this.level().setBlockAndUpdate(aheadPos, as.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, true));
+                            this.lastOpenedGatePos = aheadPos;
+                            this.gateCloseTimer = 60;
+                        }
+                    }
+                }
+                target = new Vec3(activeWp.getX() + 0.5, activeWp.getY(), activeWp.getZ() + 0.5);
+            } else if (this.currentAStarPath.isEmpty() && this.blockPosition().distManhattan(finalGoalBlock) <= 28 && !hasUnobstructedReachToTarget(finalGoalBlock)) {
+                // Target is nearby (e.g. inside a locked/doorless building) and A* proved no walkable door path exists!
+                if (this.insanityStuckTicks >= 15) {
+                    this.unreachableTargetBlacklist.put(finalGoalBlock.asLong(), this.tickCount + 600);
+                    this.stopMovement();
+                    return;
+                }
             }
         }
 
@@ -5194,30 +5311,10 @@ public class AiBotPlayer extends ServerPlayer {
             this.xxa = -0.65f;
         }
 
-        boolean shouldJump = ((stepUpPossible && (wantsToAscend || this.horizontalCollision))
-                || (this.horizontalCollision && !isTallWall && !isFenceBarrier)
-                || (isFrontStair && wantsToAscend)
-                || (curNavNode != null && curNavNode.jumpRequired && wantsToAscend)
-                || (neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_JUMP_ASCEND && wantsToAscend && !isTallWall)
-                || this.isInWater() || this.isInLava() || this.isInHazardousFluid()) && !isFenceBarrier && !isDoorway;
-        if (!shouldJump && target.y > this.getY() + 0.5 && !frontState.isAir() && !isTallWall && !isFenceBarrier && !isDoorway) {
-            shouldJump = true;
-        }
-        if (isDoorway || activeChokepointPos != null) {
-            shouldJump = false;
-        }
+        // With STEP_HEIGHT = 1.06, bots step up 1-block ledges and stairs smoothly without jumping.
+        // ONLY jump when swimming in water/lava/hazardous fluid!
+        boolean shouldJump = this.isInWater() || this.isInLava() || this.isInHazardousFluid();
         this.setJumping(shouldJump);
-        if (shouldJump && this.onGround()) {
-            this.jumpFromGround();
-        }
-
-        // Smooth ascension assist on stairs
-        if (isFrontStair && wantsToAscend) {
-            Vec3 curMotion = this.getDeltaMovement();
-            if (this.horizontalCollision || curMotion.y < 0.15) {
-                this.setDeltaMovement(curMotion.x, Math.max(curMotion.y, 0.28), curMotion.z);
-            }
-        }
 
         if (isFenceBarrier) {
             this.setJumping(false);
@@ -5273,6 +5370,8 @@ public class AiBotPlayer extends ServerPlayer {
         this.moveNoProgressTicks = 0;
         this.bestMoveTargetDistSq = Double.MAX_VALUE;
         this.lastMoveTarget = null;
+        this.insanityCheckPos = null;
+        this.insanityStuckTicks = 0;
     }
 
     private void lookAtPos(Vec3 target) {
@@ -7523,11 +7622,15 @@ public class AiBotPlayer extends ServerPlayer {
 
     public synchronized boolean tickNightShelterAndSleep() {
         if (this.isSleeping()) {
+            this.activePassiveActivity = "Sleeping in bed";
             this.stopMovement();
             return true;
         }
 
         BlockPos targetBed = this.assignedBedPos;
+        if (targetBed != null && isTargetBlacklisted(targetBed)) {
+            targetBed = null;
+        }
         if (targetBed == null) {
             targetBed = findNearestBedBlock(32);
             if (targetBed != null) {
@@ -7537,11 +7640,14 @@ public class AiBotPlayer extends ServerPlayer {
 
         if (targetBed != null) {
             double distSq = this.distanceToSqr(Vec3.atCenterOf(targetBed));
-            if (distSq > 4.0) {
-                moveTowards(Vec3.atCenterOf(targetBed), true);
+            boolean canReachBedDirectly = distSq <= 4.0 && hasUnobstructedReachToTarget(targetBed);
+            if (!canReachBedDirectly) {
+                this.activePassiveActivity = "Walking indoors to bed at (" + targetBed.getX() + ", " + targetBed.getY() + ", " + targetBed.getZ() + ")";
+                moveTowards(Vec3.atCenterOf(targetBed), false);
                 return true;
             } else {
                 stopMovement();
+                this.activePassiveActivity = "At bed (" + targetBed.getX() + ", " + targetBed.getY() + ", " + targetBed.getZ() + ")";
                 lookAtPos(Vec3.atCenterOf(targetBed));
                 if (this.tickCount % 20 == 0) {
                     try {
@@ -7556,11 +7662,13 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         BlockPos targetHouse = this.assignedHousePos;
-        if (targetHouse != null) {
+        if (targetHouse != null && !isTargetBlacklisted(targetHouse)) {
             double distSq = this.distanceToSqr(Vec3.atCenterOf(targetHouse));
-            if (distSq > 4.0) {
+            if (distSq > 4.0 || !hasUnobstructedReachToTarget(targetHouse)) {
+                this.activePassiveActivity = "Walking inside house at (" + targetHouse.getX() + ", " + targetHouse.getY() + ", " + targetHouse.getZ() + ")";
                 moveTowards(Vec3.atCenterOf(targetHouse), false);
             } else {
+                this.activePassiveActivity = "Sheltering inside house";
                 stopMovement();
             }
             return true;
@@ -7570,8 +7678,10 @@ public class AiBotPlayer extends ServerPlayer {
         if (shelter != null) {
             double distSq = this.distanceToSqr(Vec3.atCenterOf(shelter));
             if (distSq > 3.0) {
+                this.activePassiveActivity = "Walking to night shelter at (" + shelter.getX() + ", " + shelter.getY() + ", " + shelter.getZ() + ")";
                 moveTowards(Vec3.atCenterOf(shelter), false);
             } else {
+                this.activePassiveActivity = "Sheltering indoors for the night";
                 stopMovement();
             }
             return true;
@@ -7588,6 +7698,7 @@ public class AiBotPlayer extends ServerPlayer {
         BlockPos best = null;
         double bestDistSq = Double.MAX_VALUE;
         for (BlockPos p : BlockPos.betweenClosed(pos.offset(-radius, -3, -radius), pos.offset(radius, 3, radius))) {
+            if (isTargetBlacklisted(p)) continue;
             BlockState st = this.level().getBlockState(p);
             if (st.getBlock() instanceof BedBlock && st.getValue(BedBlock.PART) == BedPart.HEAD) {
                 double d = Vec3.atCenterOf(pos).distanceToSqr(Vec3.atCenterOf(p));
@@ -7914,47 +8025,25 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void tickBabyVillagerPlay() {
-        // Baby villagers playfully explore, run with other companions, and jump on beds!
-        BlockPos bedPos = findNearestBed(16);
-
-        if (bedPos != null && this.distanceToSqr(Vec3.atCenterOf(bedPos)) < 36.0) {
-            double distSq = this.distanceToSqr(Vec3.atCenterOf(bedPos));
-            if (distSq > 1.8) {
-                moveTowards(Vec3.atCenterOf(bedPos), true);
-            } else {
-                // On or beside bed: joyful playful jumping!
-                lookAtPos(Vec3.atCenterOf(bedPos));
-                this.setJumping(true);
-                if (this.onGround()) {
-                    this.jumpFromGround();
-                    this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.WOOL_STEP, SoundSource.BLOCKS, 0.8f, 1.4f);
-                    if (this.level() instanceof ServerLevel sl) {
-                        sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 0.6, this.getZ(), 3, 0.2, 0.2, 0.2, 0.05);
-                    }
+        this.activePassiveActivity = "Exploring village (Baby Villager)";
+        this.setJumping(false);
+        // Play tag with nearby friends or wander calmly without erratic jumping
+        AiBotPlayer playmate = null;
+        double bestDist = 25.0 * 25.0;
+        for (AiBotPlayer other : BotManager.getActiveBots()) {
+            if (other != this && other.level() == this.level()) {
+                double d = this.distanceToSqr(other);
+                if (d < bestDist) {
+                    bestDist = d;
+                    playmate = other;
                 }
             }
+        }
+
+        if (playmate != null && bestDist > 6.25) {
+            moveTowards(playmate.position(), false);
         } else {
-            // Play tag with nearby friends or wander playfully
-            AiBotPlayer playmate = null;
-            double bestDist = 25.0 * 25.0;
-            for (AiBotPlayer other : BotManager.getActiveBots()) {
-                if (other != this && other.level() == this.level()) {
-                    double d = this.distanceToSqr(other);
-                    if (d < bestDist) {
-                        bestDist = d;
-                        playmate = other;
-                    }
-                }
-            }
-
-            if (playmate != null && bestDist > 4.0) {
-                moveTowards(playmate.position(), true);
-                if (this.tickCount % 25 == 0 && this.onGround()) {
-                    this.jumpFromGround();
-                }
-            } else {
-                wanderAroundHomeOrAnchor(14.0);
-            }
+            wanderAroundHomeOrAnchor(14.0);
         }
 
         if (this.tickCount % 80 == 0) {
@@ -8051,6 +8140,17 @@ public class AiBotPlayer extends ServerPlayer {
         return count;
     }
 
+    public int countVillagersIn50Radius(BlockPos center) {
+        int count = 0;
+        for (AiBotPlayer b : BotManager.getActiveBots()) {
+            if (b.level() == this.level() && b.getBotRole().toLowerCase(Locale.ROOT).contains("villager")
+                    && !b.isBaby() && b.distanceToSqr(Vec3.atCenterOf(center)) <= (50.0 * 50.0)) {
+                count++;
+            }
+        }
+        return count;
+    }
+
     public @Nullable BlockPos findVacantBedIn100x100(BlockPos center) {
         if (!(this.level() instanceof ServerLevel sl)) return null;
         PoiManager poi = sl.getPoiManager();
@@ -8066,7 +8166,13 @@ public class AiBotPlayer extends ServerPlayer {
 
     public synchronized boolean checkAndExecuteBreeding(@Nullable AiBotPlayer partner) {
         if (!(this.level() instanceof ServerLevel sl)) return false;
-        if (this.isBaby || (partner != null && partner.isBaby())) {
+        // Must have an adult partner nearby to breed - bots cannot breed by themselves!
+        if (partner == null || partner == this || this.isBaby || partner.isBaby()) {
+            return false;
+        }
+
+        // Must be in proximity to partner
+        if (this.distanceToSqr(partner) > (16.0 * 16.0)) {
             return false;
         }
 
@@ -8074,34 +8180,24 @@ public class AiBotPlayer extends ServerPlayer {
         if (now - this.lastBreedingTime < 300_000L) {
             return false;
         }
-        if (partner != null && (now - partner.getLastBreedingTime() < 300_000L)) {
+        if (now - partner.getLastBreedingTime() < 300_000L) {
             return false;
         }
 
-        if (this.getFoodData().getFoodLevel() < 16) {
+        // Both villagers must have hunger at 90% or better (>= 18 / 20)
+        if (this.getFoodData().getFoodLevel() < 18 || partner.getFoodData().getFoodLevel() < 18) {
             return false;
         }
 
-        boolean hasWheat = countMatching(s -> s.is(Items.WHEAT)) >= 3;
-        boolean hasBread = countMatching(s -> s.is(Items.BREAD)) >= 3;
-        boolean hasCarrots = countMatching(s -> s.is(Items.CARROT)) >= 12;
-        boolean hasPotatoes = countMatching(s -> s.is(Items.POTATO)) >= 12;
-        boolean hasBeetroots = countMatching(s -> s.is(Items.BEETROOT)) >= 12;
-
-        if (!hasWheat && !hasBread && !hasCarrots && !hasPotatoes && !hasBeetroots) {
+        // Minimum of 2 adult villagers in 50-block radius
+        int villagersIn50 = countVillagersIn50Radius(this.blockPosition());
+        if (villagersIn50 < 2) {
             return false;
         }
 
-        if (findNearestHostileThreatForVillager(16.0) != null) {
-            return false;
-        }
-        if (this.getHealth() < 15.0f || this.isOnFire()) {
-            return false;
-        }
-
+        // Number of beds = number of villagers + 1 in 50-block range
         int totalBeds = countBedsIn100x100(this.blockPosition());
         int botCount = countBotsIn100x100(this.blockPosition());
-
         if (totalBeds < (botCount + 1)) {
             return false;
         }
@@ -8111,35 +8207,64 @@ public class AiBotPlayer extends ServerPlayer {
             return false;
         }
 
-        if (hasWheat) {
-            consumeMatching(s -> s.is(Items.WHEAT), 3);
-        } else if (hasBread) {
-            consumeMatching(s -> s.is(Items.BREAD), 3);
-        } else if (hasCarrots) {
-            consumeMatching(s -> s.is(Items.CARROT), 12);
-        } else if (hasPotatoes) {
-            consumeMatching(s -> s.is(Items.POTATO), 12);
-        } else {
-            consumeMatching(s -> s.is(Items.BEETROOT), 12);
+        // Both villagers must have breeding food (wheat, bread, carrots, potatoes, or beetroots)
+        boolean thisHasWheat = countMatching(s -> s.is(Items.WHEAT)) >= 3;
+        boolean thisHasBread = countMatching(s -> s.is(Items.BREAD)) >= 3;
+        boolean thisHasCarrots = countMatching(s -> s.is(Items.CARROT)) >= 12;
+        boolean thisHasPotatoes = countMatching(s -> s.is(Items.POTATO)) >= 12;
+        boolean thisHasBeetroots = countMatching(s -> s.is(Items.BEETROOT)) >= 12;
+        boolean thisHasFood = thisHasWheat || thisHasBread || thisHasCarrots || thisHasPotatoes || thisHasBeetroots;
+
+        boolean partnerHasWheat = partner.countMatching(s -> s.is(Items.WHEAT)) >= 3;
+        boolean partnerHasBread = partner.countMatching(s -> s.is(Items.BREAD)) >= 3;
+        boolean partnerHasCarrots = partner.countMatching(s -> s.is(Items.CARROT)) >= 12;
+        boolean partnerHasPotatoes = partner.countMatching(s -> s.is(Items.POTATO)) >= 12;
+        boolean partnerHasBeetroots = partner.countMatching(s -> s.is(Items.BEETROOT)) >= 12;
+        boolean partnerHasFood = partnerHasWheat || partnerHasBread || partnerHasCarrots || partnerHasPotatoes || partnerHasBeetroots;
+
+        if (!thisHasFood || !partnerHasFood) {
+            return false;
         }
 
-        sl.sendParticles(ParticleTypes.HEART, this.getX(), this.getY() + 1.2, this.getZ(), 8, 0.4, 0.4, 0.4, 0.1);
-        if (partner != null) {
-            sl.sendParticles(ParticleTypes.HEART, partner.getX(), partner.getY() + 1.2, partner.getZ(), 8, 0.4, 0.4, 0.4, 0.1);
-            partner.setLastBreedingTime(now);
+        if (findNearestHostileThreatForVillager(16.0) != null || partner.findNearestHostileThreatForVillager(16.0) != null) {
+            return false;
         }
+        if (this.getHealth() < 15.0f || this.isOnFire() || partner.getHealth() < 15.0f || partner.isOnFire()) {
+            return false;
+        }
+
+        // Consume food from this bot
+        if (thisHasWheat) consumeMatching(s -> s.is(Items.WHEAT), 3);
+        else if (thisHasBread) consumeMatching(s -> s.is(Items.BREAD), 3);
+        else if (thisHasCarrots) consumeMatching(s -> s.is(Items.CARROT), 12);
+        else if (thisHasPotatoes) consumeMatching(s -> s.is(Items.POTATO), 12);
+        else consumeMatching(s -> s.is(Items.BEETROOT), 12);
+
+        // Consume food from partner bot
+        if (partnerHasWheat) partner.consumeMatching(s -> s.is(Items.WHEAT), 3);
+        else if (partnerHasBread) partner.consumeMatching(s -> s.is(Items.BREAD), 3);
+        else if (partnerHasCarrots) partner.consumeMatching(s -> s.is(Items.CARROT), 12);
+        else if (partnerHasPotatoes) partner.consumeMatching(s -> s.is(Items.POTATO), 12);
+        else partner.consumeMatching(s -> s.is(Items.BEETROOT), 12);
+
+        sl.sendParticles(ParticleTypes.HEART, this.getX(), this.getY() + 1.2, this.getZ(), 8, 0.4, 0.4, 0.4, 0.1);
+        sl.sendParticles(ParticleTypes.HEART, partner.getX(), partner.getY() + 1.2, partner.getZ(), 8, 0.4, 0.4, 0.4, 0.1);
+        partner.setLastBreedingTime(now);
 
         this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_YES, SoundSource.NEUTRAL, 1.0f, 1.0f);
 
         String babyName = pickRandomAvailableBotName();
-        AiBotPlayer baby = BotManager.spawnBot(sl, babyName, "villager", this.getX() + 0.5, this.getY(), this.getZ() + 0.5, this.getYRot(), 0.0f);
+        double spawnX = (this.getX() + partner.getX()) * 0.5;
+        double spawnY = Math.max(this.getY(), partner.getY());
+        double spawnZ = (this.getZ() + partner.getZ()) * 0.5;
+        AiBotPlayer baby = BotManager.spawnBot(sl, babyName, "villager", spawnX, spawnY, spawnZ, this.getYRot(), 0.0f);
         baby.setBaby(true);
         baby.setAssignedBedPos(vacantBed);
         baby.setAssignedHousePos(vacantBed);
         VillageManager.registerHouse("Compound", vacantBed, vacantBed, babyName);
 
         this.lastBreedingTime = now;
-        sayInChat("A new baby companion was born into our colony! Welcoming baby " + baby.getPlainTextName() + " to the village (Role: Baby Villager)!");
+        sayInChat("A new baby companion was born into our colony! Welcoming baby " + baby.getPlainTextName() + " to the village (Parents: " + this.getPlainTextName() + " & " + partner.getPlainTextName() + ")!");
         BotPersistence.saveAll(sl.getServer());
         return true;
     }
@@ -8219,7 +8344,24 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
-        // 3. Check for Negative Reinforcement / Punishment ("bad job", "bad bot", "wrong way", "bad path", etc.)
+        // 3. Check for Negative Reinforcement / Punishment ("bad job", "bad bot", "wrong way", "stop jumping", "use the door", etc.)
+        boolean isStopJumpingOrDoor = clean.contains("stop jumping") || clean.contains("quit jumping")
+                || clean.contains("dont jump") || clean.contains("don't jump") || clean.contains("stop hopping")
+                || clean.contains("why are you jumping") || clean.contains("use the door")
+                || clean.contains("go through the door") || clean.contains("stop pushing");
+
+        if (isStopJumpingOrDoor) {
+            this.setJumping(false);
+            this.invalidatePath();
+            applyPlayerReinforcement(-15.0f, text);
+            if (clean.contains("stop jumping") || clean.contains("quit jumping") || clean.contains("stop hopping")) {
+                this.stopMovement();
+                this.standingBy = true;
+                sayInChat("Stopped jumping and halted movement! Marked this wall/corner as an obstacle in the Hive-Mind. Tell me 'resume' when you want me to continue.");
+            }
+            return true;
+        }
+
         boolean isNegative = clean.equals("bad job") || clean.equals("bad bot") || clean.equals("wrong way")
                 || clean.equals("bad path") || clean.equals("bad route") || clean.equals("terrible job")
                 || clean.equals("bad work") || clean.startsWith("bad job ") || clean.startsWith("bad bot ")
@@ -8229,6 +8371,8 @@ public class AiBotPlayer extends ServerPlayer {
                 || clean.contains("wrong chest");
 
         if (isNegative) {
+            this.setJumping(false);
+            this.invalidatePath();
             applyPlayerReinforcement(-15.0f, text);
             return true;
         }
