@@ -99,9 +99,9 @@ public class BotManager {
         BotPersistence.saveAll(level.getServer());
 
         if (BotConfig.getCandidateApiKeys(null).isEmpty()) {
-            bot.sayInChat("Hey! I'm online (" + bot.getBotRole() + ") in Offline Tactical Mode. Give me orders in chat, or type /bot apikey for full Gemini conversational AI!");
+            bot.sayRoutineInChat("Hey! I'm online (" + bot.getBotRole() + ") in Offline Tactical Mode. Give me orders in chat, or type /bot apikey for full Gemini conversational AI!");
         } else {
-            bot.sayInChat("Hey! I'm online and ready to help (" + bot.getBotRole() + "). Mention my name in chat or use /bot ask " + name + " <request>!");
+            bot.sayRoutineInChat("Hey! I'm online and ready to help (" + bot.getBotRole() + "). Mention my name in chat or use /bot ask " + name + " <request>!");
         }
         return bot;
     }
@@ -303,6 +303,41 @@ public class BotManager {
 
         String lower = rawMessage.toLowerCase(Locale.ROOT).trim();
 
+        // Intercept natural chat toggles for bot jibberish / chatter / quiet / mute
+        if (lower.contains("jibberish") || lower.contains("gibberish") || lower.contains("bot chatter")
+                || lower.equals("chatter off") || lower.equals("chatter on")
+                || lower.contains("stop spamming") || lower.contains("quit spamming")) {
+            boolean turnOn = (lower.contains(" on") || lower.startsWith("enable") || lower.startsWith("turn on") || lower.startsWith("allow"))
+                    && !lower.contains("off") && !lower.contains("stop") && !lower.contains("no ") && !lower.contains("disable");
+            BotConfig.setBotChatterEnabled(turnOn);
+            speaker.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "[AI Companion] Bot background chatter (jibberish) is now " + (turnOn ? "ON" : "OFF")
+                            + (turnOn ? ". Bots will announce routine farm/ranch/lumber status updates." : ". Bots will now perform background tasks silently without spamming chat!")
+            ).withStyle(turnOn ? net.minecraft.ChatFormatting.YELLOW : net.minecraft.ChatFormatting.GREEN));
+            return;
+        }
+
+        if (lower.equals("mute all bots") || lower.equals("mute bots") || lower.equals("silence all bots") || lower.equals("quiet mode on")) {
+            BotConfig.setMuteAllBotChat(true);
+            BotConfig.setBotChatterEnabled(false);
+            for (AiBotPlayer b : bots) b.setMuted(true);
+            BotPersistence.saveAll(speaker.level().getServer());
+            speaker.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "[AI Companion] All bots are now muted (Quiet Mode ON). Use '/bot unmute all' or say 'unmute all bots' to restore chat."
+            ).withStyle(net.minecraft.ChatFormatting.GREEN));
+            return;
+        }
+
+        if (lower.equals("unmute all bots") || lower.equals("unmute bots") || lower.equals("quiet mode off")) {
+            BotConfig.setMuteAllBotChat(false);
+            for (AiBotPlayer b : bots) b.setMuted(false);
+            BotPersistence.saveAll(speaker.level().getServer());
+            speaker.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                    "[AI Companion] All bots are now unmuted for direct replies (background jibberish remains " + (BotConfig.isBotChatterEnabled() ? "ON" : "OFF") + ")."
+            ).withStyle(net.minecraft.ChatFormatting.GREEN));
+            return;
+        }
+
         // Check if player is teaching a location in chat: "remember this spot as Town" / "save location Town"
         java.util.regex.Matcher rememberMatcher = java.util.regex.Pattern
                 .compile("(?:remember|save)\\s+(?:this\\s+(?:spot|place|location)\\s+as|location|waypoint)\\s+([a-zA-Z0-9_-]+)", java.util.regex.Pattern.CASE_INSENSITIVE)
@@ -413,6 +448,28 @@ public class BotManager {
         boolean hasICommand = rawLower.startsWith("i command") || rawLower.contains(" i command");
 
         String cmdClean = bot.stripBotReference(requestText).toLowerCase().replaceAll("[,!?:;.]", " ").replaceAll("\\s+", " ").trim();
+
+        if (cmdClean.equals("mute") || cmdClean.equals("be quiet") || cmdClean.equals("quiet")
+                || cmdClean.equals("stop talking") || cmdClean.equals("shut up") || cmdClean.equals("silence")
+                || cmdClean.equals("hush") || cmdClean.equals("no talking")) {
+            bot.setMuted(true);
+            BotPersistence.saveAll(server);
+            if (speaker != null) {
+                speaker.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                        "[AI Companion] " + bot.getBotName() + " is now muted. Use '/bot unmute " + bot.getBotName() + "' or say '" + bot.getBotName() + " unmute' to allow chat again."
+                ).withStyle(net.minecraft.ChatFormatting.GREEN));
+            }
+            return;
+        }
+
+        if (cmdClean.equals("unmute") || cmdClean.equals("you can talk") || cmdClean.equals("speak")
+                || cmdClean.equals("talk again") || cmdClean.equals("start talking")) {
+            bot.setMuted(false);
+            BotConfig.setMuteAllBotChat(false);
+            BotPersistence.saveAll(server);
+            bot.sayInChat("I'm unmuted and ready to talk again!");
+            return;
+        }
 
         // 1. If player explicitly prefixed request with "i command":
         if (hasICommand) {
@@ -694,7 +751,7 @@ public class BotManager {
 
     public static void broadcastDistress(AiBotPlayer victim, net.minecraft.world.entity.LivingEntity threat, BlockPos pos) {
         String threatName = threat.getType().getDescription().getString();
-        victim.sayInChat("[Distress] Under attack by " + threatName + " at (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ")! Requesting backup!");
+        victim.sayRoutineInChat("[Distress] Under attack by " + threatName + " at (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ")! Requesting backup!");
 
         for (AiBotPlayer bot : ACTIVE_BOTS.values()) {
             if (bot == victim) continue;

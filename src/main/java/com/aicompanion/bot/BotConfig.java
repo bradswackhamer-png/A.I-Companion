@@ -44,11 +44,21 @@ public class BotConfig {
             .comment("Force all bots to run in 100% Offline Tactical Mode, bypassing cloud Gemini API calls even if API keys are set")
             .define("forceOffline", false);
 
+    public static final ModConfigSpec.BooleanValue BOT_CHATTER = BUILDER
+            .comment("Whether bots broadcast autonomous routine background chatter in chat (e.g., composting surplus seeds, depositing crops/logs in chests, grabbing supplies, passive task updates). Defaults to false so bots only speak in response to player commands.")
+            .define("botChatter", false);
+
+    public static final ModConfigSpec.BooleanValue MUTE_ALL_BOT_CHAT = BUILDER
+            .comment("When true, completely mutes all bot chat messages across the server.")
+            .define("muteAllBotChat", false);
+
     public static final ModConfigSpec SPEC = BUILDER.build();
 
     private static volatile String runtimeApiKeyOverride = null;
     private static volatile String runtimeModelOverride = null;
     private static volatile Boolean runtimeForceOfflineOverride = null;
+    private static volatile Boolean runtimeBotChatterOverride = null;
+    private static volatile Boolean runtimeMuteAllBotChatOverride = null;
     private static final Map<String, String> PLAYER_KEYS = new ConcurrentHashMap<>();
 
     private static void syncLoadedPlayerKeys() {
@@ -162,6 +172,46 @@ public class BotConfig {
         runtimeForceOfflineOverride = force;
         try {
             FORCE_OFFLINE.set(force);
+            SPEC.save();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static boolean isBotChatterEnabled() {
+        if (runtimeBotChatterOverride != null) {
+            return runtimeBotChatterOverride;
+        }
+        try {
+            return BOT_CHATTER.get();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    public static void setBotChatterEnabled(boolean enabled) {
+        runtimeBotChatterOverride = enabled;
+        try {
+            BOT_CHATTER.set(enabled);
+            SPEC.save();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static boolean isMuteAllBotChat() {
+        if (runtimeMuteAllBotChatOverride != null) {
+            return runtimeMuteAllBotChatOverride;
+        }
+        try {
+            return MUTE_ALL_BOT_CHAT.get();
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    public static void setMuteAllBotChat(boolean muted) {
+        runtimeMuteAllBotChatOverride = muted;
+        try {
+            MUTE_ALL_BOT_CHAT.set(muted);
             SPEC.save();
         } catch (Exception ignored) {
         }

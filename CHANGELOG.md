@@ -4,6 +4,22 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.24] - 2026-10-31
+
+### Added
+- **Bot Self-Aware Active AI Model Reporting & Expanded Model Catalog (`GeminiService`, `BotCommands`):**
+  - Injected `Active AI Model: <model>` directly into the companion's live telemetry prompt so bots accurately state the active model (e.g. `gemini-3.8-flash`, `gemini-3.5-pro`) when asked what version or model they are running, rather than defaulting to base training cutoff responses like "2.5-flash".
+  - Expanded candidate fallbacks and command auto-completion (`/bot model`) to include `gemini-3.8-flash`, `gemini-3.5-flash-lite`, `gemini-3.5-pro`, `gemini-3.6-flash`, `gemini-3.5-flash`, `gemini-3.1-flash-lite`, and `gemini-2.5-flash`.
+  - Added `/bot model` (with no arguments) to query and display the active Gemini model name in chat.
+- **Bot Background Chatter / Jibberish Toggle & Quiet/Mute Controls (`BotConfig`, `AiBotPlayer`, `BotCommands`, `BotManager`, `BotPersistence`):**
+  - Added `/bot chatter [on|off]` and `/bot jibberish [on|off]` commands to toggle routine autonomous background status announcements in chat.
+  - Added `/bot quiet [on|off]`, `/bot mute [botName|all]`, and `/bot unmute [botName|all]` commands (persisted across world saves) to silence individual companions or all bots globally.
+  - Added natural chat recognition for phrases such as `"toggle off bot jibberish"`, `"stop jibberish"`, `"chatter off"`, `"mute all bots"`, `"<botName> mute"`, `"<botName> be quiet"`, and `"<botName> unmute"`.
+
+### Changed
+- **Routine Background Bot Chatter Disabled by Default (`botChatter = false`):**
+  - Autonomous background status messages (`sayRoutineInChat`)—such as composting surplus seeds (`"Composted X surplus seeds into the composter..."`), depositing farm crops or logs into chests, grabbing hoes/seeds/breeding food, passive animal feeding/culling updates, passive lumberjack tree-felling alerts, workstation discovery notices, and combat distress callouts—are now **disabled by default** so bots work silently without spamming game chat. Direct replies to player commands and questions remain active unless a bot is explicitly muted.
+
 ## [1.2.23] - 2026-10-31
 
 ### Fixed

@@ -68,6 +68,18 @@ public class BotCommands {
         return SharedSuggestionProvider.suggest(skins, builder);
     };
 
+    private static final SuggestionProvider<CommandSourceStack> MODEL_SUGGESTIONS = (ctx, builder) ->
+            SharedSuggestionProvider.suggest(java.util.List.of(
+                    "gemini-3.8-flash",
+                    "gemini-3.5-flash-lite",
+                    "gemini-3.5-pro",
+                    "gemini-3.6-flash",
+                    "gemini-3.5-flash",
+                    "gemini-3.1-flash-lite",
+                    "gemini-2.5-flash",
+                    "gemma-4-26b-a4b-it"
+            ), builder);
+
     public static void register(CommandDispatcher<CommandSourceStack> dispatcher) {
         dispatcher.register(buildCommandTree("bot"));
         dispatcher.register(buildCommandTree("aibot"));
@@ -319,7 +331,9 @@ public class BotCommands {
                         .then(Commands.argument("enabled", BoolArgumentType.bool())
                                 .executes(ctx -> setOfflineCmd(ctx, BoolArgumentType.getBool(ctx, "enabled")))))
                 .then(Commands.literal("model")
+                        .executes(BotCommands::showModelCmd)
                         .then(Commands.argument("modelName", StringArgumentType.greedyString())
+                                .suggests(MODEL_SUGGESTIONS)
                                 .executes(ctx -> setModel(ctx, StringArgumentType.getString(ctx, "modelName")))))
                 .then(Commands.literal("waypoint")
                         .then(Commands.argument("locationName", StringArgumentType.word())
@@ -506,7 +520,102 @@ public class BotCommands {
                                         .executes(ctx -> clearMemory(ctx, "global")))
                                 .then(Commands.argument("botName", StringArgumentType.word())
                                         .suggests(BOT_NAME_SUGGESTIONS)
-                                        .executes(ctx -> clearMemory(ctx, StringArgumentType.getString(ctx, "botName"))))));
+                                        .executes(ctx -> clearMemory(ctx, StringArgumentType.getString(ctx, "botName"))))))
+                .then(Commands.literal("chatter")
+                        .executes(ctx -> toggleBotChatterCmd(ctx, null))
+                        .then(Commands.argument("state", StringArgumentType.word())
+                                .suggests((ctx, b) -> { b.suggest("off"); b.suggest("on"); return b.buildFuture(); })
+                                .executes(ctx -> toggleBotChatterCmd(ctx, StringArgumentType.getString(ctx, "state")))))
+                .then(Commands.literal("jibberish")
+                        .executes(ctx -> toggleBotChatterCmd(ctx, null))
+                        .then(Commands.argument("state", StringArgumentType.word())
+                                .suggests((ctx, b) -> { b.suggest("off"); b.suggest("on"); return b.buildFuture(); })
+                                .executes(ctx -> toggleBotChatterCmd(ctx, StringArgumentType.getString(ctx, "state")))))
+                .then(Commands.literal("quiet")
+                        .executes(ctx -> toggleQuietModeCmd(ctx, null))
+                        .then(Commands.argument("state", StringArgumentType.word())
+                                .suggests((ctx, b) -> { b.suggest("on"); b.suggest("off"); return b.buildFuture(); })
+                                .executes(ctx -> toggleQuietModeCmd(ctx, StringArgumentType.getString(ctx, "state")))))
+                .then(Commands.literal("mute")
+                        .executes(ctx -> setMuteBotCmd(ctx, "all", true))
+                        .then(Commands.argument("target", StringArgumentType.word())
+                                .suggests((ctx, b) -> { b.suggest("all"); return BOT_NAME_SUGGESTIONS.getSuggestions(ctx, b); })
+                                .executes(ctx -> setMuteBotCmd(ctx, StringArgumentType.getString(ctx, "target"), true))))
+                .then(Commands.literal("unmute")
+                        .executes(ctx -> setMuteBotCmd(ctx, "all", false))
+                        .then(Commands.argument("target", StringArgumentType.word())
+                                .suggests((ctx, b) -> { b.suggest("all"); return BOT_NAME_SUGGESTIONS.getSuggestions(ctx, b); })
+                                .executes(ctx -> setMuteBotCmd(ctx, StringArgumentType.getString(ctx, "target"), false))));
+    }
+
+    private static int toggleBotChatterCmd(CommandContext<CommandSourceStack> ctx, String stateArg) {
+        boolean enable;
+        if (stateArg == null || stateArg.isBlank()) {
+            enable = !BotConfig.isBotChatterEnabled();
+        } else {
+            String s = stateArg.trim().toLowerCase(Locale.ROOT);
+            enable = s.equals("on") || s.equals("true") || s.equals("1") || s.equals("enable") || s.equals("enabled");
+        }
+        BotConfig.setBotChatterEnabled(enable);
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "[AI Companion] Bot background chatter (jibberish) is now " + (enable ? "ON" : "OFF")
+                        + (enable ? ". Bots will announce routine farm/ranch/lumber status updates." : ". Bots will perform routine background tasks silently without spamming chat!")
+        ).withStyle(enable ? ChatFormatting.YELLOW : ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int toggleQuietModeCmd(CommandContext<CommandSourceStack> ctx, String stateArg) {
+        boolean quiet;
+        if (stateArg == null || stateArg.isBlank()) {
+            quiet = !BotConfig.isMuteAllBotChat();
+        } else {
+            String s = stateArg.trim().toLowerCase(Locale.ROOT);
+            quiet = s.equals("on") || s.equals("true") || s.equals("1") || s.equals("enable") || s.equals("enabled");
+        }
+        BotConfig.setMuteAllBotChat(quiet);
+        if (quiet) {
+            BotConfig.setBotChatterEnabled(false);
+        }
+        for (AiBotPlayer bot : BotManager.getActiveBots()) {
+            bot.setMuted(quiet);
+        }
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "[AI Companion] Global Bot Quiet Mode is now " + (quiet ? "ON (all bot chat muted)" : "OFF (bots can reply to direct orders; background jibberish remains " + (BotConfig.isBotChatterEnabled() ? "ON" : "OFF") + ")") + "."
+        ).withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int setMuteBotCmd(CommandContext<CommandSourceStack> ctx, String target, boolean mute) {
+        if (target == null || target.isBlank() || "all".equalsIgnoreCase(target)) {
+            BotConfig.setMuteAllBotChat(mute);
+            if (mute) {
+                BotConfig.setBotChatterEnabled(false);
+            }
+            for (AiBotPlayer bot : BotManager.getActiveBots()) {
+                bot.setMuted(mute);
+            }
+            BotPersistence.saveAll(ctx.getSource().getServer());
+            ctx.getSource().sendSuccess(() -> Component.literal(
+                    "[AI Companion] All bots are now " + (mute ? "MUTED" : "UNMUTED (background jibberish remains " + (BotConfig.isBotChatterEnabled() ? "ON" : "OFF") + ")") + "."
+            ).withStyle(ChatFormatting.GREEN), true);
+            return 1;
+        }
+
+        AiBotPlayer bot = BotManager.getBot(target);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("Bot '" + target + "' not found."));
+            return 0;
+        }
+        bot.setMuted(mute);
+        if (!mute) {
+            BotConfig.setMuteAllBotChat(false);
+        }
+        BotPersistence.saveAll(ctx.getSource().getServer());
+        ctx.getSource().sendSuccess(() -> Component.literal(
+                "[AI Companion] Bot " + bot.getBotName() + " is now " + (mute ? "MUTED" : "UNMUTED") + "."
+        ).withStyle(ChatFormatting.GREEN), true);
+        return 1;
     }
 
     private static int openBotGuiCmd(CommandContext<CommandSourceStack> ctx, String botName) {
@@ -1838,6 +1947,14 @@ public class BotCommands {
         BotConfig.setModel(modelName);
         ctx.getSource().sendSuccess(() -> Component.literal("Gemini model updated to: " + BotConfig.getModel())
                 .withStyle(ChatFormatting.GREEN), true);
+        return 1;
+    }
+
+    private static int showModelCmd(CommandContext<CommandSourceStack> ctx) {
+        ctx.getSource().sendSuccess(() -> Component.literal("Current Gemini model: ")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(BotConfig.getModel()).withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD))
+                .append(Component.literal(" (Use '/bot model <name>' to change)").withStyle(ChatFormatting.GRAY)), false);
         return 1;
     }
 

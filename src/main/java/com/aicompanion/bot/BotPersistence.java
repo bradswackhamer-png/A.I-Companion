@@ -150,6 +150,7 @@ public class BotPersistence {
 
         public String assignedArea = "";
         public String skinName = "";
+        public boolean muted = false;
 
         // Tether / Standby & Absolute Command Mode
         public Integer tetherX = null;
@@ -448,6 +449,7 @@ public class BotPersistence {
                 }
                 data.villagerLevel = bot.getVillagerLevel();
                 data.villagerXp = bot.getVillagerXp();
+                data.muted = bot.isMuted();
 
                 data.memory = GeminiService.getMemory(bot.getBotName());
                 data.learnedMemories = bot.getLearnedMemories();
@@ -585,6 +587,7 @@ public class BotPersistence {
                     }
                     targetLevel.getChunk(BlockPos.containing(data.x, data.y, data.z));
                     AiBotPlayer bot = BotManager.spawnBotFromSave(targetLevel, data);
+                    bot.setMuted(data.muted);
                     bot.setAliases(data.aliases, data.nickname);
                     if (data.assignedArea != null && !data.assignedArea.isBlank()) {
                         bot.setAssignedArea(data.assignedArea);

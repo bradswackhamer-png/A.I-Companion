@@ -56,7 +56,16 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🎨 Custom Skin Rendering, Legacy 64x32 Support & Live Hot-Reload Fix *(New in v1.2.23)*
+### 🔇 Silent Background Work & Bot Jibberish / Mute Toggles *(New in v1.2.24)*
+* **Background Status Chatter ("Jibberish") Disabled by Default**:
+  * Autonomous background status messages—such as composting surplus seeds (`"Composted 1x surplus seeds into the composter..."`), depositing crops or logs into chests, grabbing hoes/seeds/breeding food, passive animal feeding/culling, and workstation discovery announcements—are now **OFF by default** (`botChatter = false`) so companions work silently without spamming chat.
+* **Instant Slash Commands & Natural Chat Toggles**:
+  * Toggle routine status chatter anytime with `/bot jibberish [on|off]` or `/bot chatter [on|off]`, or simply type `"toggle off bot jibberish"` / `"chatter on"` in chat.
+  * Silence specific companions or all bots completely with `/bot mute [botName|all]`, `/bot unmute [botName|all]`, or `/bot quiet [on|off]`.
+
+---
+
+### 🎨 Custom Skin Rendering, Legacy 64x32 Support & Live Hot-Reload Fix *(v1.2.23)*
 * **Fixed Custom Skin Texture Lookup & Render-Thread Hot-Reloading**:
   * Resolved an issue in v1.2.22 where custom skins in `aicompanion/skins` were detected by `/bot skin list` and assigned by `/bot skin set`, but companions continued displaying default skins due to a `ClientAsset.ResourceTexture` path mismatch and `ServerThread` vs. Render-Thread texture upload during `/bot skin reload`.
 * **Full 64x32 Legacy Skin Auto-Conversion**:
@@ -540,6 +549,11 @@ You can speak to your companions directly in public chat:
 | `/bot ask <name> <request>` | Send a direct task/question to a companion |
 | `/bot apikey [key]` | View API key status or set your personal/server Gemini key |
 | `/bot model <modelName>` | Set the active Gemini model (default baked-in: `gemini-3.5-flash-lite`) |
+| `/bot chatter [on\|off]` | Toggle routine background status chatter (off by default) |
+| `/bot jibberish [on\|off]` | Alias for `/bot chatter` |
+| `/bot quiet [on\|off]` | Toggle global Quiet Mode (mutes all bot chat) |
+| `/bot mute [botName\|all]` | Mute a specific companion or all bots |
+| `/bot unmute [botName\|all]` | Unmute a specific companion or all bots |
 | `/bot waypoint <name>` | Save your current coordinates as a named bot waypoint |
 
 ---

@@ -110,7 +110,7 @@ public class GeminiService {
               * If you need to mine iron_ore and don't have a stone/iron/diamond pickaxe, make sure you get a stone_pickaxe first!
               * If the player says "bring me...", "give me...", or "get me...", ALWAYS append a "GIVE" action at the end of your "actions" array with "target" set to the requesting player's name!
             - MOB AWARENESS & PERCEPTION: When the player refers to a mob (e.g. "zombie in front of me", "look at that creeper", "kill that", "can you see that zombie?"), refer to the "SPEAKER INFO & SIGHT CONE" and "NEARBY MOBS & ENTITIES" telemetry sections! If a mob is listed in front of the speaker or near the speaker/bot, you CAN see it! NEVER claim you cannot see it. If asked to fight, protect, or eliminate it, issue an "ATTACK" action with the mob type immediately!
-            - If the player just asks a question (e.g. "what's in your inventory?", "where are you?", "how's your health?"), answer accurately in "reply" using the LIVE TELEMETRY below and leave "actions": [] empty (so you don't interrupt your current task unless asked).
+            - If the player just asks a question (e.g. "what's in your inventory?", "where are you?", "how's your health?", "what version are you?", "what model are you running?"), answer accurately in "reply" using the LIVE TELEMETRY below (including your Active AI Model) and leave "actions": [] empty (so you don't interrupt your current task unless asked).
             - Keep "reply" natural, in-character, and concise.
             """;
 
@@ -150,6 +150,7 @@ public class GeminiService {
 
         sb.append("=== YOUR BOT STATUS ===\n");
         sb.append("Name: ").append(bot.getBotName()).append(" (Role: ").append(bot.getBotRole()).append(")\n");
+        sb.append("Active AI Model: ").append(BotConfig.getModel()).append("\n");
         if (!bot.getAliases().isEmpty()) {
             sb.append("Active Nickname / Aliases you also respond to: ").append(String.join(", ", bot.getAliases())).append("\n");
         }
@@ -445,7 +446,7 @@ public class GeminiService {
             String primaryModel = BotConfig.getModel();
             List<String> candidateModels = new ArrayList<>();
             candidateModels.add(primaryModel);
-            for (String fallback : List.of("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it", "gemini-3.6-flash", "gemini-3.5-flash")) {
+            for (String fallback : List.of("gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.5-pro", "gemini-3.1-flash-lite", "gemma-4-26b-a4b-it", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-2.5-flash")) {
                 if (!candidateModels.contains(fallback)) {
                     candidateModels.add(fallback);
                 }

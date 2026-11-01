@@ -321,6 +321,17 @@ public class AiBotPlayer extends ServerPlayer {
     // Custom Skin Assignment
     private String customSkinName = "";
 
+    // Per-bot chat mute toggle
+    private boolean muted = false;
+
+    public synchronized boolean isMuted() {
+        return this.muted;
+    }
+
+    public synchronized void setMuted(boolean muted) {
+        this.muted = muted;
+    }
+
     public synchronized String getCustomSkinName() {
         return this.customSkinName;
     }
@@ -430,7 +441,7 @@ public class AiBotPlayer extends ServerPlayer {
             sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 16, 0.4, 0.4, 0.4, 0.1);
             this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.PLAYER_LEVELUP, SoundSource.PLAYERS, 1.0f, 1.0f);
         }
-        sayInChat(this.getPlainTextName() + " has grown up into an adult villager!");
+        sayRoutineInChat(this.getPlainTextName() + " has grown up into an adult villager!");
         if (this.botRole.toLowerCase().contains("villager")) {
             searchAndClaimWorkstation(48);
         }
@@ -1614,11 +1625,21 @@ public class AiBotPlayer extends ServerPlayer {
 
     public void sayInChat(String message) {
         if (message == null || message.isBlank()) return;
+        GeminiService.recordMemory(this.botName, this.getChatTag() + ": " + message);
+        if (this.muted || BotConfig.isMuteAllBotChat()) return;
         Component formatted = Component.literal("[" + this.getChatTag() + "] ")
                 .withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
                 .append(Component.literal(message).withStyle(ChatFormatting.WHITE));
         this.level().getServer().getPlayerList().broadcastSystemMessage(formatted, false);
-        GeminiService.recordMemory(this.botName, this.getChatTag() + ": " + message);
+    }
+
+    public void sayRoutineInChat(String message) {
+        if (message == null || message.isBlank()) return;
+        if (!BotConfig.isBotChatterEnabled()) {
+            GeminiService.recordMemory(this.botName, this.getChatTag() + ": " + message);
+            return;
+        }
+        sayInChat(message);
     }
 
     @Override
@@ -3185,7 +3206,11 @@ public class AiBotPlayer extends ServerPlayer {
                 }
             }
             if (moved > 0) {
-                sayInChat("Stored " + moved + " items into the chest.");
+                if ("drops".equals(query)) {
+                    sayRoutineInChat("Stored " + moved + " items into the chest.");
+                } else {
+                    sayInChat("Stored " + moved + " items into the chest.");
+                }
             }
         } else {
             int remaining = Math.max(1, action.count);
@@ -3495,7 +3520,7 @@ public class AiBotPlayer extends ServerPlayer {
             if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
                 int taken = takeItemsFromContainer(c, "hoe", 1);
                 if (taken > 0) {
-                    sayInChat("Grabbed a hoe from the chest to till farm land.");
+                    sayRoutineInChat("Grabbed a hoe from the chest to till farm land.");
                 }
             }
             return false;
@@ -3546,7 +3571,7 @@ public class AiBotPlayer extends ServerPlayer {
             if (chestPos != null) {
                 depositFarmerCropsIntoChest(chestPos);
             }
-            sayInChat("Farm duty complete! Harvested " + this.actionProgressCount + "x crops and replanted seeds.");
+            sayRoutineInChat("Farm duty complete! Harvested " + this.actionProgressCount + "x crops and replanted seeds.");
             return true;
         }
 
@@ -3590,7 +3615,7 @@ public class AiBotPlayer extends ServerPlayer {
                         if (taken == 0) taken = takeItemsFromContainer(c, "carrot", 16);
                         if (taken == 0) taken = takeItemsFromContainer(c, "potato", 16);
                         if (taken > 0) {
-                            sayInChat("Grabbed " + taken + "x planting supplies from chest to continue planting.");
+                            sayRoutineInChat("Grabbed " + taken + "x planting supplies from chest to continue planting.");
                             return false;
                         }
                     }
@@ -3610,9 +3635,9 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
         if (this.actionProgressCount > 0) {
-            sayInChat("Harvested " + this.actionProgressCount + "x mature crops and replanted seeds. No more crops currently mature.");
+            sayRoutineInChat("Harvested " + this.actionProgressCount + "x mature crops and replanted seeds. No more crops currently mature.");
         } else {
-            sayInChat("All crops in the area are still growing. I'll watch over them!");
+            sayRoutineInChat("All crops in the area are still growing. I'll watch over them!");
         }
         return true;
     }
@@ -3620,11 +3645,11 @@ public class AiBotPlayer extends ServerPlayer {
     private boolean tickTillAction(BotAction action) {
         int goal = action.count > 0 ? action.count : 20;
         if (this.actionProgressCount >= goal) {
-            sayInChat("Finished tilling " + this.actionProgressCount + " farmland blocks!");
+            sayRoutineInChat("Finished tilling " + this.actionProgressCount + " farmland blocks!");
             return true;
         }
         if (!tryTillDirtInFarmBox()) {
-            sayInChat("No more dirt to till in my farm zone.");
+            sayRoutineInChat("No more dirt to till in my farm zone.");
             return true;
         }
         this.actionProgressCount++;
@@ -3689,7 +3714,7 @@ public class AiBotPlayer extends ServerPlayer {
                         TractorCompat.steerTractor(this, tractor, Vec3.atCenterOf(this.farmOriginPos), 0.5);
                     } else {
                         TractorCompat.dismountTractor(this);
-                        sayInChat("Farm field completely tended with tractor! Tractor parked.");
+                        sayRoutineInChat("Farm field completely tended with tractor! Tractor parked.");
                     }
                     return;
                 }
@@ -3702,7 +3727,7 @@ public class AiBotPlayer extends ServerPlayer {
                         return;
                     } else {
                         TractorCompat.mountTractor(this, nearbyTractor);
-                        sayInChat("Mounted the JaneMoose tractor! Beginning mechanized farm work.");
+                        sayRoutineInChat("Mounted the JaneMoose tractor! Beginning mechanized farm work.");
                         return;
                     }
                 }
@@ -3730,7 +3755,7 @@ public class AiBotPlayer extends ServerPlayer {
                     return;
                 }
             } else if (this.tickCount % 200 == 0) {
-                sayInChat("My bags are full of crops and all nearby chests are full! Please place an empty chest.");
+                sayRoutineInChat("My bags are full of crops and all nearby chests are full! Please place an empty chest.");
             }
         }
 
@@ -4043,7 +4068,7 @@ public class AiBotPlayer extends ServerPlayer {
 
         if (breedable.isEmpty() || this.actionProgressCount >= action.count) {
             stopMovement();
-            sayInChat("Breeding complete for " + species + "s! Fed " + this.actionProgressCount + " animals.");
+            sayRoutineInChat("Breeding complete for " + species + "s! Fed " + this.actionProgressCount + " animals.");
             return true;
         }
 
@@ -4054,11 +4079,11 @@ public class AiBotPlayer extends ServerPlayer {
             if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
                 int taken = takeBreedingFoodFromContainer(c, food);
                 if (taken > 0) {
-                    sayInChat("Grabbed " + taken + "x " + food + " from chest to breed " + species + "s.");
+                    sayRoutineInChat("Grabbed " + taken + "x " + food + " from chest to breed " + species + "s.");
                     return false;
                 }
             }
-            sayInChat("Out of breeding food (" + food + ") for " + species + "s.");
+            sayRoutineInChat("Out of breeding food (" + food + ") for " + species + "s.");
             return true;
         }
 
@@ -4072,7 +4097,7 @@ public class AiBotPlayer extends ServerPlayer {
             target.setInLove(this);
             broadcastSwing();
             this.actionProgressCount++;
-            sayInChat("Fed a " + species + " to breed (" + this.actionProgressCount + "/" + action.count + ")!");
+            sayRoutineInChat("Fed a " + species + " to breed (" + this.actionProgressCount + "/" + action.count + ")!");
         }
         return false;
     }
@@ -4086,7 +4111,7 @@ public class AiBotPlayer extends ServerPlayer {
 
         if (total <= cap || total <= this.ranchMinPop || adults.size() <= this.ranchMinPop) {
             stopMovement();
-            sayInChat("Herd population check complete: " + total + "x " + species + "s present (threshold: " + cap + ", minimum: " + this.ranchMinPop + "). No culling needed.");
+            sayRoutineInChat("Herd population check complete: " + total + "x " + species + "s present (threshold: " + cap + ", minimum: " + this.ranchMinPop + "). No culling needed.");
             return true;
         }
 
@@ -4107,7 +4132,7 @@ public class AiBotPlayer extends ServerPlayer {
             if (!victim.isAlive()) {
                 vacuumNearbyDrops();
                 this.actionProgressCount++;
-                sayInChat("Culled 1x adult " + species + " (remaining herd: " + (total - 1) + ").");
+                sayRoutineInChat("Culled 1x adult " + species + " (remaining herd: " + (total - 1) + ").");
             }
         }
         return false;
@@ -4159,7 +4184,7 @@ public class AiBotPlayer extends ServerPlayer {
                     broadcastSwing();
                     if (!victim.isAlive()) {
                         vacuumNearbyDrops();
-                        sayInChat("Culled 1x adult " + this.ranchAnimal + " to manage herd size (" + (totalCount - 1) + " remaining, min " + this.ranchMinPop + ").");
+                        sayRoutineInChat("Culled 1x adult " + this.ranchAnimal + " to manage herd size (" + (totalCount - 1) + " remaining, min " + this.ranchMinPop + ").");
                     }
                 }
                 return;
@@ -4182,7 +4207,7 @@ public class AiBotPlayer extends ServerPlayer {
                     if (chestPos != null && this.level().getBlockEntity(chestPos) instanceof Container c) {
                         int taken = takeBreedingFoodFromContainer(c, this.ranchFood);
                         if (taken > 0) {
-                            sayInChat("Grabbed " + taken + "x " + this.ranchFood + " from chest to breed " + this.ranchAnimal + "s.");
+                            sayRoutineInChat("Grabbed " + taken + "x " + this.ranchFood + " from chest to breed " + this.ranchAnimal + "s.");
                         }
                     }
                     return;
@@ -4200,7 +4225,7 @@ public class AiBotPlayer extends ServerPlayer {
                     long now = System.currentTimeMillis();
                     if (now - lastBreedMessageTime > 8000) {
                         lastBreedMessageTime = now;
-                        sayInChat("Fed a " + this.ranchAnimal + " with " + this.ranchFood + " to breed!");
+                        sayRoutineInChat("Fed a " + this.ranchAnimal + " with " + this.ranchFood + " to breed!");
                     }
                 }
                 return;
@@ -5916,7 +5941,7 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
         if (totalStored > 0) {
-            sayInChat("Deposited " + totalStored + "x farm items into the chest.");
+            sayRoutineInChat("Deposited " + totalStored + "x farm items into the chest.");
         }
         return totalStored;
     }
@@ -6004,7 +6029,7 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         if (composted > 0) {
-            sayInChat("Composted " + composted + "x surplus seeds into the composter. Retaining " + maxSeedsToKeep + " seeds for planting!");
+            sayRoutineInChat("Composted " + composted + "x surplus seeds into the composter. Retaining " + maxSeedsToKeep + " seeds for planting!");
         }
         return composted;
     }
@@ -6508,7 +6533,7 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public void respondToDistressCall(LivingEntity threat, AiBotPlayer caller) {
-        sayInChat("Backup is on the way, " + caller.getBotName() + "! Engaging " + threat.getType().getDescription().getString() + "!");
+        sayRoutineInChat("Backup is on the way, " + caller.getBotName() + "! Engaging " + threat.getType().getDescription().getString() + "!");
         this.actionQueue.clear();
         this.actionProgressCount = 0;
         this.actionTicks = 0;
@@ -7105,7 +7130,11 @@ public class AiBotPlayer extends ServerPlayer {
         this.currentAction = new BotAction("CHOP_TREE", "tree (" + this.targetTreeLogs.size() + " logs)", null, this.targetTreeLogs.size());
         this.actionProgressCount = 0;
         this.actionTicks = 0;
-        sayInChat("Cutting down tree at (" + basePos.getX() + ", " + basePos.getY() + ", " + basePos.getZ() + ")! Queued " + this.targetTreeLogs.size() + " logs to chop and replant.");
+        if (this.lumberjackAreaActive) {
+            sayRoutineInChat("Cutting down tree at (" + basePos.getX() + ", " + basePos.getY() + ", " + basePos.getZ() + ")! Queued " + this.targetTreeLogs.size() + " logs to chop and replant.");
+        } else {
+            sayInChat("Cutting down tree at (" + basePos.getX() + ", " + basePos.getY() + ", " + basePos.getZ() + ")! Queued " + this.targetTreeLogs.size() + " logs to chop and replant.");
+        }
         chopNextTreeLog();
     }
 
@@ -7212,7 +7241,7 @@ public class AiBotPlayer extends ServerPlayer {
                 lookAtPos(Vec3.atCenterOf(chestPos));
                 int stored = depositLumberDropsIntoChest(chestPos);
                 if (stored > 0) {
-                    sayInChat("Stored " + stored + "x logs & wood supplies into chest!");
+                    sayRoutineInChat("Stored " + stored + "x logs & wood supplies into chest!");
                 }
                 return;
             }
@@ -7900,7 +7929,7 @@ public class AiBotPlayer extends ServerPlayer {
                 sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, available.getX() + 0.5, available.getY() + 1.2, available.getZ() + 0.5, 8, 0.3, 0.3, 0.3, 0.05);
                 sl.sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 8, 0.3, 0.3, 0.3, 0.05);
             }
-            sayInChat("I discovered a " + b.getName().getString() + " at (" + available.getX() + ", " + available.getY() + ", " + available.getZ() + ")! I am now taking on the '" + capitalize(trait) + "' profession trait under my Villager role!");
+            sayRoutineInChat("I discovered a " + b.getName().getString() + " at (" + available.getX() + ", " + available.getY() + ", " + available.getZ() + ")! I am now taking on the '" + capitalize(trait) + "' profession trait under my Villager role!");
             return true;
         }
         return false;
@@ -7937,12 +7966,12 @@ public class AiBotPlayer extends ServerPlayer {
             String trait = WORKSTATION_PROFESSIONS.get(bs.getBlock());
             if (trait == null) {
                 this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_NO, SoundSource.NEUTRAL, 1.0f, 1.0f);
-                sayInChat("My work table at (" + this.assignedWorkstationPos.getX() + ", " + this.assignedWorkstationPos.getY() + ", " + this.assignedWorkstationPos.getZ() + ") was removed! I am now unemployed until I find a new work table.");
+                sayRoutineInChat("My work table at (" + this.assignedWorkstationPos.getX() + ", " + this.assignedWorkstationPos.getY() + ", " + this.assignedWorkstationPos.getZ() + ") was removed! I am now unemployed until I find a new work table.");
                 this.assignedWorkstationPos = null;
                 this.botSubRole = "unemployed";
             } else if (!trait.equalsIgnoreCase(this.botSubRole)) {
                 this.botSubRole = trait;
-                sayInChat("My work table was upgraded to a " + bs.getBlock().getName().getString() + "! My sub-role trait is now " + capitalize(trait) + ".");
+                sayRoutineInChat("My work table was upgraded to a " + bs.getBlock().getName().getString() + "! My sub-role trait is now " + capitalize(trait) + ".");
             }
         }
 
@@ -8265,7 +8294,7 @@ public class AiBotPlayer extends ServerPlayer {
         VillageManager.registerHouse("Compound", vacantBed, vacantBed, babyName);
 
         this.lastBreedingTime = now;
-        sayInChat("A new baby companion was born into our colony! Welcoming baby " + baby.getPlainTextName() + " to the village (Parents: " + this.getPlainTextName() + " & " + partner.getPlainTextName() + ")!");
+        sayRoutineInChat("A new baby companion was born into our colony! Welcoming baby " + baby.getPlainTextName() + " to the village (Parents: " + this.getPlainTextName() + " & " + partner.getPlainTextName() + ")!");
         BotPersistence.saveAll(sl.getServer());
         return true;
     }
