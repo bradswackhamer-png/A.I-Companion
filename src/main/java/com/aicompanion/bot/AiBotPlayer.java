@@ -151,6 +151,7 @@ public class AiBotPlayer extends ServerPlayer {
     private final List<String> farmAllowedCrops = new ArrayList<>();
     private boolean farmAllowTill = true;
     private boolean autoCompactWheatToHay = true;
+    private boolean autoCraftWheatToBread = false;
     private int maxSeedsToKeepOnHand = 32;
     private int maxSeedsInChest = 64;
     private boolean autoCompostExcessSeeds = true;
@@ -580,6 +581,8 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized boolean isFarmAllowTill() { return this.farmAllowTill; }
     public synchronized boolean isAutoCompactWheatToHay() { return this.autoCompactWheatToHay; }
     public synchronized void setAutoCompactWheatToHay(boolean autoCompact) { this.autoCompactWheatToHay = autoCompact; }
+    public synchronized boolean isAutoCraftWheatToBread() { return this.autoCraftWheatToBread; }
+    public synchronized void setAutoCraftWheatToBread(boolean autoCraft) { this.autoCraftWheatToBread = autoCraft; }
     public synchronized int getMaxSeedsToKeepOnHand() { return this.maxSeedsToKeepOnHand; }
     public synchronized void setMaxSeedsToKeepOnHand(int max) { this.maxSeedsToKeepOnHand = Math.max(0, max); }
     public synchronized int getMaxSeedsInChest() { return this.maxSeedsInChest; }
@@ -2344,6 +2347,11 @@ public class AiBotPlayer extends ServerPlayer {
         int desiredCount = Math.max(1, action.count);
         int craftedTotal = 0;
 
+        BlockPos tablePos = findNearestBlockType(Blocks.CRAFTING_TABLE, 6);
+        if (tablePos != null) {
+            lookAtPos(Vec3.atCenterOf(tablePos));
+        }
+
         for (int i = 0; i < desiredCount; i++) {
             if (craftSingleItemSmart(query)) {
                 craftedTotal++;
@@ -2353,6 +2361,7 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         if (craftedTotal > 0) {
+            broadcastSwing();
             sayInChat("Crafted " + craftedTotal + "x " + query + "!");
         } else {
             sayInChat("I don't have enough materials in my inventory to craft " + query + ".");
@@ -2568,6 +2577,35 @@ public class AiBotPlayer extends ServerPlayer {
                 break;
             }
         }
+    }
+
+    public int craftWheatIntoBread() {
+        return craftWheatIntoBread(Integer.MAX_VALUE);
+    }
+
+    public int craftWheatIntoBread(int maxBread) {
+        int wheatCount = countMatching(s -> s.is(Items.WHEAT));
+        int breadToCraft = Math.min(maxBread, wheatCount / 3);
+        if (breadToCraft <= 0) return 0;
+
+        BlockPos tablePos = findNearestBlockType(Blocks.CRAFTING_TABLE, 6);
+        if (tablePos != null) {
+            lookAtPos(Vec3.atCenterOf(tablePos));
+        }
+
+        int crafted = 0;
+        for (int i = 0; i < breadToCraft; i++) {
+            if (consumeMatching(s -> s.is(Items.WHEAT), 3)) {
+                giveToSelf(new ItemStack(Items.BREAD, 1));
+                crafted++;
+            } else {
+                break;
+            }
+        }
+        if (crafted > 0) {
+            broadcastSwing();
+        }
+        return crafted;
     }
 
     public int compactWheatInInventory() {
@@ -3684,8 +3722,10 @@ public class AiBotPlayer extends ServerPlayer {
     private void tickPassiveFarmer() {
         if (this.tickCount % 20 != 0) return;
 
-        // Auto-compact wheat to hay bales to save inventory and chest space
-        if (this.autoCompactWheatToHay && countMatching(s -> s.is(Items.WHEAT)) >= 9) {
+        // Auto-craft wheat to bread or hay bales to save inventory and chest space
+        if (this.autoCraftWheatToBread && countMatching(s -> s.is(Items.WHEAT)) >= 3) {
+            craftWheatIntoBread();
+        } else if (this.autoCompactWheatToHay && countMatching(s -> s.is(Items.WHEAT)) >= 9) {
             compactWheatInInventory();
         }
 
@@ -5876,8 +5916,10 @@ public class AiBotPlayer extends ServerPlayer {
         if (container == null) return 0;
         lookAtPos(Vec3.atCenterOf(chestPos));
 
-        // Auto-compact wheat to hay bales before storing to maximize chest space
-        if (this.autoCompactWheatToHay) {
+        // Auto-craft wheat to bread or hay bales before storing to maximize chest space
+        if (this.autoCraftWheatToBread) {
+            craftWheatIntoBread();
+        } else if (this.autoCompactWheatToHay) {
             compactWheatInInventory();
         }
 
@@ -6874,10 +6916,11 @@ public class AiBotPlayer extends ServerPlayer {
 
         boolean mentionsWheat = lower.contains("wheat") || lower.contains("wheet");
         boolean mentionsHay = lower.contains("hay") || lower.contains("bale");
+        boolean mentionsBread = lower.contains("bread") || lower.contains("loaf") || lower.contains("loaves");
         boolean mentionsCompost = lower.contains("compost") || lower.contains("fertiliz");
         boolean mentionsSeed = lower.contains("seed");
         boolean mentionsCompact = lower.contains("combine") || lower.contains("craft") || lower.contains("turn")
-                || lower.contains("compact") || lower.contains("make") || lower.contains("compress");
+                || lower.contains("compact") || lower.contains("make") || lower.contains("compress") || lower.contains("bake");
 
         boolean isNegation = lower.contains("stop") || lower.contains("don't") || lower.contains("dont")
                 || lower.contains("do not") || lower.contains("never") || lower.contains("disable")
@@ -6885,21 +6928,55 @@ public class AiBotPlayer extends ServerPlayer {
                 || lower.contains("keep wheat") || lower.contains("keep as wheat") || lower.contains("as wheat")
                 || lower.contains("breed with") || lower.contains("need wheat");
 
-        boolean isHayCommand = (mentionsWheat && mentionsHay) || (mentionsHay && mentionsCompact)
+        boolean isBreadCommand = mentionsBread;
+        boolean isHayCommand = ((mentionsWheat && mentionsHay) || (mentionsHay && mentionsCompact)
                 || (mentionsWheat && lower.contains("space")) || lower.contains("combine wheat") || lower.contains("compact wheat")
                 || lower.contains("combine the wheat") || lower.contains("wheat into hay")
                 || lower.contains("hay bale") || lower.contains("hay bales")
-                || (mentionsWheat && (lower.contains("breed") || lower.contains("cow") || lower.contains("sheep")));
-        boolean isUncompactCommand = lower.contains("uncraft hay") || lower.contains("turn hay") || lower.contains("convert hay") || lower.contains("hay to wheat") || lower.contains("hay into wheat");
+                || (mentionsWheat && (lower.contains("breed") || lower.contains("cow") || lower.contains("sheep"))))
+                && !mentionsBread;
+        boolean isUncompactCommand = (lower.contains("uncraft hay") || lower.contains("turn hay") || lower.contains("convert hay") || lower.contains("hay to wheat") || lower.contains("hay into wheat")) && !mentionsBread;
         boolean isCompostCommand = mentionsCompost || (mentionsSeed && (lower.contains("keep") || lower.contains("chest") || lower.contains("hand") || lower.contains("only") || lower.contains("rest")));
 
-        if (!isHayCommand && !isUncompactCommand && !isCompostCommand) {
+        if (!isHayCommand && !isUncompactCommand && !isCompostCommand && !isBreadCommand) {
             return false;
         }
 
         StringBuilder reply = new StringBuilder();
 
-        // 1. Process wheat to hay compaction request
+        // 1. Process bread crafting request
+        if (isBreadCommand) {
+            if (isNegation) {
+                this.autoCraftWheatToBread = false;
+                reply.append("Understood! I will STOP crafting wheat into bread and keep wheat as raw wheat.");
+            } else {
+                this.autoCraftWheatToBread = true;
+                this.autoCompactWheatToHay = false;
+
+                int breadToCraft = Integer.MAX_VALUE;
+                java.util.regex.Matcher m = java.util.regex.Pattern.compile("\\b(\\d+)\\b").matcher(lower);
+                if (m.find()) {
+                    try {
+                        breadToCraft = Math.max(1, Integer.parseInt(m.group(1)));
+                    } catch (NumberFormatException ignored) {}
+                }
+
+                BlockPos tablePos = findNearestBlockType(Blocks.CRAFTING_TABLE, 8);
+                if (tablePos != null) {
+                    lookAtPos(Vec3.atCenterOf(tablePos));
+                }
+
+                int crafted = craftWheatIntoBread(breadToCraft);
+                if (crafted > 0) {
+                    reply.append("Crafted ").append(crafted).append("x bread right now! I will continue turning harvested wheat into bread.");
+                } else {
+                    int wheatCount = countMatching(s -> s.is(Items.WHEAT));
+                    reply.append("Understood! I will turn harvested wheat into bread. Currently I have ").append(wheatCount).append("x wheat in my inventory (need at least 3 per loaf).");
+                }
+            }
+        }
+
+        // 2. Process wheat to hay compaction request
         if (isHayCommand) {
             if (isNegation) {
                 this.autoCompactWheatToHay = false;
@@ -6996,10 +7073,15 @@ public class AiBotPlayer extends ServerPlayer {
                 this.addLearnedRecipe(recipe);
             }
 
-            // If it's wheat into hay, enable autoCompactWheatToHay automatically
+            // If it's wheat into hay or bread, configure auto crafting
             if (recipe.resultItemId.contains("hay") && recipe.ingredients.containsKey("wheat")) {
                 this.autoCompactWheatToHay = true;
+                this.autoCraftWheatToBread = false;
                 compactWheatInInventory();
+            } else if (recipe.resultItemId.contains("bread") && recipe.ingredients.containsKey("wheat")) {
+                this.autoCraftWheatToBread = true;
+                this.autoCompactWheatToHay = false;
+                craftWheatIntoBread();
             }
 
             sayInChat("Learned new recipe for '" + recipe.resultItemId + "' (" + recipe.toString() + ")! I will know how to craft this next time (" + (isGlobal ? "Global" : "Personal") + ").");

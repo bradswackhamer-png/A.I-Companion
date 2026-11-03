@@ -56,7 +56,18 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🔇 Silent Background Work & Bot Jibberish / Mute Toggles *(New in v1.2.24)*
+### 🍞 Farmer Wheat-to-Bread Auto-Crafting & Precise Crafting Parser *(New in v1.2.25)*
+* **Conversational Bread Crafting & Auto-Baking for Farmers**:
+  * Tell your farmer companions `"use this crafting table to turn your wheat into bread"`, `"craft bread"`, `"turn your wheat into bread"`, `"make bread"`, or `"bake bread"`, and they will immediately bake bread from their harvested wheat (3 wheat per loaf) and configure their farm routine to bake bread instead of compacting wheat into hay bales.
+  * Toggle wheat-to-bread auto-crafting anytime with `/bot farm autobread <botName> <true|false>`, or via natural chat (`"stop crafting bread"` / `"do not combine wheat into hay"`).
+* **Fixed Offline Fallback Crafting Engine**:
+  * Fixed an issue in the offline tactical engine where craft requests for unlisted items (such as bread, shields, tools, or armor) silently defaulted to crafting a `wooden_pickaxe`.
+  * Fixed a workstation parsing bug where mentioning `"crafting table"` in an instruction (e.g. `"use this crafting table to turn your wheat into bread"`) caused the companion to attempt to craft a crafting table rather than the intended bread item.
+  * Companions now turn to face nearby crafting tables and play arm-swing animations while crafting.
+
+---
+
+### 🔇 Silent Background Work & Bot Jibberish / Mute Toggles *(v1.2.24)*
 * **Background Status Chatter ("Jibberish") Disabled by Default**:
   * Autonomous background status messages—such as composting surplus seeds (`"Composted 1x surplus seeds into the composter..."`), depositing crops or logs into chests, grabbing hoes/seeds/breeding food, passive animal feeding/culling, and workstation discovery announcements—are now **OFF by default** (`botChatter = false`) so companions work silently without spamming chat.
 * **Instant Slash Commands & Natural Chat Toggles**:

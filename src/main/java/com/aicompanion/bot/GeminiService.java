@@ -623,23 +623,99 @@ public class GeminiService {
                 actions.add(new BotAction("GIVE", speakerName, target, count));
             }
             res.reply = "On it! Mining " + count + "x " + target + " for you.";
-        } else if (lower.contains("craft") || lower.contains("make")) {
-            String item = "wooden_pickaxe";
-            if (lower.contains("stone pickaxe") || lower.contains("stone_pickaxe")) item = "stone_pickaxe";
-            else if (lower.contains("iron pickaxe") || lower.contains("iron_pickaxe")) item = "iron_pickaxe";
-            else if (lower.contains("stone sword") || lower.contains("stone_sword")) item = "stone_sword";
-            else if (lower.contains("iron sword") || lower.contains("iron_sword")) item = "iron_sword";
-            else if (lower.contains("torch")) item = "torch";
-            else if (lower.contains("plank")) item = "oak_planks";
-            else if (lower.contains("stick")) item = "stick";
-            else if (lower.contains("chest")) item = "chest";
-            else if (lower.contains("furnace")) item = "furnace";
-            else if (lower.contains("table")) item = "crafting_table";
-            actions.add(new BotAction("CRAFT", item, item, count));
-            if (lower.contains("bring") || lower.contains("give")) {
-                actions.add(new BotAction("GIVE", speakerName, item, count));
+        } else if (lower.contains("craft") || lower.contains("make") || lower.contains("bake")
+                || ((lower.contains("turn") || lower.contains("convert")) && (lower.contains("into") || lower.contains("to")))) {
+            String item = null;
+            if (lower.contains("bread") || lower.contains("loaf") || lower.contains("loaves")) {
+                item = "bread";
+            } else if (lower.contains("hay") || lower.contains("bale")) {
+                item = "hay_block";
+            } else if (lower.contains("shield")) {
+                item = "shield";
+            } else if (lower.contains("torch")) {
+                item = "torch";
+            } else if (lower.contains("plank")) {
+                item = "oak_planks";
+            } else if (lower.contains("stick")) {
+                item = "stick";
+            } else if (lower.contains("chest")) {
+                item = "chest";
+            } else if (lower.contains("furnace")) {
+                item = "furnace";
+            } else if ((lower.contains("table") || lower.contains("crafting_table"))
+                    && !lower.contains("use") && !lower.contains("using")
+                    && !lower.contains("on the table") && !lower.contains("at the table")
+                    && !lower.contains("this crafting table") && !lower.contains("the crafting table")) {
+                item = "crafting_table";
+            } else if (lower.contains("pickaxe") || lower.contains("pick")) {
+                if (lower.contains("diamond")) item = "diamond_pickaxe";
+                else if (lower.contains("iron")) item = "iron_pickaxe";
+                else if (lower.contains("stone")) item = "stone_pickaxe";
+                else if (lower.contains("gold")) item = "golden_pickaxe";
+                else item = "wooden_pickaxe";
+            } else if (lower.contains("sword")) {
+                if (lower.contains("diamond")) item = "diamond_sword";
+                else if (lower.contains("iron")) item = "iron_sword";
+                else if (lower.contains("stone")) item = "stone_sword";
+                else if (lower.contains("gold")) item = "golden_sword";
+                else item = "wooden_sword";
+            } else if (lower.contains("axe")) {
+                if (lower.contains("diamond")) item = "diamond_axe";
+                else if (lower.contains("iron")) item = "iron_axe";
+                else if (lower.contains("stone")) item = "stone_axe";
+                else if (lower.contains("gold")) item = "golden_axe";
+                else item = "wooden_axe";
+            } else if (lower.contains("shovel") || lower.contains("spade")) {
+                if (lower.contains("diamond")) item = "diamond_shovel";
+                else if (lower.contains("iron")) item = "iron_shovel";
+                else if (lower.contains("stone")) item = "stone_shovel";
+                else item = "wooden_shovel";
+            } else if (lower.contains("hoe")) {
+                if (lower.contains("diamond")) item = "diamond_hoe";
+                else if (lower.contains("iron")) item = "iron_hoe";
+                else if (lower.contains("stone")) item = "stone_hoe";
+                else item = "wooden_hoe";
+            } else if (lower.contains("helmet") || lower.contains("chestplate") || lower.contains("leggings") || lower.contains("boots")) {
+                String mat = lower.contains("diamond") ? "diamond" : "iron";
+                String piece = lower.contains("helmet") ? "helmet" : lower.contains("chestplate") ? "chestplate" : lower.contains("leggings") ? "leggings" : "boots";
+                item = mat + "_" + piece;
+            } else if (lower.contains("shears")) {
+                item = "shears";
+            } else if (lower.contains("bucket")) {
+                item = "bucket";
+            } else if (lower.contains("composter")) {
+                item = "composter";
+            } else if (lower.contains("bed")) {
+                item = "white_bed";
+            } else if (lower.contains("bow")) {
+                item = "bow";
+            } else if (lower.contains("arrow")) {
+                item = "arrow";
+            } else {
+                java.util.regex.Matcher craftTarget = java.util.regex.Pattern.compile(
+                        "(?:craft|make|bake|turn(?:\\s+\\w+)?\\s+into|convert(?:\\s+\\w+)?\\s+into)\\s+(?:a\\s+|an\\s+|the\\s+|some\\s+)?([a-z0-9_]+)").matcher(lower);
+                if (craftTarget.find()) {
+                    String cand = craftTarget.group(1).trim();
+                    if (!cand.equals("a") && !cand.equals("an") && !cand.equals("the") && !cand.equals("some")
+                            && !cand.equals("this") && !cand.equals("table") && !cand.equals("me") && !cand.equals("it")) {
+                        item = cand;
+                    }
+                }
             }
-            res.reply = "Crafting " + count + "x " + item + "!";
+
+            if (item != null) {
+                int craftCount = count;
+                if (lower.contains("all") || lower.contains("into bread") || lower.contains("into hay") || lower.contains("everything")) {
+                    craftCount = 64;
+                }
+                actions.add(new BotAction("CRAFT", item, item, craftCount));
+                if (lower.contains("bring") || lower.contains("give")) {
+                    actions.add(new BotAction("GIVE", speakerName, item, craftCount));
+                }
+                res.reply = "Crafting " + (craftCount >= 64 ? "all" : (craftCount + "x")) + " " + item + "!";
+            } else {
+                res.reply = "What would you like me to craft? You can tell me to craft bread, tools, torches, chests, or gear!";
+            }
         } else if (lower.contains("give") || lower.contains("drop") || lower.contains("toss")) {
             String item = "all";
             if (lower.contains("log") || lower.contains("wood")) item = "log";

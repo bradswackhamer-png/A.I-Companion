@@ -4,6 +4,21 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.25] - 2026-11-03
+
+### Added
+- **Farmer Wheat-to-Bread Auto-Crafting & Conversational Bread Processing (`AiBotPlayer`, `BotPersistence`, `BotCommands`):**
+  - Added comprehensive conversational bread crafting for Farmer companions: commands like `"use this crafting table to turn your wheat into bread"`, `"craft bread"`, `"craft BREAD"`, `"turn your wheat into bread"`, `"make bread"`, and `"bake bread"` now immediately craft bread from inventory wheat (3 wheat per loaf) and configure the farmer to continue turning harvested wheat into bread.
+  - Added persistent `autoCraftWheatToBread` configuration allowing farmers to autonomously bake bread during harvesting and before chest storage instead of compacting wheat into hay bales.
+  - Added `/bot farm autobread <botName> <enabled>` command and updated `/bot inspect` to display `AutoBread: true/false`.
+  - Companions now automatically orient toward nearby crafting tables within reach and play authentic arm-swing animations when crafting items.
+
+### Fixed
+- **Offline / Fallback Crafting Parser Defaulting to Wooden Pickaxe (`GeminiService`, `AiBotPlayer`):**
+  - Fixed a critical bug in `GeminiService.buildLocalFallbackPlan` where any crafting command that did not match a tiny hardcoded list silently defaulted `item = "wooden_pickaxe"`, causing commands like `"craft bread"` or `"craft BREAD"` to announce `"Crafting 1x wooden_pickaxe!"` and fail.
+  - Fixed a false-positive workstation trigger where phrases like `"use this crafting table to turn your wheat into bread"` matched `"table"` and attempted to craft a `crafting_table` instead of `bread`. Crafting tables are now only crafted when explicitly requested as the product.
+  - Added comprehensive item recognition in the offline tactical engine for bread, hay bales, shields, shears, buckets, beds, bows, arrows, composter, tools and weapons across all tiers (wooden, stone, iron, golden, diamond), and armor sets (iron, diamond), plus dynamic regex target extraction without blindly defaulting to pickaxes.
+
 ## [1.2.24] - 2026-10-31
 
 ### Added

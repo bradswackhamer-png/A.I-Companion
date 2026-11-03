@@ -293,6 +293,13 @@ public class BotCommands {
                                         .then(Commands.argument("enabled", BoolArgumentType.bool())
                                                 .executes(ctx -> setAutoHayCmd(ctx,
                                                         StringArgumentType.getString(ctx, "botName"),
+                                                        BoolArgumentType.getBool(ctx, "enabled"))))))
+                        .then(Commands.literal("autobread")
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .then(Commands.argument("enabled", BoolArgumentType.bool())
+                                                .executes(ctx -> setAutoBreadCmd(ctx,
+                                                        StringArgumentType.getString(ctx, "botName"),
                                                         BoolArgumentType.getBool(ctx, "enabled")))))))
                 .then(Commands.literal("tp")
                         .executes(BotCommands::tpNearestBot)
@@ -1070,11 +1077,11 @@ public class BotCommands {
         String invStr = inv.length() == 0 ? "Empty" : inv.toString();
         StringBuilder extra = new StringBuilder();
         if (bot.getFarmOriginPos() != null) {
-            extra.append(String.format("Farm Zone: (%d, %d, %d) %dx%d | Crops: %s | AutoHay: %b | SeedsOnHand: %d | ChestSeeds: %d | CompostExcess: %b\n",
+            extra.append(String.format("Farm Zone: (%d, %d, %d) %dx%d | Crops: %s | AutoHay: %b | AutoBread: %b | SeedsOnHand: %d | ChestSeeds: %d | CompostExcess: %b\n",
                     bot.getFarmOriginPos().getX(), bot.getFarmOriginPos().getY(), bot.getFarmOriginPos().getZ(),
                     bot.getFarmRadiusX() * 2, bot.getFarmRadiusZ() * 2,
                     bot.getFarmAllowedCrops().isEmpty() ? "all" : String.join(", ", bot.getFarmAllowedCrops()),
-                    bot.isAutoCompactWheatToHay(), bot.getMaxSeedsToKeepOnHand(), bot.getMaxSeedsInChest(), bot.isAutoCompostExcessSeeds()));
+                    bot.isAutoCompactWheatToHay(), bot.isAutoCraftWheatToBread(), bot.getMaxSeedsToKeepOnHand(), bot.getMaxSeedsInChest(), bot.isAutoCompostExcessSeeds()));
         }
         if (bot.getRanchOriginPos() != null || bot.getBotRole().toLowerCase().contains("husbandry") || bot.getBotRole().toLowerCase().contains("ranch")) {
             extra.append(String.format("Livestock: %s (Food: %s, Cap: %d, Min: %d, CullAdults: %b)\n",
@@ -1104,8 +1111,8 @@ public class BotCommands {
         } else {
             extra.append("Stage: Adult\n");
         }
-        extra.append(String.format("Night Shelter: %b | AutoHay: %b | AbsoluteMode: %b\n",
-                bot.isNightShelterEnabled(), bot.isAutoCompactWheatToHay(), bot.isAbsoluteCommandMode()));
+        extra.append(String.format("Night Shelter: %b | AutoHay: %b | AutoBread: %b | AbsoluteMode: %b\n",
+                bot.isNightShelterEnabled(), bot.isAutoCompactWheatToHay(), bot.isAutoCraftWheatToBread(), bot.isAbsoluteCommandMode()));
 
         ctx.getSource().sendSuccess(() -> Component.literal("=== " + bot.getChatTag() + " Status ===\n")
                 .withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD)
@@ -1549,6 +1556,22 @@ public class BotCommands {
         bot.setAutoCompactWheatToHay(enabled);
         BotPersistence.saveAll(source.getServer());
         source.sendSuccess(() -> Component.literal("Auto wheat-to-hay compaction for " + bot.getPlainTextName() + " set to: " + enabled).withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int setAutoBreadCmd(CommandContext<CommandSourceStack> ctx, String botName, boolean enabled) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = BotManager.getBot(botName);
+        if (bot == null) {
+            source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+            return 0;
+        }
+        bot.setAutoCraftWheatToBread(enabled);
+        if (enabled) {
+            bot.setAutoCompactWheatToHay(false);
+        }
+        BotPersistence.saveAll(source.getServer());
+        source.sendSuccess(() -> Component.literal("Auto wheat-to-bread crafting for " + bot.getPlainTextName() + " set to: " + enabled).withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
 

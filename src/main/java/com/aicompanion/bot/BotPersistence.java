@@ -115,6 +115,7 @@ public class BotPersistence {
         public List<String> farmAllowedCrops = new ArrayList<>();
         public boolean farmAllowTill = true;
         public boolean autoCompactWheatToHay = true;
+        public boolean autoCraftWheatToBread = false;
         public int maxSeedsToKeepOnHand = 32;
         public int maxSeedsInChest = 64;
         public boolean autoCompostExcessSeeds = true;
@@ -356,6 +357,7 @@ public class BotPersistence {
                 data.farmAllowedCrops = bot.getFarmAllowedCrops();
                 data.farmAllowTill = bot.isFarmAllowTill();
                 data.autoCompactWheatToHay = bot.isAutoCompactWheatToHay();
+                data.autoCraftWheatToBread = bot.isAutoCraftWheatToBread();
                 data.maxSeedsToKeepOnHand = bot.getMaxSeedsToKeepOnHand();
                 data.maxSeedsInChest = bot.getMaxSeedsInChest();
                 data.autoCompostExcessSeeds = bot.isAutoCompostExcessSeeds();
@@ -600,6 +602,7 @@ public class BotPersistence {
                                 data.farmRadiusX, data.farmRadiusZ, data.farmAllowedCrops, data.farmAllowTill);
                     }
                     bot.setAutoCompactWheatToHay(data.autoCompactWheatToHay);
+                    bot.setAutoCraftWheatToBread(data.autoCraftWheatToBread);
                     bot.setMaxSeedsToKeepOnHand(data.maxSeedsToKeepOnHand > 0 ? data.maxSeedsToKeepOnHand : 32);
                     bot.setMaxSeedsInChest(data.maxSeedsInChest > 0 ? data.maxSeedsInChest : 64);
                     bot.setAutoCompostExcessSeeds(data.autoCompostExcessSeeds);
