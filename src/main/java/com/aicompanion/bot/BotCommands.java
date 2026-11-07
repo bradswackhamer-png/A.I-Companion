@@ -165,6 +165,27 @@ public class BotCommands {
                                 .executes(ctx -> removeBot(ctx, StringArgumentType.getString(ctx, "name")))))
                 .then(Commands.literal("list")
                         .executes(BotCommands::listBots))
+                .then(Commands.literal("chest")
+                        .then(Commands.literal("allow")
+                                .executes(ctx -> chestAllowCmd(ctx, "all"))
+                                .then(Commands.argument("tag", StringArgumentType.word())
+                                        .executes(ctx -> chestAllowCmd(ctx, StringArgumentType.getString(ctx, "tag")))))
+                        .then(Commands.literal("greenlight")
+                                .executes(ctx -> chestAllowCmd(ctx, "all"))
+                                .then(Commands.argument("tag", StringArgumentType.word())
+                                        .executes(ctx -> chestAllowCmd(ctx, StringArgumentType.getString(ctx, "tag")))))
+                        .then(Commands.literal("tag")
+                                .executes(ctx -> chestAllowCmd(ctx, "all"))
+                                .then(Commands.argument("tag", StringArgumentType.word())
+                                        .executes(ctx -> chestAllowCmd(ctx, StringArgumentType.getString(ctx, "tag")))))
+                        .then(Commands.literal("disallow")
+                                .executes(BotCommands::chestDisallowCmd))
+                        .then(Commands.literal("remove")
+                                .executes(BotCommands::chestDisallowCmd))
+                        .then(Commands.literal("untag")
+                                .executes(BotCommands::chestDisallowCmd))
+                        .then(Commands.literal("list")
+                                .executes(BotCommands::chestListCmd)))
                 .then(Commands.literal("status")
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
@@ -2359,6 +2380,67 @@ public class BotCommands {
 
         String summary = com.aicompanion.bot.learning.HiveMindBrain.getBrainStatsSummary();
         ctx.getSource().sendSuccess(() -> Component.literal(summary).withStyle(ChatFormatting.AQUA), false);
+
+        return 1;
+    }
+
+    private static int chestAllowCmd(CommandContext<CommandSourceStack> ctx, String tag) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.literal("Only in-game players can use this command."));
+            return 0;
+        }
+
+        BlockPos chestPos = AiBotPlayer.getPlayerTargetChest(player, 6.0);
+        if (chestPos == null) {
+            source.sendFailure(Component.literal("You must look directly at a chest or container within 6 blocks."));
+            return 0;
+        }
+
+        String actualTag = (tag != null && !tag.isBlank()) ? tag.toLowerCase(Locale.ROOT) : "all";
+        BotPersistence.tagChest(player.level().dimension(), chestPos, actualTag);
+        BotPersistence.saveAll(source.getServer());
+
+        source.sendSuccess(() -> Component.literal("Green-lit chest at " + chestPos.toShortString() + " with tag [" + actualTag + "]! Bots are authorized to use it for " + actualTag + ".").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int chestDisallowCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (!(source.getEntity() instanceof ServerPlayer player)) {
+            source.sendFailure(Component.literal("Only in-game players can use this command."));
+            return 0;
+        }
+
+        BlockPos chestPos = AiBotPlayer.getPlayerTargetChest(player, 6.0);
+        if (chestPos == null) {
+            source.sendFailure(Component.literal("You must look directly at a chest or container within 6 blocks."));
+            return 0;
+        }
+
+        boolean removed = BotPersistence.untagChest(player.level().dimension(), chestPos);
+        BotPersistence.saveAll(source.getServer());
+
+        if (removed) {
+            source.sendSuccess(() -> Component.literal("Removed green-light from chest at " + chestPos.toShortString() + ". Bots will no longer access it.").withStyle(ChatFormatting.YELLOW), false);
+        } else {
+            source.sendFailure(Component.literal("Chest at " + chestPos.toShortString() + " was not green-lit."));
+        }
+        return 1;
+    }
+
+    private static int chestListCmd(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        List<BotPersistence.SavedChest> list = BotPersistence.getTaggedChestsForDimension(source.getLevel().dimension());
+        if (list.isEmpty()) {
+            source.sendSuccess(() -> Component.literal("No green-lit chests registered in this dimension. Tag one by looking at it and typing /bot chest allow [tag] or placing a [bot] sign!").withStyle(ChatFormatting.GRAY), false);
+            return 1;
+        }
+
+        source.sendSuccess(() -> Component.literal("=== Green-lit Bot Chests (" + list.size() + ") ===").withStyle(ChatFormatting.GOLD, ChatFormatting.BOLD), false);
+        for (BotPersistence.SavedChest sc : list) {
+            source.sendSuccess(() -> Component.literal(" - (" + sc.x + ", " + sc.y + ", " + sc.z + ") [" + sc.tag + "]").withStyle(ChatFormatting.AQUA), false);
+        }
         return 1;
     }
 }

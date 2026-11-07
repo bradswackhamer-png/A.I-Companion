@@ -1895,6 +1895,7 @@ public class AiBotPlayer extends ServerPlayer {
             }
         } else if (this.isSleeping()) {
             this.stopSleepInBed(false, true);
+            stepOffBedIfStandingOnIt();
         }
 
         // 1. Guard / Bodyguard: Automatically patrol compound / anchor or follow player, intercepting nearby monsters (never jumping fences!)
@@ -3189,7 +3190,9 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private boolean tickChestAction(BotAction action, boolean store) {
-        BlockPos chestPos = store ? findNearestAvailableContainerBlock(16) : findNearestContainerBlock(16);
+        BlockPos chestPos = (action.x != null && action.y != null && action.z != null)
+                ? new BlockPos(action.x, action.y, action.z)
+                : (store ? findNearestAvailableContainerBlock(16) : findNearestContainerBlock(16));
         if (chestPos == null) {
             sayInChat(store ? "I couldn't find an available chest with free space nearby." : "I couldn't find a chest or barrel nearby.");
             return true;
@@ -4825,11 +4828,13 @@ public class AiBotPlayer extends ServerPlayer {
         double dy = target.y - eye.y;
         double dz = target.z - eye.z;
         double horiz = Math.sqrt(dx * dx + dz * dz);
-        float yaw = (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
-        float pitch = (float) (-(Mth.atan2(dy, horiz) * (180.0 / Math.PI)));
-        this.setYRot(yaw);
-        this.setYHeadRot(yaw);
-        this.setXRot(pitch);
+        if (horiz >= 0.25) {
+            float yaw = (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
+            this.setYRot(yaw);
+            this.setYHeadRot(yaw);
+        }
+        float pitch = (float) (-(Mth.atan2(dy, Math.max(0.1, horiz)) * (180.0 / Math.PI)));
+        this.setXRot(Mth.clamp(pitch, -90.0f, 90.0f));
     }
 
     private void broadcastSwing() {
@@ -5245,10 +5250,115 @@ public class AiBotPlayer extends ServerPlayer {
         return false;
     }
 
+    public static @Nullable BlockPos getPlayerTargetChest(ServerPlayer player, double maxDist) {
+        if (player == null) return null;
+        Vec3 eye = player.getEyePosition();
+        Vec3 look = player.getViewVector(1.0f);
+        Vec3 reach = eye.add(look.scale(maxDist));
+        HitResult hit = player.level().clip(new ClipContext(eye, reach, ClipContext.Block.OUTLINE, ClipContext.Fluid.NONE, player));
+        if (hit.getType() == HitResult.Type.BLOCK && hit instanceof BlockHitResult bhr) {
+            BlockPos bp = bhr.getBlockPos();
+            if (player.level().getBlockEntity(bp) instanceof Container) {
+                return bp;
+            }
+        }
+        return null;
+    }
+
+    public @Nullable String getChestTag(BlockPos pos) {
+        if (pos == null || this.level() == null) return null;
+
+        // 1. Persistent saved chest tags
+        String savedTag = BotPersistence.getChestTag(this.level().dimension(), pos);
+        if (savedTag != null) return savedTag.toLowerCase(Locale.ROOT);
+
+        // 2. Custom name on container block entity
+        BlockEntity be = this.level().getBlockEntity(pos);
+        if (be instanceof net.minecraft.world.Nameable nameable && nameable.hasCustomName()) {
+            Component c = nameable.getCustomName();
+            if (c != null) {
+                String name = c.getString().toLowerCase(Locale.ROOT);
+                if (name.contains("bot") || name.contains("food") || name.contains("gear") || name.contains("farm")
+                        || name.contains("shared") || name.contains("supplies") || name.contains("storage") || name.contains("wheat") || name.contains("seed")) {
+                    return name;
+                }
+            }
+        }
+
+        // 3. Signs on top, below, or on sides
+        for (net.minecraft.core.Direction dir : net.minecraft.core.Direction.values()) {
+            BlockPos signPos = pos.relative(dir);
+            BlockEntity sbe = this.level().getBlockEntity(signPos);
+            if (sbe instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign) {
+                String tag = extractSignTag(sign);
+                if (tag != null) return tag;
+            }
+        }
+
+        return null;
+    }
+
+    private @Nullable String extractSignTag(net.minecraft.world.level.block.entity.SignBlockEntity sign) {
+        for (net.minecraft.world.level.block.entity.SignTextSlot slot : net.minecraft.world.level.block.entity.SignTextSlot.values()) {
+            net.minecraft.world.level.block.entity.SignText st = sign.getText(slot);
+            if (st != null) {
+                for (Component msg : st.getMessages(false)) {
+                    if (msg == null) continue;
+                    String lineText = msg.getString().toLowerCase(Locale.ROOT).trim();
+                    if (lineText.contains("[bot]") || lineText.contains("bot") || lineText.contains("food") || lineText.contains("gear")
+                            || lineText.contains("farm") || lineText.contains("crop") || lineText.contains("wheat") || lineText.contains("seed")
+                            || lineText.contains("shared") || lineText.contains("supplies") || lineText.contains("storage") || lineText.contains("deposit")) {
+                        return lineText;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    public boolean isChestAllowed(BlockPos pos, @Nullable String purpose) {
+        String tag = getChestTag(pos);
+        if (tag != null) {
+            if (purpose == null || purpose.isBlank() || "all".equalsIgnoreCase(purpose)) {
+                return true;
+            }
+            String p = purpose.toLowerCase(Locale.ROOT);
+            if (tag.contains("[bot]") || tag.contains("all") || tag.contains("shared") || tag.contains("storage") || tag.contains("supplies") || tag.contains("deposit")) {
+                return true;
+            }
+            if (p.contains("farm") || p.contains("crop") || p.contains("wheat") || p.contains("seed")) {
+                return tag.contains("farm") || tag.contains("crop") || tag.contains("wheat") || tag.contains("seed");
+            }
+            if (p.contains("food") || p.contains("eat")) {
+                return tag.contains("food") || tag.contains("farm") || tag.contains("bread") || tag.contains("crop");
+            }
+            if (p.contains("gear") || p.contains("tool") || p.contains("weapon") || p.contains("armor")) {
+                return tag.contains("gear") || tag.contains("tool") || tag.contains("armor") || tag.contains("weapon");
+            }
+            if (p.contains("wood") || p.contains("log") || p.contains("lumber")) {
+                return tag.contains("wood") || tag.contains("log") || tag.contains("lumber") || tag.contains("farm");
+            }
+            return tag.contains(p);
+        }
+
+        if (BotPersistence.hasAnyTaggedChests(this.level().dimension())) {
+            return false;
+        }
+        return true;
+    }
+
     public List<BlockPos> findAllNearbyContainers(int radius, boolean mustHaveSpace) {
+        return findAllNearbyContainers(radius, mustHaveSpace, null);
+    }
+
+    public List<BlockPos> findAllNearbyContainers(int radius, boolean mustHaveSpace, @Nullable String purpose) {
         BlockPos origin = this.blockPosition();
         List<BlockPos> results = new ArrayList<>();
         java.util.Set<BlockPos> seenDoubleChestHalves = new java.util.HashSet<>();
+
+        boolean hasAnyTaggedInRadius = false;
+        List<BlockPos> taggedResults = new ArrayList<>();
+        List<BlockPos> untaggedResults = new ArrayList<>();
 
         for (int dx = -radius; dx <= radius; dx++) {
             for (int dy = -4; dy <= 4; dy++) {
@@ -5271,22 +5381,42 @@ public class AiBotPlayer extends ServerPlayer {
                         if (mustHaveSpace && !containerHasAnyFreeSpace(c)) {
                             continue;
                         }
-                        results.add(pos.immutable());
+
+                        if (isChestAllowed(pos, purpose)) {
+                            String tag = getChestTag(pos);
+                            if (tag != null) {
+                                hasAnyTaggedInRadius = true;
+                                taggedResults.add(pos.immutable());
+                            } else {
+                                untaggedResults.add(pos.immutable());
+                            }
+                        }
                     }
                 }
             }
         }
-        results.sort(Comparator.comparingDouble(p -> this.distanceToSqr(Vec3.atCenterOf(p))));
-        return results;
+
+        List<BlockPos> candidates = (hasAnyTaggedInRadius || BotPersistence.hasAnyTaggedChests(this.level().dimension()))
+                ? taggedResults : (!taggedResults.isEmpty() ? taggedResults : untaggedResults);
+        candidates.sort(Comparator.comparingDouble(p -> this.distanceToSqr(Vec3.atCenterOf(p))));
+        return candidates;
     }
 
     private @Nullable BlockPos findNearestContainerBlock(int radius) {
-        List<BlockPos> list = findAllNearbyContainers(radius, false);
+        return findNearestContainerBlock(radius, null);
+    }
+
+    private @Nullable BlockPos findNearestContainerBlock(int radius, @Nullable String purpose) {
+        List<BlockPos> list = findAllNearbyContainers(radius, false, purpose);
         return list.isEmpty() ? null : list.get(0);
     }
 
     private @Nullable BlockPos findNearestAvailableContainerBlock(int radius) {
-        List<BlockPos> list = findAllNearbyContainers(radius, true);
+        return findNearestAvailableContainerBlock(radius, null);
+    }
+
+    private @Nullable BlockPos findNearestAvailableContainerBlock(int radius, @Nullable String purpose) {
+        List<BlockPos> list = findAllNearbyContainers(radius, true, purpose);
         return list.isEmpty() ? null : list.get(0);
     }
 
@@ -6289,23 +6419,50 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized boolean handleFarmerChatCommand(String text, @Nullable ServerPlayer speaker) {
         if (text == null || text.isBlank()) return false;
         String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        // Chest green-lighting / tagging command via chat
+        if (lower.contains("use this chest") || lower.contains("tag this chest") || lower.contains("greenlight this chest")
+                || lower.contains("green-light this chest") || lower.contains("allow this chest") || lower.contains("this chest is for")) {
+            BlockPos chestPos = (speaker != null) ? getPlayerTargetChest(speaker, 6.0) : findNearestContainerBlock(6);
+            if (chestPos != null) {
+                String tag = "all";
+                if (lower.contains("food") || lower.contains("eat")) tag = "food";
+                else if (lower.contains("gear") || lower.contains("tool") || lower.contains("armor") || lower.contains("weapon")) tag = "gear";
+                else if (lower.contains("farm") || lower.contains("crop") || lower.contains("wheat") || lower.contains("seed")) tag = "farm";
+                else if (lower.contains("wood") || lower.contains("log") || lower.contains("lumber")) tag = "wood";
+
+                BotPersistence.tagChest(this.level().dimension(), chestPos, tag);
+                sayInChat("Green-lit this chest at (" + chestPos.getX() + ", " + chestPos.getY() + ", " + chestPos.getZ() + ") with tag [" + tag + "]! Bots are authorized to use it for " + tag + ".");
+                return true;
+            } else {
+                sayInChat("Please look directly at the chest or container you want me to green-light!");
+                return true;
+            }
+        }
+
         if (lower.contains("tree") || lower.contains("wood") || lower.contains("log") || lower.contains("chop") || lower.contains("lumber")) {
             return false;
         }
 
         boolean mentionsWheat = lower.contains("wheat") || lower.contains("wheet");
         boolean mentionsHay = lower.contains("hay") || lower.contains("bale");
-        boolean mentionsBread = lower.contains("bread") || lower.contains("loaf") || lower.contains("loaves");
+        boolean mentionsBread = lower.contains("bread") || lower.contains("loaf") || lower.contains("loaves") || (lower.contains("break") && mentionsWheat);
         boolean mentionsCompost = lower.contains("compost") || lower.contains("fertiliz");
         boolean mentionsSeed = lower.contains("seed");
         boolean mentionsCompact = lower.contains("combine") || lower.contains("craft") || lower.contains("turn")
                 || lower.contains("compact") || lower.contains("make") || lower.contains("compress") || lower.contains("bake");
 
-        boolean isNegation = lower.contains("stop") || lower.contains("don't") || lower.contains("dont")
+        boolean isExplicitStop = lower.contains("stop") || lower.contains("don't") || lower.contains("dont")
                 || lower.contains("do not") || lower.contains("never") || lower.contains("disable")
-                || lower.contains("no more") || lower.contains("cease") || lower.contains("quit")
-                || lower.contains("keep wheat") || lower.contains("keep as wheat") || lower.contains("as wheat")
+                || lower.contains("no more") || lower.contains("cease") || lower.contains("quit");
+
+        boolean isNegation = isExplicitStop
+                || lower.contains("keep wheat") || lower.contains("keep as wheat") || lower.contains("leave as wheat")
                 || lower.contains("breed with") || lower.contains("need wheat");
+
+        if (mentionsBread && (lower.contains("make") || lower.contains("bake") || lower.contains("craft") || lower.contains("turn") || lower.contains("come")) && !isExplicitStop) {
+            isNegation = false;
+        }
 
         boolean isBreadCommand = mentionsBread;
         boolean isHayCommand = ((mentionsWheat && mentionsHay) || (mentionsHay && mentionsCompact)
@@ -6338,6 +6495,43 @@ public class AiBotPlayer extends ServerPlayer {
                     try {
                         breadToCraft = Math.max(1, Integer.parseInt(m.group(1)));
                     } catch (NumberFormatException ignored) {}
+                }
+
+                // Check if player is looking at a chest or mentions a chest or bot lacks wheat
+                boolean mentionedChest = lower.contains("chest") || lower.contains("barrel") || lower.contains("box") || lower.contains("storage");
+                BlockPos targetChest = null;
+                if (speaker != null) {
+                    targetChest = getPlayerTargetChest(speaker, 6.0);
+                }
+                if (targetChest == null && (mentionedChest || countMatching(s -> s.is(Items.WHEAT)) < 3)) {
+                    List<BlockPos> nearbyContainers = findAllNearbyContainers(16, false, "farm");
+                    if (nearbyContainers.isEmpty() && mentionedChest) {
+                        nearbyContainers = findAllNearbyContainers(16, false, null);
+                    }
+                    if (!nearbyContainers.isEmpty()) {
+                        targetChest = nearbyContainers.get(0);
+                    }
+                }
+
+                if (targetChest != null) {
+                    BotPersistence.tagChest(this.level().dimension(), targetChest, "all");
+                    Container cont = getContainerAt(targetChest);
+                    if (cont != null) {
+                        double distSq = this.distanceToSqr(Vec3.atCenterOf(targetChest));
+                        if (distSq > 9.0) {
+                            sayInChat("Green-lit this chest! Heading over to take wheat and make bread!");
+                            this.actionQueue.clear();
+                            this.actionQueue.add(new BotAction("CHEST_TAKE", "wheat", "wheat", Math.min(64, breadToCraft * 3), targetChest.getX(), targetChest.getY(), targetChest.getZ()));
+                            this.actionQueue.add(new BotAction("CRAFT", "bread", "bread", breadToCraft));
+                            this.absoluteCommandMode = true;
+                            return true;
+                        } else {
+                            int taken = takeItemsFromContainer(cont, "wheat", Math.min(64, breadToCraft * 3));
+                            if (taken > 0) {
+                                reply.append("Green-lit chest and took ").append(taken).append("x wheat! ");
+                            }
+                        }
+                    }
                 }
 
                 BlockPos tablePos = findNearestBlockType(Blocks.CRAFTING_TABLE, 8);
@@ -7297,10 +7491,13 @@ public class AiBotPlayer extends ServerPlayer {
             targetBed = getBedHeadPos(this.level(), targetBed);
             BlockState st = this.level().getBlockState(targetBed);
             // Verify block is still a bed, target is not blacklisted, and bed is not claimed/occupied by another
-            if (!(st.getBlock() instanceof BedBlock) || isTargetBlacklisted(targetBed) || isBedClaimedByOther(targetBed)) {
+            if (!(st.getBlock() instanceof BedBlock) || isBedClaimedByOther(targetBed)) {
                 if (!this.isBedManuallyAssigned) {
                     this.assignedBedPos = null;
                 }
+                this.currentShelterBedTarget = null;
+                targetBed = null;
+            } else if (isTargetBlacklisted(targetBed)) {
                 this.currentShelterBedTarget = null;
                 targetBed = null;
             }
@@ -7484,10 +7681,14 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         if (this.tickCount % 60 == 0) {
-            double angle = (this.tickCount * 23) % 360;
-            double r = 4.0 + (this.tickCount % 5);
-            double targetX = center.getX() + Math.cos(Math.toRadians(angle)) * r;
-            double targetZ = center.getZ() + Math.sin(Math.toRadians(angle)) * r;
+            if (isNightTime()) {
+                stopMovement();
+                return;
+            }
+            double angle = this.random.nextDouble() * 2 * Math.PI;
+            double r = 2.0 + this.random.nextDouble() * Math.min(8.0, Math.max(2.0, maxDist - 2.0));
+            double targetX = center.getX() + Math.cos(angle) * r;
+            double targetZ = center.getZ() + Math.sin(angle) * r;
             BlockPos targetPos = new BlockPos((int) targetX, center.getY(), (int) targetZ);
             BlockPos safeStand = (this.level() instanceof ServerLevel sl) ? findSafeDryRespawnPos(sl, targetPos, 3) : null;
             if (safeStand != null) {
@@ -7649,6 +7850,20 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         BlockPos workstation = this.assignedWorkstationPos;
+
+        if ("farmer".equalsIgnoreCase(this.botSubRole)) {
+            if (this.farmOriginPos == null) {
+                this.farmOriginPos = workstation;
+            }
+            BlockPos matureCrop = findNearestMatureCrop(this.farmRadiusX);
+            BlockPos bareFarmland = findNearestBareFarmland(this.farmRadiusX);
+            int depositable = getFarmerDepositableCropCount();
+            if (matureCrop != null || bareFarmland != null || depositable >= 16) {
+                tickPassiveFarmer();
+                return;
+            }
+        }
+
         double distSq = this.distanceToSqr(Vec3.atCenterOf(workstation));
         if (distSq > 4.0) {
             moveTowards(Vec3.atCenterOf(workstation), false);
@@ -7781,6 +7996,31 @@ public class AiBotPlayer extends ServerPlayer {
         }
     }
 
+    public void stepOffBedIfStandingOnIt() {
+        if (this.level() instanceof ServerLevel sl) {
+            BlockPos cur = this.blockPosition();
+            BlockState curState = sl.getBlockState(cur);
+            if (curState.getBlock() instanceof BedBlock) {
+                for (Direction dir : Direction.Plane.HORIZONTAL) {
+                    BlockPos adj = cur.relative(dir);
+                    BlockState adjState = sl.getBlockState(adj);
+                    BlockState belowState = sl.getBlockState(adj.below());
+                    if (adjState.getCollisionShape(sl, adj).isEmpty() && !belowState.getCollisionShape(sl, adj.below()).isEmpty()
+                            && !(adjState.getBlock() instanceof BedBlock)) {
+                        this.teleportTo(adj.getX() + 0.5, adj.getY(), adj.getZ() + 0.5);
+                        this.stopMovement();
+                        return;
+                    }
+                }
+                BlockPos safe = findSafeDryRespawnPos(sl, cur, 2);
+                if (safe != null) {
+                    this.teleportTo(safe.getX() + 0.5, safe.getY(), safe.getZ() + 0.5);
+                    this.stopMovement();
+                }
+            }
+        }
+    }
+
     public synchronized void tickPassiveVillager() {
         Monster threat = findNearestHostileThreatForVillager(12.0);
         if (threat != null) {
@@ -7795,19 +8035,25 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        if (dayTime < 2000L) {
-            if (this.tickCount % 80 == 0) {
-                this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 1.0f);
-            }
-            wanderAroundHomeOrAnchor(12.0);
-            return;
+        if (this.isSleeping()) {
+            this.stopSleepInBed(false, true);
+            stepOffBedIfStandingOnIt();
         }
 
-        if (dayTime >= 2000L && dayTime < 9000L) {
+        if (dayTime < 9000L) {
             if (this.isBaby) {
-                tickBabyVillagerPlay();
-            } else {
+                if (dayTime < 2000L) {
+                    wanderAroundHomeOrAnchor(12.0);
+                } else {
+                    tickBabyVillagerPlay();
+                }
+            } else if (this.assignedWorkstationPos != null || "farmer".equalsIgnoreCase(this.botSubRole)) {
                 tickVillagerWork();
+            } else {
+                if (this.tickCount % 80 == 0) {
+                    this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 1.0f);
+                }
+                wanderAroundHomeOrAnchor(12.0);
             }
             return;
         }

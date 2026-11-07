@@ -626,7 +626,8 @@ public class GeminiService {
         } else if (lower.contains("craft") || lower.contains("make") || lower.contains("bake")
                 || ((lower.contains("turn") || lower.contains("convert")) && (lower.contains("into") || lower.contains("to")))) {
             String item = null;
-            if (lower.contains("bread") || lower.contains("loaf") || lower.contains("loaves")) {
+            if (lower.contains("bread") || lower.contains("loaf") || lower.contains("loaves")
+                    || (lower.contains("break") && (lower.contains("wheat") || lower.contains("make") || lower.contains("craft")))) {
                 item = "bread";
             } else if (lower.contains("hay") || lower.contains("bale")) {
                 item = "hay_block";
@@ -638,7 +639,9 @@ public class GeminiService {
                 item = "oak_planks";
             } else if (lower.contains("stick")) {
                 item = "stick";
-            } else if (lower.contains("chest")) {
+            } else if (lower.contains("chest") && !lower.contains("this chest") && !lower.contains("the chest")
+                    && !lower.contains("in chest") && !lower.contains("from chest") && !lower.contains("front of")
+                    && !lower.contains("chest has") && !lower.contains("chest in") && !lower.contains("greenlight") && !lower.contains("tag chest")) {
                 item = "chest";
             } else if (lower.contains("furnace")) {
                 item = "furnace";

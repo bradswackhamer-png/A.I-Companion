@@ -4,6 +4,51 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.30] - 2026-11-07
+
+### Fixed
+- **Conversational Negation Override & Chest Bread Crafting (`AiBotPlayer`):**
+  - Resolved chat parsing issue where commands containing phrases like `"has wheat come make bread"` could be incorrectly classified as negation requests due to greedy substring matching.
+  - Affirmative action verbs (`make`, `bake`, `craft`, `turn`, `come`) for bread crafting now explicitly prevent negation triggers unless an explicit cancellation word (`stop`, `don't`, `never`, `cease`) is present.
+  - Strengthened container retrieval workflows so companions targeted with `"this chest in front of me has wheat come make bread"` reliably green-light the container, retrieve wheat, and bake bread without false cancellation replies.
+
+## [1.2.29] - 2026-11-07
+
+### Fixed
+- **Bed Spin & Destination Arrival Jitter (`BotPathfinder`, `AiBotPlayer`):**
+  - Fixed an issue where companions would spin rapidly in circles when waking up or standing on their beds and destinations.
+  - Added strict arrival thresholds to both `Navigator.steerBotDirectly` and `Navigator.tickMoveTowards` (`arrivalThresholdSq = Math.max(0.36, accuracy * accuracy)`). Once within arrival distance, companions cleanly stop forward acceleration (`zza = 0.0f, xxa = 0.0f`). Previously, `steerBotDirectly` continued applying forward drive (`zza = 0.8f`) even when horizontal distance to the destination was `0.0001` blocks, causing the companion to constantly overshoot its own center and flip yaw 180 degrees every single tick.
+  - Added a horizontal distance clearance threshold (`horiz >= 0.25`) to `lookAtPos` to eliminate indeterminate yaw flipping and wild head spinning when a companion looks at a block directly beneath them (such as a bed or workstation).
+- **Morning Wakeup Dismount & Immediate Villager Work Transition (`AiBotPlayer`):**
+  - Added `stepOffBedIfStandingOnIt()` called automatically when waking (`stopSleepInBed`), safely dismounting companions from the solid 0.5625-height `BedBlock` bounding box onto the adjacent floor and preventing collision clipping inside the bed block.
+  - Companions in villager mode who possess assigned workstations or the Farmer sub-role now transition immediately to their workstations (`tickVillagerWork()`) upon waking in the morning, rather than remaining trapped inside bedrooms wandering in circles until `dayTime = 2000L`.
+
+## [1.2.28] - 2026-11-07
+
+### Added
+- **Chest Green-Lighting & Tagging System (`BotPersistence`, `AiBotPlayer`, `BotCommands`):**
+  - Added authorization and tagging for chests and containers so players can designate exactly which containers companions are permitted to use for gear, food, crops, seeds, and general storage.
+  - Multi-tier detection supports persistent registry (`/bot chest <allow|greenlight|tag|disallow|remove|list> [tag]`), signs placed on or above containers containing `[bot]`, `bot`, `food`, `gear`, `farm`, `crop`, `wheat`, `seed`, `storage`, `shared`, or `supplies`, and container anvil custom names.
+  - Added natural chat green-lighting commands: looking at a chest and saying `"use this chest"`, `"tag this chest for food"`, or `"greenlight this chest"` immediately authorizes companions to use that chest.
+  - When green-lit/tagged chests exist in the world or search area, companions strictly restrict automated deposits and withdrawals to authorized chests, protecting personal player chests from unauthorized companion access.
+  - Enabled direct chest material pulling for conversational crafting: when instructed to bake bread from a chest (e.g. `"willow this chest in front of me has wheat come make bread"`), companions identify the targeted container, authorize it, retrieve wheat from the chest, and bake bread immediately.
+
+### Changed
+- **Villager Farmer Active Crop Routine (`AiBotPlayer`):**
+  - Companions in villager mode who acquire the Farmer trait from a composter now actively tend, harvest, and replant nearby crops during morning and afternoon work hours (`tickPassiveFarmer()`), using the composter workstation as the farm anchor before returning to compost excess seeds.
+
+### Fixed
+- **Bedtime Infinite Farm Circling & Premature Target Blacklisting (`BotPathfinder`, `AiBotPlayer`):**
+  - Fixed an issue where companions would endlessly spin in circles at the farm when it was time for bed.
+  - Companions no longer permanently forget their assigned beds (`assignedBedPos = null`) when temporary navigation obstructions or pathfinder delays occur; assigned beds remain persistent and are retried once clear.
+  - Removed the restrictive fence gate facing-axis check in `BotWalkNodeEvaluator.isNeighborValid` that rejected valid pathfinder nodes through fence gates and prevented companions from exiting fenced farm enclosures.
+  - Fixed `Navigator.unreachableTicks` incrementing on interactive targets (beds, workstations, chests) whose valid paths naturally terminate adjacent to the solid block. Increased stuck timeout to 60 ticks before temporary target avoidance.
+  - Replaced rigid trigonometric circle calculations in `wanderAroundHomeOrAnchor` with natural randomized offsets, and halted autonomous wander movement entirely during night shelter hours.
+- **Conversational "has wheat" Substring Negation Bug & Crafting Intent Parsing (`AiBotPlayer`, `GeminiService`):**
+  - Fixed a substring negation bug where saying `"this chest in front of me has wheat come make bread"` caused the word `"has wheat"` to match `"as wheat"` in the negation filter, falsely turning off bread auto-crafting.
+  - Fixed offline fallback parser in `GeminiService` falsely triggering chest crafting when players referenced an existing container (e.g. `"this chest"`, `"in chest"`, `"chest has"`).
+  - Added typo resilience for phrases like `"come make break"` when wheat or bread making is contextually referenced.
+
 ## [1.2.27] - 2026-11-07
 
 ### Fixed

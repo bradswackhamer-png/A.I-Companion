@@ -72,6 +72,24 @@ public class BotPersistence {
         }
     }
 
+    public static class SavedChest {
+        public int x;
+        public int y;
+        public int z;
+        public String dimension = "minecraft:overworld";
+        public String tag = "all";
+
+        public SavedChest() {}
+
+        public SavedChest(int x, int y, int z, String dimension, String tag) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+            this.dimension = dimension != null ? dimension : "minecraft:overworld";
+            this.tag = tag != null ? tag.toLowerCase(Locale.ROOT) : "all";
+        }
+    }
+
     public static class SavedItemStack {
         public String itemId = "";
         public int count = 1;
@@ -197,6 +215,7 @@ public class BotPersistence {
         public Map<String, SavedLocation> locations = new LinkedHashMap<>();
         public Map<String, SavedArea> areas = new LinkedHashMap<>();
         public Map<String, CustomBlueprint> blueprints = new LinkedHashMap<>();
+        public Map<String, SavedChest> chests = new LinkedHashMap<>();
         public List<String> globalMemories = new ArrayList<>();
         public List<LearnedRecipe> globalRecipes = new ArrayList<>();
         public com.aicompanion.bot.learning.HiveMindBrain.SavedBrainState hiveMindBrain = null;
@@ -304,6 +323,71 @@ public class BotPersistence {
         return new LinkedHashMap<>(SAVED_LOCATIONS);
     }
 
+    // Persistent tagged / green-lit chests allowed for bots (e.g. food, gear, farm, storage)
+    private static final Map<String, SavedChest> SAVED_CHESTS = new LinkedHashMap<>();
+
+    private static String chestKey(String dimension, int x, int y, int z) {
+        return (dimension != null ? dimension.toLowerCase(Locale.ROOT) : "minecraft:overworld") + "@" + x + "," + y + "," + z;
+    }
+
+    public static synchronized void tagChest(ResourceKey<Level> dimension, BlockPos pos, String tag) {
+        if (dimension == null || pos == null) return;
+        tagChest(dimension.identifier().toString(), pos.getX(), pos.getY(), pos.getZ(), tag);
+    }
+
+    public static synchronized void tagChest(String dimension, int x, int y, int z, String tag) {
+        String key = chestKey(dimension, x, y, z);
+        SAVED_CHESTS.put(key, new SavedChest(x, y, z, dimension, tag));
+    }
+
+    public static synchronized boolean untagChest(ResourceKey<Level> dimension, BlockPos pos) {
+        if (dimension == null || pos == null) return false;
+        return untagChest(dimension.identifier().toString(), pos.getX(), pos.getY(), pos.getZ());
+    }
+
+    public static synchronized boolean untagChest(String dimension, int x, int y, int z) {
+        String key = chestKey(dimension, x, y, z);
+        return SAVED_CHESTS.remove(key) != null;
+    }
+
+    public static synchronized String getChestTag(ResourceKey<Level> dimension, BlockPos pos) {
+        if (dimension == null || pos == null) return null;
+        String key = chestKey(dimension.identifier().toString(), pos.getX(), pos.getY(), pos.getZ());
+        SavedChest sc = SAVED_CHESTS.get(key);
+        return sc != null ? sc.tag : null;
+    }
+
+    public static synchronized boolean isChestTagged(ResourceKey<Level> dimension, BlockPos pos) {
+        return getChestTag(dimension, pos) != null;
+    }
+
+    public static synchronized boolean hasAnyTaggedChests(ResourceKey<Level> dimension) {
+        if (dimension == null) return !SAVED_CHESTS.isEmpty();
+        String dimStr = dimension.identifier().toString().toLowerCase(Locale.ROOT);
+        for (SavedChest sc : SAVED_CHESTS.values()) {
+            if (sc.dimension != null && sc.dimension.equalsIgnoreCase(dimStr)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static synchronized Map<String, SavedChest> getAllTaggedChests() {
+        return new LinkedHashMap<>(SAVED_CHESTS);
+    }
+
+    public static synchronized List<SavedChest> getTaggedChestsForDimension(ResourceKey<Level> dimension) {
+        List<SavedChest> list = new ArrayList<>();
+        if (dimension == null) return list;
+        String dimStr = dimension.identifier().toString().toLowerCase(Locale.ROOT);
+        for (SavedChest sc : SAVED_CHESTS.values()) {
+            if (sc.dimension != null && sc.dimension.equalsIgnoreCase(dimStr)) {
+                list.add(sc);
+            }
+        }
+        return list;
+    }
+
     private static File getSaveFile(MinecraftServer server) {
         Path worldDir = server.getWorldPath(LevelResource.ROOT);
         return worldDir.resolve("aicompanion_memory.json").toFile();
@@ -325,6 +409,7 @@ public class BotPersistence {
             store.locations.putAll(SAVED_LOCATIONS);
             store.areas.putAll(SAVED_AREAS);
             store.blueprints.putAll(SAVED_BLUEPRINTS);
+            store.chests.putAll(SAVED_CHESTS);
 
             for (AiBotPlayer bot : BotManager.getActiveBots()) {
                 SavedBotData data = new SavedBotData();
@@ -563,6 +648,11 @@ public class BotPersistence {
             SAVED_BLUEPRINTS.clear();
             if (store.blueprints != null) {
                 SAVED_BLUEPRINTS.putAll(store.blueprints);
+            }
+
+            SAVED_CHESTS.clear();
+            if (store.chests != null) {
+                SAVED_CHESTS.putAll(store.chests);
             }
 
             if (store.globalMemories != null) {

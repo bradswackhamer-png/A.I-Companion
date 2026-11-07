@@ -17,6 +17,7 @@ import net.minecraft.world.entity.EntityDimensions;
 import net.minecraft.world.entity.EntityTypes;
 import net.minecraft.world.entity.PathfinderMob;
 import net.minecraft.world.entity.Pose;
+import net.minecraft.world.Container;
 import net.minecraft.world.entity.ai.attributes.Attributes;
 import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
 import net.minecraft.world.entity.ai.navigation.PathNavigation;
@@ -103,31 +104,7 @@ public final class BotPathfinder {
 
         @Override
         protected boolean isNeighborValid(@Nullable Node neighbor, Node current) {
-            if (!super.isNeighborValid(neighbor, current) || neighbor == null) {
-                return false;
-            }
-            if (this.currentContext != null) {
-                int dx = neighbor.x - current.x;
-                int dz = neighbor.z - current.z;
-                if (dx != 0 ^ dz != 0) {
-                    Direction.Axis moveAxis = (dx != 0) ? Direction.Axis.X : Direction.Axis.Z;
-                    BlockPos curPos = new BlockPos(current.x, current.y, current.z);
-                    BlockState curState = this.currentContext.getBlockState(curPos);
-                    if (curState.getBlock() instanceof FenceGateBlock && curState.hasProperty(FenceGateBlock.FACING)) {
-                        if (curState.getValue(FenceGateBlock.FACING).getAxis() != moveAxis) {
-                            return false;
-                        }
-                    }
-                    BlockPos nextPos = new BlockPos(neighbor.x, neighbor.y, neighbor.z);
-                    BlockState nextState = this.currentContext.getBlockState(nextPos);
-                    if (nextState.getBlock() instanceof FenceGateBlock && nextState.hasProperty(FenceGateBlock.FACING)) {
-                        if (nextState.getValue(FenceGateBlock.FACING).getAxis() != moveAxis) {
-                            return false;
-                        }
-                    }
-                }
-            }
-            return true;
+            return super.isNeighborValid(neighbor, current) && neighbor != null;
         }
 
         @Override
@@ -363,6 +340,14 @@ public final class BotPathfinder {
                 this.lastTargetBlock = goalBlock.immutable();
                 this.lastRecomputeTick = this.bot.tickCount;
                 if (newPath != null) {
+                    if (newPath.getNodeCount() > 1 && newPath.getNextNodeIndex() == 0) {
+                        Node firstNode = newPath.getNode(0);
+                        double dx = this.bot.getX() - (firstNode.x + 0.5);
+                        double dz = this.bot.getZ() - (firstNode.z + 0.5);
+                        if ((dx * dx + dz * dz) < 1.44) {
+                            newPath.advance();
+                        }
+                    }
                     nav.moveTo(newPath, 1.0);
                 } else {
                     nav.stop();
@@ -373,11 +358,17 @@ public final class BotPathfinder {
 
             // Check if a nearby target (<= 28 blocks, e.g. inside a sealed building) is unreachable according to Vanilla PathFinder
             int manhattanToGoal = this.bot.blockPosition().distManhattan(goalBlock);
-            if (manhattanToGoal <= 28 && (path == null || (!path.canReach() && path.getDistToTarget() > Math.max(1.5f, accuracy + 0.5f)))) {
+            boolean isInteractiveTarget = level.getBlockState(rawGoalBlock).getBlock() instanceof BedBlock
+                    || level.getBlockState(rawGoalBlock).getBlock() instanceof net.minecraft.world.level.block.ChestBlock
+                    || level.getBlockState(rawGoalBlock).getBlock() instanceof net.minecraft.world.level.block.ComposterBlock
+                    || level.getBlockEntity(rawGoalBlock) instanceof Container;
+            float maxAllowableDist = isInteractiveTarget ? 3.5f : Math.max(1.5f, accuracy + 0.5f);
+
+            if (manhattanToGoal <= 28 && (path == null || (!path.canReach() && path.getDistToTarget() > maxAllowableDist))) {
                 this.unreachableTicks++;
-                if (this.unreachableTicks >= 20) {
-                    this.bot.blacklistUnreachableTarget(rawGoalBlock, 600);
-                    this.bot.blacklistUnreachableTarget(goalBlock, 600);
+                if (this.unreachableTicks >= 60) {
+                    this.bot.blacklistUnreachableTarget(rawGoalBlock, 400);
+                    this.bot.blacklistUnreachableTarget(goalBlock, 400);
                     this.bot.stopMovement();
                     return;
                 }
@@ -427,8 +418,13 @@ public final class BotPathfinder {
             // Close any doors we passed once path finishes
             closePassedDoorsAndGates(level, null);
 
-            // If within close reach of goal or when path just finished at destination, step toward target if clear
-            if (horizDistSqToTarget <= 4.0 && hasDirectStepClearance(level, this.bot, target)) {
+            // Arrival check: if within close reach of the goal, stop completely!
+            double arrivalThresholdSq = Math.max(0.36, (double) (accuracy * accuracy));
+            if (horizDistSqToTarget <= arrivalThresholdSq) {
+                this.bot.zza = 0.0f;
+                this.bot.xxa = 0.0f;
+                this.bot.setJumping(this.bot.isInWater() || this.bot.isInLava());
+            } else if (horizDistSqToTarget <= 4.0 && hasDirectStepClearance(level, this.bot, target)) {
                 steerBotDirectly(target, sprint);
             } else {
                 this.bot.zza = 0.0f;
@@ -438,19 +434,23 @@ public final class BotPathfinder {
         }
 
         private void steerBotDirectly(Vec3 waypoint, boolean sprint) {
-            Vec3 eye = this.bot.getEyePosition();
-            double dx = waypoint.x - eye.x;
-            double dy = (waypoint.y + this.bot.getEyeHeight()) - eye.y;
-            double dz = waypoint.z - eye.z;
+            Vec3 pos = this.bot.position();
+            double dx = waypoint.x - pos.x;
+            double dy = waypoint.y - pos.y;
+            double dz = waypoint.z - pos.z;
             double horiz = Math.sqrt(dx * dx + dz * dz);
-            if (horiz > 1.0E-4) {
-                float yaw = (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
-                float pitch = (float) (-(Mth.atan2(dy, horiz) * (180.0 / Math.PI)));
-                this.bot.setYRot(yaw);
-                this.bot.setYHeadRot(yaw);
-                this.bot.setYBodyRot(yaw);
-                this.bot.setXRot(Mth.clamp(pitch, -45.0f, 45.0f));
+            if (horiz < 0.25) {
+                // Arrived at waypoint! Stop forward movement to prevent overshoot and 180-degree yaw spinning
+                this.bot.zza = 0.0f;
+                this.bot.xxa = 0.0f;
+                return;
             }
+            float yaw = (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
+            float pitch = (float) (-(Mth.atan2(dy, horiz) * (180.0 / Math.PI)));
+            this.bot.setYRot(yaw);
+            this.bot.setYHeadRot(yaw);
+            this.bot.setYBodyRot(yaw);
+            this.bot.setXRot(Mth.clamp(pitch, -45.0f, 45.0f));
             this.bot.setSprinting(sprint);
             this.bot.zza = sprint ? 1.0f : 0.8f;
             this.bot.xxa = 0.0f;

@@ -56,7 +56,44 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🛏️ Exclusive Bed Reservation & Anti-Bed Sharing System *(New in v1.2.27)*
+### 🥖 Conversational Negation Override & Chest Bread Crafting *(New in v1.2.30)*
+* **Precision Intent Parsing for Food & Bread**:
+  * Fixed an issue where natural phrases containing words like `"has wheat come make bread"` were incorrectly matched by negation filters as requests to stop crafting bread.
+  * Explicit craft verbs (`make`, `bake`, `craft`, `turn`, `come`) now prevent false cancellation responses unless an explicit stop command (`stop`, `don't`, `never`, `cease`) is specified.
+  * Direct conversational chest interaction (`"this chest in front of me has wheat come make bread"`) seamlessly green-lights the container, pulls wheat, and crafts bread.
+
+---
+
+### 🛏️ Bed Spin & Destination Arrival Stabilization *(v1.2.29)*
+* **Zero Spin at Waypoints & Destinations**:
+  * Fixed an issue where companions would spin rapidly in circles when waking up or standing on their beds and workstations.
+  * Added clean arrival thresholds to `steerBotDirectly` and `tickMoveTowards` (`arrivalThresholdSq = Math.max(0.36, accuracy * accuracy)`), instantly halting forward acceleration once reached rather than driving forward against floating-point centers.
+  * Added minimum distance threshold to `lookAtPos` to eliminate indeterminate yaw flipping when looking down at blocks directly beneath the bot.
+* **Morning Wakeup Dismount & Immediate Villager Work Transition**:
+  * Companions safely dismount from the solid `BedBlock` bounding box onto the adjacent floor upon waking (`stepOffBedIfStandingOnIt`).
+  * Villagers with workstations or the Farmer sub-role now transition immediately to their workstations upon morning waking rather than remaining trapped inside bedrooms wandering in circles.
+
+---
+
+### 📦 Chest Green-Lighting & Tagging System *(v1.2.28)*
+* **Designated Container Authorization**:
+  * Protect your personal storage! Players can now green-light specific chests, barrels, and containers that companions are authorized to access for gear, food, crops, seeds, or general storage.
+  * When any tagged chests exist in the world or search area, companions strictly restrict automated deposits and withdrawals to authorized chests.
+* **Flexible Multi-Tier Chest Tagging**:
+  * **Commands**: Look at a chest within 6 blocks and type `/bot chest allow [tag]` (e.g. `food`, `gear`, `farm`, `all`), `/bot chest disallow`, or `/bot chest list`.
+  * **Signs**: Place a sign on or above the chest with text like `[bot]`, `[bot food]`, `[bot gear]`, `[bot farm]`, `[bot storage]`, or `[bot supplies]`.
+  * **Anvil Names**: Name the container in an anvil (e.g. *"Bot Chest"*, *"Bot Food"*, *"Bot Supplies"*).
+  * **Natural Voice Commands**: Look at a container and tell your companion `"use this chest"`, `"tag this chest for food"`, or `"willow this chest in front of me has wheat come make bread"`.
+* **Direct Chest Material Pulling & Bread Crafting**:
+  * When ordered to make bread from a designated or pointed-out chest, companions walk to the chest, retrieve wheat, orient to a nearby crafting table, and bake fresh loaves.
+
+### 🚜 Villager Farmer Work Routine & Bedtime Navigation Fixes *(v1.2.28)*
+* **Active Crop Farming for Villagers**: Companions with the Farmer trait (from composters) now actively harvest mature crops, till bare soil, and replant seeds during morning and afternoon work hours (`tickPassiveFarmer()`), using the composter workstation as the central farm anchor before returning to compost surplus seeds.
+* **Bedtime Navigation & Infinite Farm Circle Fix**: Fixed companions spinning in circles inside farm enclosures at bedtime. Assigned beds are no longer permanently cleared on temporary pathfinder delays, fence gate traversal through any placement axis is smoothly permitted, and interactive targets like beds and workstations are no longer blacklisted when path nodes terminate adjacent to the solid block.
+
+---
+
+### 🛏️ Exclusive Bed Reservation & Anti-Bed Sharing System *(v1.2.27)*
 * **Zero Bed Sharing & Strict Bed Occupancy Checks**:
   * Companions will never share beds or sleep on top of one another.
   * `AiBotPlayer.startSleeping()` strictly checks multi-tier occupancy (`isBedOccupiedByOther`): verifying blockstate `BedBlock.OCCUPIED`, living entities sleeping within the full 2-block bed bounding box (head and foot), active companion bot sleep positions, and server player sleep positions.
