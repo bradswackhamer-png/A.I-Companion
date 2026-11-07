@@ -169,6 +169,7 @@ public class BotPersistence {
         public Integer bedX = null;
         public Integer bedY = null;
         public Integer bedZ = null;
+        public Boolean bedManuallyAssigned = false;
         public Integer houseX = null;
         public Integer houseY = null;
         public Integer houseZ = null;
@@ -418,6 +419,7 @@ public class BotPersistence {
                     data.bedX = bot.getAssignedBedPos().getX();
                     data.bedY = bot.getAssignedBedPos().getY();
                     data.bedZ = bot.getAssignedBedPos().getZ();
+                    data.bedManuallyAssigned = bot.isBedManuallyAssigned();
                 } else {
                     data.bedX = null;
                     data.bedY = null;
@@ -629,6 +631,9 @@ public class BotPersistence {
                     }
                     if (data.bedX != null && data.bedY != null && data.bedZ != null) {
                         bot.setAssignedBedPos(new BlockPos(data.bedX, data.bedY, data.bedZ));
+                    }
+                    if (data.bedManuallyAssigned != null) {
+                        bot.setBedManuallyAssigned(data.bedManuallyAssigned);
                     }
                     if (data.houseX != null && data.houseY != null && data.houseZ != null) {
                         bot.setAssignedHousePos(new BlockPos(data.houseX, data.houseY, data.houseZ));

@@ -1358,10 +1358,18 @@ public class BotCommands {
             source.sendFailure(Component.literal("No bed found at or near specified location. Stand near a bed or provide coordinates."));
             return 0;
         }
-        bot.setAssignedBedPos(target);
-        VillageManager.registerHouse("Compound", target, target, bot.getBotName());
+        BlockPos finalTarget = AiBotPlayer.getBedHeadPos(bot.level(), target);
+        for (AiBotPlayer other : BotManager.getActiveBots()) {
+            if (other != bot && other.getAssignedBedPos() != null && AiBotPlayer.isSameBed(other.level(), other.getAssignedBedPos(), finalTarget)) {
+                other.setAssignedBedPos(null);
+                other.setBedManuallyAssigned(false);
+            }
+        }
+        bot.setAssignedBedPos(finalTarget);
+        bot.setBedManuallyAssigned(true);
+        VillageManager.registerHouse("Compound", finalTarget, finalTarget, bot.getBotName());
         BotPersistence.saveAll(source.getServer());
-        BlockPos finalTarget = target;
+
         source.sendSuccess(() -> Component.literal("Assigned bed at (" + finalTarget.getX() + ", " + finalTarget.getY() + ", " + finalTarget.getZ() + ") to " + bot.getPlainTextName() + "!").withStyle(ChatFormatting.GREEN), false);
         return 1;
     }
@@ -1374,6 +1382,7 @@ public class BotCommands {
             return 0;
         }
         bot.setAssignedBedPos(null);
+        bot.setBedManuallyAssigned(false);
         BotPersistence.saveAll(source.getServer());
         source.sendSuccess(() -> Component.literal("Cleared assigned bed for " + bot.getPlainTextName() + ".").withStyle(ChatFormatting.YELLOW), false);
         return 1;
@@ -1398,7 +1407,15 @@ public class BotCommands {
             int radius = Math.max(area.getMaxX() - area.getMinX(), area.getMaxZ() - area.getMinZ()) / 2 + 2;
             BlockPos bedInArea = bot.findNearestBedBlockNear(areaCenter, radius);
             if (bedInArea != null) {
-                bot.setAssignedBedPos(bedInArea);
+                BlockPos headInArea = AiBotPlayer.getBedHeadPos(bot.level(), bedInArea);
+                for (AiBotPlayer other : BotManager.getActiveBots()) {
+                    if (other != bot && other.getAssignedBedPos() != null && AiBotPlayer.isSameBed(other.level(), other.getAssignedBedPos(), headInArea)) {
+                        other.setAssignedBedPos(null);
+                        other.setBedManuallyAssigned(false);
+                    }
+                }
+                bot.setAssignedBedPos(headInArea);
+                bot.setBedManuallyAssigned(true);
             }
             BotPersistence.saveAll(source.getServer());
             source.sendSuccess(() -> Component.literal("Assigned house area '" + area.name + "' to " + bot.getPlainTextName() + "!").withStyle(ChatFormatting.GREEN), false);
@@ -1408,7 +1425,15 @@ public class BotCommands {
             bot.setAssignedHousePos(pos);
             BlockPos bedNear = bot.findNearestBedBlockNear(pos, 8);
             if (bedNear != null) {
-                bot.setAssignedBedPos(bedNear);
+                BlockPos headNear = AiBotPlayer.getBedHeadPos(bot.level(), bedNear);
+                for (AiBotPlayer other : BotManager.getActiveBots()) {
+                    if (other != bot && other.getAssignedBedPos() != null && AiBotPlayer.isSameBed(other.level(), other.getAssignedBedPos(), headNear)) {
+                        other.setAssignedBedPos(null);
+                        other.setBedManuallyAssigned(false);
+                    }
+                }
+                bot.setAssignedBedPos(headNear);
+                bot.setBedManuallyAssigned(true);
             }
             BotPersistence.saveAll(source.getServer());
             source.sendSuccess(() -> Component.literal("Assigned house at (" + pos.getX() + ", " + pos.getY() + ", " + pos.getZ() + ") to " + bot.getPlainTextName() + "!").withStyle(ChatFormatting.GREEN), false);
@@ -1515,6 +1540,7 @@ public class BotCommands {
         bot.setAssignedWorkstationPos(target);
         bot.setBotSubRole(trait);
         BotPersistence.saveAll(source.getServer());
+
         BlockPos finalTarget = target;
         source.sendSuccess(() -> Component.literal("Assigned " + b.getName().getString() + " at (" + finalTarget.getX() + ", " + finalTarget.getY() + ", " + finalTarget.getZ() + ") to " + bot.getPlainTextName() + "! Profession: " + AiBotPlayer.capitalize(trait)).withStyle(ChatFormatting.GREEN), false);
         return 1;

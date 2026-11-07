@@ -4,6 +4,35 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.27] - 2026-11-07
+
+### Fixed
+- **Companion Bed Sharing & Overlapping Sleep Exploit (`AiBotPlayer`, `BotCommands`, `BotPersistence`):**
+  - Companions no longer share beds or sleep on top of one another. Overrode `AiBotPlayer.startSleeping` to strictly verify bed availability before entering sleep pose or updating block states.
+  - Implemented multi-tier bed occupancy checking (`isBedOccupiedByOther`): verifies `BedBlock.OCCUPIED`, living entities physically sleeping within the entire 2-block bed bounding box (head and foot), active companion bot sleep positions, and server player sleep positions.
+  - Implemented distributed bed reservation and conflict resolution (`isBedClaimedByOther`): companions dynamically track active shelter navigation targets (`currentShelterBedTarget`) and assigned beds (`assignedBedPos`). When multiple companions target or claim the same bed, deterministic arbitration (manual player assignment priority, arrival proximity, and UUID tie-breaking) grants exclusive ownership to one companion while prompting conflicting companions to release duplicate claims and search for alternate vacant beds.
+  - Fixed bed search routines (`findNearestBedBlock`, `findNearestBedBlockNear`, `findNearestBed`, `findVacantBedIn100x100`) to ignore occupied and claimed beds, and canonicalized all bed coordinates to head positions (`getBedHeadPos`) across commands, persistence, and colony breeding.
+  - Companions with no available bed safely shelter indoors on the floor inside designated houses or shelter structures without displacing or clipping into occupied beds.
+
+### Changed
+- **Bed Ownership Tracking & Persistence (`AiBotPlayer`, `BotCommands`, `BotPersistence`):**
+  - Added `bedManuallyAssigned` flag persisted in `SavedBotData` to distinguish player-assigned beds (via chat or `/bot setbed`) from temporary autonomous night shelter claims.
+  - Manual bed assignments (`/bot setbed` or chat `"this is your bed"`) automatically clear any conflicting assignments held by other companions, ensuring 1-to-1 bed allocation across the colony.
+
+## [1.2.26] - 2026-11-07
+
+### Changed
+- **Genuine Vanilla Minecraft Mob Pathfinding Engine (`BotPathfinder`, `AiBotPlayer`):**
+  - Replaced the custom voxel A* approximation and conflicting custom movement overrides with Minecraft's actual `GroundPathNavigation`, `WalkNodeEvaluator`, `PathFinder`, and `Path` engine via an unspawned server-side `PathfinderMob` proxy (`BotProxyMob`) paired with each companion.
+  - Enabled indoor/sub-surface target pathing (`setCanPathToTargetsBelowSurface(true)`), door opening (`setCanOpenDoors(true)`), and floatation (`setCanFloat(true)`), and extended `WalkNodeEvaluator` (`BotWalkNodeEvaluator`) so closed `FenceGateBlock` instances are evaluated and traversed just like wooden doors along their cardinal passage axis while disallowing diagonal corner-cutting through doorways and gates.
+  - Added Vanilla `InteractWithDoor`-style door and fence gate handling along active `Path` nodes, automatically opening wooden doors and fence gates as the companion approaches them and closing them once the companion has cleared the threshold.
+
+### Fixed
+- **Premature 16-Tick Stuck Resets, Neural Strafe Drift & Custom Bypass Conflicts (`AiBotPlayer`, `BotPathfinder`):**
+  - Removed the 16-tick Euclidean distance-to-goal stuck check (`moveNoProgressTicks >= 16`) that previously wiped out valid A* paths whenever a companion walked around a wall, house, or fence where straight-line distance to the final destination temporarily increased.
+  - Removed `activeBypassWaypoint` and `isLineBlockedByFence` straight-line raycast overrides that previously disabled pathfinding for 50–80 ticks and forced bots to walk blindly into walls or obstacles.
+  - Removed `HiveMindBrain` negative path-cost poisoning (`+45.0` cost penalties on doorways/corners where a bot paused) and random `ACT_STRAFE_LEFT`/`ACT_STRAFE_RIGHT` micro-steering overrides, as well as direct `setDeltaMovement` velocity nudges on doors and stairs, relying instead on Vanilla `GroundPathNavigation.followThePath()` and `doStuckDetection()`.
+
 ## [1.2.25] - 2026-11-03
 
 ### Added

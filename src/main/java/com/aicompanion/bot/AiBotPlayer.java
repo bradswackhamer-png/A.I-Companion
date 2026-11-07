@@ -121,12 +121,15 @@ import net.minecraft.world.level.material.FluidState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.level.biome.Biome;
+import net.minecraft.world.level.Level;
+import net.minecraft.core.Direction;
 import net.minecraft.core.Holder;
 import net.minecraft.world.level.block.BedBlock;
 import net.minecraft.world.level.block.state.properties.BedPart;
 import net.minecraft.world.entity.ai.village.poi.PoiManager;
 import net.minecraft.world.entity.ai.village.poi.PoiTypes;
 import java.util.Collections;
+import java.util.Optional;
 import java.util.Queue;
 import java.util.ArrayDeque;
 import java.util.HashSet;
@@ -197,7 +200,9 @@ public class AiBotPlayer extends ServerPlayer {
     private @Nullable String assignedAreaName = null;
     private int holeEscapeTicks = 0;
 
-    // Base Vanilla-Style A* Pathfinding & Repetitive-Loop Insanity Guard
+    // Genuine Vanilla GroundPathNavigation & WalkNodeEvaluator Engine
+    private final com.aicompanion.bot.navigation.BotPathfinder.Navigator vanillaNavigator =
+            new com.aicompanion.bot.navigation.BotPathfinder.Navigator(this);
     private List<BlockPos> currentAStarPath = Collections.emptyList();
     private int currentAStarPathIndex = 0;
     private @Nullable BlockPos lastAStarGoalBlock = null;
@@ -213,7 +218,28 @@ public class AiBotPlayer extends ServerPlayer {
         return expiry != null && this.tickCount < expiry;
     }
 
+    public void blacklistUnreachableTarget(BlockPos pos, int durationTicks) {
+        if (pos != null) {
+            this.unreachableTargetBlacklist.put(pos.asLong(), this.tickCount + durationTicks);
+        }
+    }
+
+    public boolean shouldRespectFencePerimeter() {
+        return this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy;
+    }
+
+    public void rememberOpenedDoor(BlockPos pos) {
+        this.lastOpenedDoorPos = pos;
+        this.doorCloseTimer = 40;
+    }
+
+    public void rememberOpenedGate(BlockPos pos) {
+        this.lastOpenedGatePos = pos;
+        this.gateCloseTimer = 50;
+    }
+
     public void invalidatePath() {
+        this.vanillaNavigator.stop();
         this.currentAStarPath = Collections.emptyList();
         this.currentAStarPathIndex = 0;
         this.lastAStarGoalBlock = null;
@@ -294,6 +320,8 @@ public class AiBotPlayer extends ServerPlayer {
 
     // Bed, House & Night Shelter configuration
     private @Nullable BlockPos assignedBedPos = null;
+    private boolean isBedManuallyAssigned = false;
+    private @Nullable BlockPos currentShelterBedTarget = null;
     private @Nullable BlockPos assignedHousePos = null;
     private @Nullable String assignedHouseAreaName = null;
     private boolean nightShelterEnabled = true;
@@ -734,6 +762,10 @@ public class AiBotPlayer extends ServerPlayer {
 
     public synchronized @Nullable BlockPos getAssignedBedPos() { return this.assignedBedPos; }
     public synchronized void setAssignedBedPos(@Nullable BlockPos pos) { this.assignedBedPos = pos; }
+    public synchronized boolean isBedManuallyAssigned() { return this.isBedManuallyAssigned; }
+    public synchronized void setBedManuallyAssigned(boolean manual) { this.isBedManuallyAssigned = manual; }
+    public synchronized @Nullable BlockPos getCurrentShelterBedTarget() { return this.currentShelterBedTarget; }
+    public synchronized void setCurrentShelterBedTarget(@Nullable BlockPos pos) { this.currentShelterBedTarget = pos; }
     public synchronized @Nullable BlockPos getAssignedHousePos() { return this.assignedHousePos; }
     public synchronized void setAssignedHousePos(@Nullable BlockPos pos) { this.assignedHousePos = pos; }
     public synchronized @Nullable String getAssignedHouseAreaName() { return this.assignedHouseAreaName; }
@@ -4696,7 +4728,7 @@ public class AiBotPlayer extends ServerPlayer {
     private void analyzeAndExecuteUnstuckPlan(Vec3 originalGoal) {
         BlockPos feetPos = this.blockPosition();
 
-        // 1. ANALYZE FOR HOLE / PIT / TRENCH:
+        // Check if genuinely trapped inside a 1x1 2-block-deep pit
         int solidHeadNeighbors = 0;
         int solidFeetNeighbors = 0;
         for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
@@ -4712,22 +4744,7 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        boolean trappedInHole = solidHeadNeighbors >= 3 || (solidHeadNeighbors >= 2 && solidFeetNeighbors >= 3);
-        if (trappedInHole) {
-            // Check if an exit ramp or walkable step exists within 2 blocks
-            BlockPos rampExit = findNearbyExitStep(feetPos, originalGoal);
-            if (rampExit != null) {
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(rampExit);
-                this.bypassWaypointTicks = 35;
-                this.setJumping(rampExit.getY() > feetPos.getY());
-                if (this.onGround() && rampExit.getY() > feetPos.getY()) {
-                    this.jumpFromGround();
-                }
-                this.level().sendParticles(ParticleTypes.HAPPY_VILLAGER, feetPos.getX() + 0.5, feetPos.getY() + 1.2, feetPos.getZ() + 0.5, 4, 0.2, 0.2, 0.2, 0.05);
-                return;
-            }
-
-            // Trapped deep in a pit: clear headroom overhead and pillar jump up!
+        if (solidHeadNeighbors >= 3 && solidFeetNeighbors >= 3) {
             BlockPos aboveHead = feetPos.above(2);
             BlockState aboveHeadState = this.level().getBlockState(aboveHead);
             if (!aboveHeadState.isAir() && aboveHeadState.getDestroySpeed(this.level(), aboveHead) >= 0 && aboveHeadState.getDestroySpeed(this.level(), aboveHead) < 15.0f) {
@@ -4739,223 +4756,7 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        // 2. ANALYZE FOR WALL / BUILDING / CLIFF / FENCE OBSTACLE:
-        net.minecraft.core.Direction dir = this.getDirection();
-        BlockPos frontFeet = feetPos.relative(dir);
-        BlockPos frontHead = frontFeet.above();
-        BlockState frontFeetState = this.level().getBlockState(frontFeet);
-        BlockState frontHeadState = this.level().getBlockState(frontHead);
-
-        // A. DOORWAY & FENCE GATE CHECK:
-        BlockState currentFeetState = this.level().getBlockState(feetPos);
-        boolean isCurrentInDoorOrGate = (currentFeetState.getBlock() instanceof DoorBlock)
-                || (currentFeetState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock)
-                || isOpenDoorOrGate(currentFeetState);
-        boolean isDoorInFront = (frontFeetState.getBlock() instanceof DoorBlock) || (frontHeadState.getBlock() instanceof DoorBlock);
-        boolean isGateInFront = (frontFeetState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock);
-
-        if (isCurrentInDoorOrGate) {
-            net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(feetPos, currentFeetState);
-            net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
-                    ? ((originalGoal.z >= feetPos.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
-                    : ((originalGoal.x >= feetPos.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
-            this.activeBypassWaypoint = Vec3.atBottomCenterOf(feetPos.relative(throughDir, 2));
-            this.bypassWaypointTicks = 40;
-            return;
-        }
-
-        if (isDoorInFront) {
-            BlockPos doorPos = (frontFeetState.getBlock() instanceof DoorBlock) ? frontFeet : frontHead;
-            BlockState ds = this.level().getBlockState(doorPos);
-            if (ds.getBlock() instanceof DoorBlock door && door.type().canOpenByHand() && !ds.getValue(DoorBlock.OPEN)) {
-                door.setOpen(this, this.level(), ds, doorPos, true);
-                this.lastOpenedDoorPos = doorPos;
-                this.doorCloseTimer = 60;
-            }
-            net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(doorPos, ds);
-            net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
-                    ? ((originalGoal.z >= doorPos.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
-                    : ((originalGoal.x >= doorPos.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
-            this.activeBypassWaypoint = Vec3.atBottomCenterOf(doorPos.relative(throughDir, 2));
-            this.bypassWaypointTicks = 40;
-            return;
-        }
-        if (isGateInFront) {
-            BlockPos gatePos = frontFeet;
-            BlockState gs = this.level().getBlockState(gatePos);
-            if (gs.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
-                if (!gs.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
-                    BlockState openState = gs.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, true);
-                    if (openState.hasProperty(net.minecraft.world.level.block.FenceGateBlock.FACING)) {
-                        if (openState.getValue(net.minecraft.world.level.block.FenceGateBlock.FACING) == dir.getOpposite()) {
-                            openState = openState.setValue(net.minecraft.world.level.block.FenceGateBlock.FACING, dir);
-                        }
-                    }
-                    this.level().setBlockAndUpdate(gatePos, openState);
-                    this.level().playSound(null, gatePos, net.minecraft.sounds.SoundEvents.FENCE_GATE_OPEN, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f);
-                    this.lastOpenedGatePos = gatePos;
-                    this.gateCloseTimer = 60;
-                }
-                net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gatePos, gs);
-                net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
-                        ? ((originalGoal.z >= gatePos.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
-                        : ((originalGoal.x >= gatePos.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(gatePos.relative(throughDir, 2));
-                this.bypassWaypointTicks = 40;
-                return;
-            }
-        }
-
-        // B. FENCE / WALL STRICT BOUNDARY CHECK:
-        boolean isFenceBarrier = isFenceOrWall(frontFeetState) || isFenceOrWall(frontHeadState);
-        if (isFenceBarrier) {
-            if (this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy) {
-                // In combat, sentry, or standby: never seek gates to leave fence perimeter!
-                this.stopMovement();
-                return;
-            }
-            // NEVER pillar jump or place blocks to climb over fences/walls!
-            // Seek an existing opening or fence gate along the perimeter.
-            BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(feetPos, originalGoal, 24);
-            if (gateOrOpening != null) {
-                BlockState gs = this.level().getBlockState(gateOrOpening);
-                net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gateOrOpening, gs);
-                net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
-                        ? ((originalGoal.z >= gateOrOpening.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
-                        : ((originalGoal.x >= gateOrOpening.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening.relative(throughDir, 2));
-                this.bypassWaypointTicks = 60;
-                this.level().sendParticles(ParticleTypes.HAPPY_VILLAGER, this.getX(), this.getY() + 1.2, this.getZ(), 4, 0.2, 0.2, 0.2, 0.05);
-                return;
-            } else {
-                // Strict boundary: stop movement without damaging or jumping fences
-                this.stopMovement();
-                return;
-            }
-        }
-
-        // C. STAIRS & STEP CLEARANCE:
-        boolean isStairInFront = isStairOrPlatform(frontFeetState) || isStairOrPlatform(frontHeadState);
-        boolean isCurrentOnStair = isStairOrPlatform(this.level().getBlockState(feetPos)) || isStairOrPlatform(this.level().getBlockState(feetPos.below()));
-        if (isStairInFront || isCurrentOnStair) {
-            // We are navigating a staircase! STEP_HEIGHT = 1.06 climbs stairs smoothly without jumping.
-            this.setJumping(false);
-            this.zza = 1.0f;
-            this.xxa = 0.0f;
-            this.stuckTicks = 0;
-            this.moveNoProgressTicks = 0;
-            return;
-        }
-
-        boolean isBlockedInFront = (!isPassable(frontFeet) && !isDoorInFront)
-                || (!isPassable(frontHead) && !isDoorInFront);
-
-        if (isBlockedInFront || this.horizontalCollision) {
-            net.minecraft.core.Direction leftDir = dir.getCounterClockWise();
-            net.minecraft.core.Direction rightDir = dir.getClockWise();
-
-            BlockPos bestBypass = null;
-            double bestScore = Double.MAX_VALUE;
-            String dim = this.level().dimension().identifier().toString();
-
-            // Probe left side
-            for (int dist = 1; dist <= 8; dist++) {
-                BlockPos probeFeet = feetPos.relative(leftDir, dist);
-                boolean lateralBlocked = true;
-                for (int dy : new int[]{0, 1, -1}) {
-                    if (isStandable(probeFeet.above(dy))) {
-                        lateralBlocked = false;
-                        break;
-                    }
-                }
-                BlockPos clearFp = findClearBypassAtLateral(probeFeet, dir);
-                if (clearFp != null) {
-                    double distToGoal = Vec3.atCenterOf(clearFp).distanceToSqr(originalGoal);
-                    double learnedBias = com.aicompanion.bot.learning.HiveMindBrain.getNodeScore(dim, clearFp) * 4.0;
-                    double score = dist * 2.0 + distToGoal - learnedBias;
-                    if (score < bestScore) {
-                        bestScore = score;
-                        bestBypass = clearFp;
-                    }
-                    break;
-                }
-                if (lateralBlocked && dist > 1) {
-                    break;
-                }
-            }
-
-            // Probe right side
-            for (int dist = 1; dist <= 8; dist++) {
-                BlockPos probeFeet = feetPos.relative(rightDir, dist);
-                boolean lateralBlocked = true;
-                for (int dy : new int[]{0, 1, -1}) {
-                    if (isStandable(probeFeet.above(dy))) {
-                        lateralBlocked = false;
-                        break;
-                    }
-                }
-                BlockPos clearFp = findClearBypassAtLateral(probeFeet, dir);
-                if (clearFp != null) {
-                    double distToGoal = Vec3.atCenterOf(clearFp).distanceToSqr(originalGoal);
-                    double learnedBias = com.aicompanion.bot.learning.HiveMindBrain.getNodeScore(dim, clearFp) * 4.0;
-                    double score = dist * 2.0 + distToGoal - learnedBias;
-                    if (score < bestScore) {
-                        bestScore = score;
-                        bestBypass = clearFp;
-                    }
-                    break;
-                }
-                if (lateralBlocked && dist > 1) {
-                    break;
-                }
-            }
-
-            if (bestBypass != null) {
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(bestBypass);
-                this.bypassWaypointTicks = 50;
-                this.level().sendParticles(ParticleTypes.CLOUD, this.getX(), this.getY() + 1.2, this.getZ(), 4, 0.2, 0.2, 0.2, 0.02);
-                return;
-            }
-
-            // High wall with no side opening: Disengage backwards
-            BlockPos backLeft = feetPos.relative(dir.getOpposite(), 2).relative(leftDir, 2);
-            if (isStandable(backLeft)) {
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(backLeft);
-                this.bypassWaypointTicks = 35;
-                return;
-            }
-            BlockPos backRight = feetPos.relative(dir.getOpposite(), 2).relative(rightDir, 2);
-            if (isStandable(backRight)) {
-                this.activeBypassWaypoint = Vec3.atBottomCenterOf(backRight);
-                this.bypassWaypointTicks = 35;
-                return;
-            }
-        }
-
-        // 3. ANALYZE FOR PIT / CHASM AHEAD:
-        if (isDeepPitAt(frontFeet)) {
-            net.minecraft.core.Direction leftDir = dir.getCounterClockWise();
-            net.minecraft.core.Direction rightDir = dir.getClockWise();
-            for (int dist = 1; dist <= 6; dist++) {
-                BlockPos leftRim = feetPos.relative(leftDir, dist);
-                if (isStandable(leftRim) && !isDeepPitAt(leftRim.relative(dir))) {
-                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(leftRim.relative(dir));
-                    this.bypassWaypointTicks = 45;
-                    return;
-                }
-                BlockPos rightRim = feetPos.relative(rightDir, dist);
-                if (isStandable(rightRim) && !isDeepPitAt(rightRim.relative(dir))) {
-                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(rightRim.relative(dir));
-                    this.bypassWaypointTicks = 45;
-                    return;
-                }
-            }
-        }
-
-        // 4. GENERAL UNSTUCK FALLBACK: Never jump against walls; force fresh A* path calculation and strafe clear!
         this.invalidatePath();
-        this.xxa = ((this.tickCount / 10) % 2 == 0) ? 0.85f : -0.85f;
-        this.setJumping(false);
     }
 
     private boolean hasUnobstructedReachToTarget(BlockPos targetPos) {
@@ -4995,435 +4796,12 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        Vec3 finalDestination = target;
-        BlockPos finalGoalBlock = BlockPos.containing(finalDestination);
-
-        // 0. Repetitive-Loop / Insanity Guard: Stop bots from endlessly pushing into corners or walls
-        if (this.insanityCheckPos == null || this.position().distanceToSqr(this.insanityCheckPos) > 1.44) {
-            this.insanityCheckPos = this.position();
-            this.insanityStuckTicks = 0;
-        } else {
-            this.insanityStuckTicks++;
-            if (this.insanityStuckTicks == 25) {
-                // Penalize current stuck corner/wall in Hive-Mind and force fresh A* path around the building
-                String dim = this.level().dimension().identifier().toString();
-                com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, this.blockPosition(), -12.0f, true, false, false, null);
-                com.aicompanion.bot.learning.HiveMindBrain.recordNodeTraversal(dim, this.blockPosition().relative(this.getDirection()), -15.0f, true, false, false, null);
-                this.invalidatePath();
-            } else if (this.insanityStuckTicks >= 90) {
-                // Target is completely unreachable or blocked after multiple A* attempts — blacklist for 30s and stop pushing!
-                this.unreachableTargetBlacklist.put(finalGoalBlock.asLong(), this.tickCount + 600);
-                this.stopMovement();
-                return;
-            }
-        }
-
-        // 1. Line-of-sight Fence Boundary Check: If direct line to target is blocked by fence, route through gate/opening!
-        boolean nearGateOrDoor = false;
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                BlockState s = this.level().getBlockState(this.blockPosition().offset(dx, 0, dz));
-                if (s.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock || s.getBlock() instanceof DoorBlock || isOpenDoorOrGate(s)) {
-                    nearGateOrDoor = true;
-                    break;
-                }
-            }
-        }
-
-        if (!nearGateOrDoor && isLineBlockedByFence(this.position(), target)) {
-            if (this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy) {
-                // In combat, sentry, or standby: never leave fence perimeter!
-                this.stopMovement();
-                return;
-            }
-            if (this.activeBypassWaypoint == null) {
-                BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
-                if (gateOrOpening != null) {
-                    BlockState gs = this.level().getBlockState(gateOrOpening);
-                    net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gateOrOpening, gs);
-                    net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
-                            ? ((target.z >= gateOrOpening.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
-                            : ((target.x >= gateOrOpening.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
-                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening.relative(throughDir, 2));
-                    this.bypassWaypointTicks = 80;
-                }
-            }
-        }
-
-        // Stagnation & Distance-to-Goal Progress Tracking
-        double distToGoalSq = this.position().distanceToSqr(target);
-        if (this.lastMoveTarget == null || target.distanceToSqr(this.lastMoveTarget) > 2.25) {
-            this.lastMoveTarget = target;
-            this.bestMoveTargetDistSq = distToGoalSq;
-            this.moveNoProgressTicks = 0;
-        } else {
-            this.lastMoveTarget = target;
-            if (distToGoalSq < this.bestMoveTargetDistSq - 0.2) {
-                this.bestMoveTargetDistSq = distToGoalSq;
-                this.moveNoProgressTicks = 0;
-            } else {
-                this.moveNoProgressTicks++;
-            }
-        }
-
-        // Motionless check adds to stagnation
-        if (this.position().distanceToSqr(this.lastCheckedPos) < 0.015) {
-            this.moveNoProgressTicks++;
-        }
+        this.lastMoveTarget = target;
         this.lastCheckedPos = this.position();
 
-        // 1B. BASE VANILLA VILLAGER / MOB 3D VOXEL A* PATHFINDER (with Hive-Mind learned costs layered on top)
-        if (this.activeBypassWaypoint == null && distToGoalSq > 1.69) {
-            boolean needPathRefresh = this.currentAStarPath.isEmpty()
-                    || this.currentAStarPathIndex >= this.currentAStarPath.size()
-                    || this.lastAStarGoalBlock == null
-                    || !this.lastAStarGoalBlock.closerThan(finalGoalBlock, 1.5)
-                    || (this.tickCount - this.lastAStarComputeTick >= 20);
-
-            if (needPathRefresh) {
-                this.currentAStarPath = com.aicompanion.bot.navigation.BotPathfinder.findPath(
-                        this, this.blockPosition(), finalGoalBlock, 1024);
-                this.currentAStarPathIndex = 0;
-                this.lastAStarGoalBlock = finalGoalBlock.immutable();
-                this.lastAStarComputeTick = this.tickCount;
-            }
-
-            // Advance along A* waypoints as the bot steps onto each block
-            while (this.currentAStarPathIndex < this.currentAStarPath.size()) {
-                BlockPos wp = this.currentAStarPath.get(this.currentAStarPathIndex);
-                double dx = (wp.getX() + 0.5) - this.getX();
-                double dz = (wp.getZ() + 0.5) - this.getZ();
-                double horizSq = dx * dx + dz * dz;
-                if (horizSq < 0.36 && Math.abs(wp.getY() - this.getY()) <= 1.6) {
-                    this.currentAStarPathIndex++;
-                } else {
-                    break;
-                }
-            }
-
-            if (this.currentAStarPathIndex < this.currentAStarPath.size()) {
-                BlockPos activeWp = this.currentAStarPath.get(this.currentAStarPathIndex);
-                // Proactively open any wooden door or fence gate along the A* path ahead
-                for (int lookAhead = 0; lookAhead <= 1 && (this.currentAStarPathIndex + lookAhead) < this.currentAStarPath.size(); lookAhead++) {
-                    BlockPos aheadPos = this.currentAStarPath.get(this.currentAStarPathIndex + lookAhead);
-                    if (this.distanceToSqr(Vec3.atBottomCenterOf(aheadPos)) < 5.0) {
-                        BlockState as = this.level().getBlockState(aheadPos);
-                        if (as.getBlock() instanceof DoorBlock door && !as.getValue(DoorBlock.OPEN) && door.type().canOpenByHand()) {
-                            door.setOpen(this, this.level(), as, aheadPos, true);
-                            this.lastOpenedDoorPos = aheadPos;
-                            this.doorCloseTimer = 50;
-                        } else if (as.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && !as.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
-                            this.level().setBlockAndUpdate(aheadPos, as.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, true));
-                            this.lastOpenedGatePos = aheadPos;
-                            this.gateCloseTimer = 60;
-                        }
-                    }
-                }
-                target = new Vec3(activeWp.getX() + 0.5, activeWp.getY(), activeWp.getZ() + 0.5);
-            } else if (this.currentAStarPath.isEmpty() && this.blockPosition().distManhattan(finalGoalBlock) <= 28 && !hasUnobstructedReachToTarget(finalGoalBlock)) {
-                // Target is nearby (e.g. inside a locked/doorless building) and A* proved no walkable door path exists!
-                if (this.insanityStuckTicks >= 15) {
-                    this.unreachableTargetBlacklist.put(finalGoalBlock.asLong(), this.tickCount + 600);
-                    this.stopMovement();
-                    return;
-                }
-            }
-        }
-
-        // Intermediate Bypass Waypoint Steering
-        if (this.activeBypassWaypoint != null) {
-            double distToBypassSq = this.position().distanceToSqr(this.activeBypassWaypoint);
-            if (distToBypassSq < 1.44 || this.bypassWaypointTicks-- <= 0) {
-                this.activeBypassWaypoint = null;
-                this.bestMoveTargetDistSq = this.position().distanceToSqr(target);
-                this.moveNoProgressTicks = 0;
-            } else {
-                target = this.activeBypassWaypoint;
-            }
-        }
-
-        // 2. 1x2 Doorway & Fence Gate Navigation & Lateral Shoulder Alignment:
-        BlockPos currentFeet = this.blockPosition();
-        net.minecraft.core.Direction dir = this.getDirection();
-        BlockPos frontPos = currentFeet.relative(dir);
-        BlockState frontState = this.level().getBlockState(frontPos);
-
-        BlockPos doorwayPos = null;
-        if (frontState.getBlock() instanceof DoorBlock) {
-            doorwayPos = frontPos;
-        } else if (this.level().getBlockState(currentFeet).getBlock() instanceof DoorBlock) {
-            doorwayPos = currentFeet;
-        } else {
-            for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
-                BlockPos adj = currentFeet.relative(d);
-                if (this.level().getBlockState(adj).getBlock() instanceof DoorBlock) {
-                    if (this.distanceToSqr(Vec3.atBottomCenterOf(adj)) < 2.0) {
-                        doorwayPos = adj;
-                        break;
-                    }
-                }
-            }
-        }
-
-        BlockPos gatePos = null;
-        if (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
-            gatePos = frontPos;
-        } else if (this.level().getBlockState(currentFeet).getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
-            gatePos = currentFeet;
-        } else {
-            for (net.minecraft.core.Direction d : net.minecraft.core.Direction.Plane.HORIZONTAL) {
-                BlockPos adj = currentFeet.relative(d);
-                if (this.level().getBlockState(adj).getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
-                    if (this.distanceToSqr(Vec3.atBottomCenterOf(adj)) < 2.5) {
-                        gatePos = adj;
-                        break;
-                    }
-                }
-            }
-        }
-
-        BlockPos activeChokepointPos = doorwayPos != null ? doorwayPos : gatePos;
-        net.minecraft.core.Direction chokepointThroughDir = null;
-
-        if (doorwayPos != null) {
-            BlockState ds = this.level().getBlockState(doorwayPos);
-            if (ds.getBlock() instanceof DoorBlock door) {
-                // Open wooden door if closed
-                if (!ds.getValue(DoorBlock.OPEN) && door.type().canOpenByHand()) {
-                    door.setOpen(this, this.level(), ds, doorwayPos, true);
-                    this.lastOpenedDoorPos = doorwayPos;
-                    this.doorCloseTimer = 40;
-                }
-            }
-        }
-
-        if (gatePos != null) {
-            BlockState gs = this.level().getBlockState(gatePos);
-            if (gs.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock) {
-                if (!gs.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
-                    BlockState openState = gs.setValue(net.minecraft.world.level.block.FenceGateBlock.OPEN, true);
-                    if (openState.hasProperty(net.minecraft.world.level.block.FenceGateBlock.FACING)) {
-                        if (openState.getValue(net.minecraft.world.level.block.FenceGateBlock.FACING) == dir.getOpposite()) {
-                            openState = openState.setValue(net.minecraft.world.level.block.FenceGateBlock.FACING, dir);
-                        }
-                    }
-                    this.level().setBlockAndUpdate(gatePos, openState);
-                    this.level().playSound(null, gatePos, net.minecraft.sounds.SoundEvents.FENCE_GATE_OPEN, net.minecraft.sounds.SoundSource.BLOCKS, 1.0f, 1.0f);
-                    this.lastOpenedGatePos = gatePos;
-                    this.gateCloseTimer = 60;
-                }
-            }
-        }
-
-        if (activeChokepointPos != null) {
-            BlockState chokepointState = this.level().getBlockState(activeChokepointPos);
-            net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(activeChokepointPos, chokepointState);
-            Vec3 center = Vec3.atBottomCenterOf(activeChokepointPos);
-            double distSq = this.distanceToSqr(center);
-
-            if (passageAxis == net.minecraft.core.Direction.Axis.Z) {
-                chokepointThroughDir = (target.z >= center.z) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH;
-                // Pure lateral alignment along X axis (NEVER apply backward drag to Z movement axis!)
-                if (distSq < 3.5) {
-                    double offX = center.x - this.getX();
-                    Vec3 mot = this.getDeltaMovement();
-                    this.setDeltaMovement(mot.x + Mth.clamp(offX * 0.35, -0.15, 0.15), mot.y, mot.z);
-                }
-            } else {
-                chokepointThroughDir = (target.x >= center.x) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST;
-                // Pure lateral alignment along Z axis (NEVER apply backward drag to X movement axis!)
-                if (distSq < 3.5) {
-                    double offZ = center.z - this.getZ();
-                    Vec3 mot = this.getDeltaMovement();
-                    this.setDeltaMovement(mot.x, mot.y, mot.z + Mth.clamp(offZ * 0.35, -0.15, 0.15));
-                }
-            }
-        }
-
-        // 4. Stair Corridor Navigation & 1-Block Wide Shoulder Alignment:
-        BlockPos currentPos = this.blockPosition();
-        BlockPos stairPos = null;
-        if (isStairOrPlatform(this.level().getBlockState(currentPos))) {
-            stairPos = currentPos;
-        } else if (isStairOrPlatform(this.level().getBlockState(currentPos.below()))) {
-            stairPos = currentPos.below();
-        } else if (isStairOrPlatform(frontState)) {
-            stairPos = frontPos;
-        } else if (isStairOrPlatform(this.level().getBlockState(frontPos.above()))) {
-            stairPos = frontPos.above();
-        }
-
-        if (stairPos != null) {
-            // Center bot precisely on the stair block centerline so 0.6-width shoulders don't clip 1-block wide railings
-            double stairCenterX = stairPos.getX() + 0.5;
-            double stairCenterZ = stairPos.getZ() + 0.5;
-            double offX = stairCenterX - this.getX();
-            double offZ = stairCenterZ - this.getZ();
-
-            Vec3 mot = this.getDeltaMovement();
-            if (dir.getAxis() == net.minecraft.core.Direction.Axis.Z) {
-                // Moving North/South along stairs -> align X to stair centerline
-                this.setDeltaMovement(mot.x + offX * 0.35, mot.y, mot.z);
-            } else if (dir.getAxis() == net.minecraft.core.Direction.Axis.X) {
-                // Moving East/West along stairs -> align Z to stair centerline
-                this.setDeltaMovement(mot.x, mot.y, mot.z + offZ * 0.35);
-            } else {
-                this.setDeltaMovement(mot.x + offX * 0.25, mot.y, mot.z + offZ * 0.25);
-            }
-        }
-
-        boolean passingDoorway = false;
-        if (activeChokepointPos != null && chokepointThroughDir != null) {
-            double distSq = this.distanceToSqr(Vec3.atBottomCenterOf(activeChokepointPos));
-            if (distSq < 2.5) {
-                passingDoorway = true;
-                Vec3 straightAhead = this.position().add(chokepointThroughDir.getStepX() * 2.0, 0, chokepointThroughDir.getStepZ() * 2.0);
-                lookAtPos(straightAhead);
-            }
-        }
-        if (!passingDoorway) {
-            lookAtPos(new Vec3(target.x, target.y + this.getEyeHeight(), target.z));
-        }
-        this.setSprinting(sprint);
-        this.zza = sprint ? 1.0f : 0.8f;
-        this.xxa = 0.0f;
-
-        boolean isExcavating = this.currentAction != null && "EXCAVATE".equals(this.currentAction.getNormalizedType());
-
-        // Deep Pit & Hazard Avoidance: Only check for REAL dangerous drops (4+ block drop into ravine/void or lava/fire)
-        // Drops of 1, 2, or 3 blocks are completely safe to step or drop down, dealing zero damage.
-        if (!isExcavating && isDeepPitAt(frontPos)) {
-            // If target/player is below our elevation, NEVER bridge forward across the sky!
-            if (target.y < this.getY() - 0.2) {
-                // Steer along the edge or find a safe slope/staircase down toward the player
-                BlockPos leftPos = this.blockPosition().relative(dir.getCounterClockWise());
-                boolean leftSafe = !isDeepPitAt(leftPos);
-                this.zza = 0.2f;
-                this.xxa = leftSafe ? 0.9f : -0.9f;
-                return;
-            }
-
-            // Target is at our elevation or higher across the chasm:
-            BlockPos twoAhead = frontPos.relative(dir);
-            boolean canJumpGap = this.level().getBlockState(twoAhead).isAir()
-                    && !this.level().getBlockState(twoAhead.below()).isAir();
-            if (canJumpGap) {
-                // 1-block gap: sprint-jump across it
-                this.setSprinting(true);
-                this.zza = 1.0f;
-                this.setJumping(true);
-                if (this.onGround()) {
-                    this.jumpFromGround();
-                }
-                return;
-            } else {
-                // Only place bridge blocks if crossing a narrow (1-2 block) gap toward target
-                boolean narrowGap = !this.level().getBlockState(twoAhead.below()).isAir()
-                        || !this.level().getBlockState(twoAhead.relative(dir).below()).isAir();
-                if (narrowGap && placeBuildingBlockAt(frontPos.below())) {
-                    // Successfully bridged narrow pit gap with a block!
-                    this.zza = 0.5f;
-                    this.xxa = 0.0f;
-                    return;
-                } else {
-                    // Wide ravine or no blocks: steer sideways around the pit instead of placing endless sky bridges
-                    BlockPos leftPos = this.blockPosition().relative(dir.getCounterClockWise());
-                    boolean leftSafe = !isDeepPitAt(leftPos);
-                    this.zza = 0.2f;
-                    this.xxa = leftSafe ? 0.9f : -0.9f;
-                    return;
-                }
-            }
-        }
-
-        // Barrier & Wall Recognition
-        BlockPos headFront = frontPos.above();
-        BlockState headState = this.level().getBlockState(headFront);
-        boolean isDoorway = (frontState.getBlock() instanceof DoorBlock) || (headState.getBlock() instanceof DoorBlock)
-                || (frontState.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock)
-                || (this.level().getBlockState(currentFeet).getBlock() instanceof DoorBlock)
-                || (this.level().getBlockState(currentFeet).getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock)
-                || isOpenDoorOrGate(frontState) || isOpenDoorOrGate(headState)
-                || isOpenDoorOrGate(this.level().getBlockState(currentFeet))
-                || isOpenDoorOrGate(this.level().getBlockState(currentFeet.above()))
-                || activeChokepointPos != null;
-        boolean isFenceBarrier = (isFenceOrWall(frontState) || isFenceOrWall(headState)) && !isDoorway;
-        boolean isFrontStair = isStairOrPlatform(frontState) || isStairOrPlatform(headState)
-                || isStairOrPlatform(this.level().getBlockState(currentFeet))
-                || isStairOrPlatform(this.level().getBlockState(currentFeet.below()));
-        boolean isTallWall = !frontState.isAir() && !headState.isAir() && !headState.canBeReplaced() && !isFenceBarrier && !isDoorway && !isFrontStair;
-
-        // Jump over 1-block ledges or swim in water/lava/oil (Never jump at 2-block tall solid walls or fences!)
-        boolean stepUpPossible = (!frontState.isAir() || isFrontStair)
-                && (headState.isAir() || isStairOrPlatform(headState))
-                && this.level().getBlockState(headFront.above()).isAir()
-                && !isFenceBarrier && !isDoorway;
-        boolean wantsToAscend = target.y > this.getY() - 0.2;
-        // Hive-Mind Neural Policy & Learned Node Consultation
-        String dimKey = this.level().dimension().identifier().toString();
-        com.aicompanion.bot.learning.HiveMindBrain.NavNode curNavNode = com.aicompanion.bot.learning.HiveMindBrain.getNode(dimKey, currentFeet);
-        float[] sensoryState = com.aicompanion.bot.learning.HiveMindBrain.extractSensoryState(
-                this, target, this.moveNoProgressTicks, isFrontStair, stairPos != null, isDoorway, false);
-        int neuralAction = com.aicompanion.bot.learning.HiveMindBrain.selectAction(this, sensoryState);
-
-        if ((neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_WALK_CENTERED || sensoryState[23] > 0.3f) && stairPos == null && !isDoorway) {
-            double cx = currentFeet.getX() + 0.5 - this.getX();
-            double cz = currentFeet.getZ() + 0.5 - this.getZ();
-            Vec3 mot = this.getDeltaMovement();
-            this.setDeltaMovement(mot.x + cx * 0.25, mot.y, mot.z + cz * 0.25);
-        } else if (neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_STRAFE_LEFT && (this.moveNoProgressTicks >= 6 || this.horizontalCollision) && !isFrontStair) {
-            this.xxa = 0.65f;
-        } else if (neuralAction == com.aicompanion.bot.learning.HiveMindBrain.ACT_STRAFE_RIGHT && (this.moveNoProgressTicks >= 6 || this.horizontalCollision) && !isFrontStair) {
-            this.xxa = -0.65f;
-        }
-
-        // With STEP_HEIGHT = 1.06, bots step up 1-block ledges and stairs smoothly without jumping.
-        // ONLY jump when swimming in water/lava/hazardous fluid!
-        boolean shouldJump = this.isInWater() || this.isInLava() || this.isInHazardousFluid();
-        this.setJumping(shouldJump);
-
-        if (isFenceBarrier) {
-            this.setJumping(false);
-            if (this.currentCombatTargetId != -1 || this.sentryMode || this.standingBy) {
-                // In combat, sentry, or standby: never leave fence perimeter!
-                this.stopMovement();
-                return;
-            }
-            if (this.activeBypassWaypoint == null) {
-                BlockPos gateOrOpening = findNearbyFenceOpeningOrGate(this.blockPosition(), target, 24);
-                if (gateOrOpening != null) {
-                    BlockState gs = this.level().getBlockState(gateOrOpening);
-                    net.minecraft.core.Direction.Axis passageAxis = getDoorwayPassageAxis(gateOrOpening, gs);
-                    net.minecraft.core.Direction throughDir = (passageAxis == net.minecraft.core.Direction.Axis.Z)
-                            ? ((target.z >= gateOrOpening.getZ() + 0.5) ? net.minecraft.core.Direction.SOUTH : net.minecraft.core.Direction.NORTH)
-                            : ((target.x >= gateOrOpening.getX() + 0.5) ? net.minecraft.core.Direction.EAST : net.minecraft.core.Direction.WEST);
-                    this.activeBypassWaypoint = Vec3.atBottomCenterOf(gateOrOpening.relative(throughDir, 2));
-                    this.bypassWaypointTicks = 80;
-                    return;
-                }
-            }
-            if (this.guardAnchorPos != null) {
-                lookAtPos(Vec3.atCenterOf(this.guardAnchorPos));
-                this.zza = 0.5f;
-                this.xxa = 0.0f;
-                return;
-            } else {
-                // Respect fence boundary: stop!
-                this.stopMovement();
-                return;
-            }
-        }
-
-        // Record step & intrinsic reinforcement into the shared Hive-Mind
-        boolean madeProgress = this.moveNoProgressTicks == 0;
-        boolean gotStuck = !isExcavating && this.moveNoProgressTicks >= 16;
-        com.aicompanion.bot.learning.HiveMindBrain.recordBotStep(this, madeProgress, gotStuck, shouldJump);
-
-        // Stuck & Area Analysis Engine
-        if (gotStuck) {
-            analyzeAndExecuteUnstuckPlan(target);
-            this.moveNoProgressTicks = 0;
-        }
+        // Delegate 100% of ground pathfinding, waypoint tracking, corner cutting, and door/gate handling
+        // to Vanilla Minecraft's GroundPathNavigation & WalkNodeEvaluator engine.
+        this.vanillaNavigator.tickMoveTowards(target, sprint);
     }
 
     public void stopMovement() {
@@ -5431,6 +4809,7 @@ public class AiBotPlayer extends ServerPlayer {
         this.xxa = 0.0f;
         this.setJumping(false);
         this.setSprinting(false);
+        this.vanillaNavigator.stop();
         this.activeBypassWaypoint = null;
         this.bypassWaypointTicks = 0;
         this.moveNoProgressTicks = 0;
@@ -7732,25 +7111,213 @@ public class AiBotPlayer extends ServerPlayer {
             Map.entry("fisherman", SoundEvents.VILLAGER_WORK_FISHERMAN)
     );
 
+    @Override
+    public boolean startSleeping(BlockPos bedPosition) {
+        if (isBedOccupiedByOther(bedPosition)) {
+            return false;
+        }
+        return super.startSleeping(bedPosition);
+    }
+
+    public static BlockPos getBedHeadPos(Level level, BlockPos pos) {
+        if (level == null || pos == null) return pos;
+        BlockState state = level.getBlockState(pos);
+        if (state.getBlock() instanceof BedBlock) {
+            BedPart part = state.getValue(BedBlock.PART);
+            if (part == BedPart.FOOT) {
+                Direction facing = state.getValue(BedBlock.FACING);
+                return pos.relative(facing).immutable();
+            }
+            return pos.immutable();
+        }
+        return pos;
+    }
+
+    public static BlockPos getBedFootPos(Level level, BlockPos pos) {
+        if (level == null || pos == null) return pos;
+        BlockState state = level.getBlockState(pos);
+        if (state.getBlock() instanceof BedBlock) {
+            BedPart part = state.getValue(BedBlock.PART);
+            if (part == BedPart.HEAD) {
+                Direction facing = state.getValue(BedBlock.FACING);
+                return pos.relative(facing.getOpposite()).immutable();
+            }
+            return pos.immutable();
+        }
+        return pos;
+    }
+
+    public static boolean isSameBed(Level level, @Nullable BlockPos pos1, @Nullable BlockPos pos2) {
+        if (pos1 == null || pos2 == null) return false;
+        if (pos1.equals(pos2)) return true;
+        BlockPos head1 = getBedHeadPos(level, pos1);
+        BlockPos head2 = getBedHeadPos(level, pos2);
+        return head1.equals(head2);
+    }
+
+    public boolean isBedOccupiedByOther(@Nullable BlockPos bedPos) {
+        if (bedPos == null || this.level() == null) return false;
+        BlockPos headPos = getBedHeadPos(this.level(), bedPos);
+        BlockState headState = this.level().getBlockState(headPos);
+        if (!(headState.getBlock() instanceof BedBlock)) {
+            return false;
+        }
+
+        // If this bot is already sleeping in this bed, it is not occupied by another entity
+        if (this.isSleeping()) {
+            Optional<BlockPos> mySleepPos = this.getSleepingPos();
+            if (mySleepPos.isPresent() && isSameBed(this.level(), mySleepPos.get(), headPos)) {
+                return false;
+            }
+        }
+
+        // 1. Any entity physically sleeping in the bed bounding box
+        BlockPos footPos = getBedFootPos(this.level(), headPos);
+        AABB bedAABB = new AABB(headPos).minmax(new AABB(footPos)).inflate(0.5);
+        List<LivingEntity> sleepingEntities = this.level().getEntitiesOfClass(
+                LivingEntity.class,
+                bedAABB,
+                e -> e != this && e.isAlive() && e.isSleeping()
+        );
+        if (!sleepingEntities.isEmpty()) {
+            return true;
+        }
+
+        // 2. Any active companion bot currently sleeping with sleepingPos here
+        for (AiBotPlayer other : BotManager.getActiveBots()) {
+            if (other != this && other.level() == this.level() && other.isAlive() && other.isSleeping()) {
+                Optional<BlockPos> otherSleepPos = other.getSleepingPos();
+                if (otherSleepPos.isPresent() && isSameBed(this.level(), otherSleepPos.get(), headPos)) {
+                    return true;
+                }
+            }
+        }
+
+        // 3. Any online player sleeping with sleepingPos here
+        if (this.level() instanceof ServerLevel sl) {
+            for (ServerPlayer sp : sl.players()) {
+                if (sp != this && sp.isAlive() && sp.isSleeping()) {
+                    Optional<BlockPos> playerSleepPos = sp.getSleepingPos();
+                    if (playerSleepPos.isPresent() && isSameBed(this.level(), playerSleepPos.get(), headPos)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // 4. BlockState OCCUPIED property
+        if (headState.getValue(BedBlock.OCCUPIED)) {
+            return true;
+        }
+
+        return false;
+    }
+
+    public boolean isBedClaimedByOther(@Nullable BlockPos bedPos) {
+        if (bedPos == null || this.level() == null) return false;
+        BlockPos headPos = getBedHeadPos(this.level(), bedPos);
+
+        // If physically occupied by another entity, it is immediately unavailable
+        if (isBedOccupiedByOther(headPos)) {
+            return true;
+        }
+
+        // Check active companion bots for claims or active travel targets
+        for (AiBotPlayer other : BotManager.getActiveBots()) {
+            if (other != this && other.level() == this.level() && other.isAlive()) {
+                // If other bot is already sleeping in it
+                if (other.isSleeping()) {
+                    Optional<BlockPos> otherSleepPos = other.getSleepingPos();
+                    if (otherSleepPos.isPresent() && isSameBed(this.level(), otherSleepPos.get(), headPos)) {
+                        return true;
+                    }
+                }
+
+                // Check assignedBedPos
+                BlockPos otherBed = other.getAssignedBedPos();
+                if (otherBed != null && isSameBed(this.level(), otherBed, headPos)) {
+                    if (this.assignedBedPos == null || !isSameBed(this.level(), this.assignedBedPos, headPos)) {
+                        // Other bot has an assigned claim on this bed and we do not
+                        return true;
+                    }
+                    // Both bots share the exact same assignedBedPos! Conflict resolution:
+                    if (other.isBedManuallyAssigned() && !this.isBedManuallyAssigned()) {
+                        return true;
+                    }
+                    if (this.isBedManuallyAssigned() && !other.isBedManuallyAssigned()) {
+                        continue;
+                    }
+                    // Both manual or both auto: deterministic tie-break by UUID
+                    if (other.getUUID().compareTo(this.getUUID()) < 0) {
+                        return true;
+                    }
+                }
+
+                // Check active travel target to bed during night shelter
+                BlockPos otherTarget = other.getCurrentShelterBedTarget();
+                if (otherTarget != null && isSameBed(this.level(), otherTarget, headPos)) {
+                    if (this.currentShelterBedTarget == null || !isSameBed(this.level(), this.currentShelterBedTarget, headPos)) {
+                        return true;
+                    }
+                    // Both are currently navigating towards this bed!
+                    double otherDistSq = other.distanceToSqr(Vec3.atCenterOf(headPos));
+                    double myDistSq = this.distanceToSqr(Vec3.atCenterOf(headPos));
+                    if (otherDistSq < myDistSq) {
+                        return true;
+                    } else if (Math.abs(otherDistSq - myDistSq) < 0.5 && other.getUUID().compareTo(this.getUUID()) < 0) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // Check VillageManager houses in compound
+        for (VillageManager.VillageHouse house : VillageManager.getAllHouses().values()) {
+            if (house.bedPos != null && house.ownerBotName != null && !house.ownerBotName.isBlank()
+                    && !house.ownerBotName.equalsIgnoreCase(this.botName)) {
+                if (isSameBed(this.level(), house.bedPos, headPos)) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     public synchronized boolean tickNightShelterAndSleep() {
         if (this.isSleeping()) {
             this.activePassiveActivity = "Sleeping in bed";
+            this.currentShelterBedTarget = null;
             this.stopMovement();
             return true;
         }
 
         BlockPos targetBed = this.assignedBedPos;
-        if (targetBed != null && isTargetBlacklisted(targetBed)) {
-            targetBed = null;
+        if (targetBed != null) {
+            targetBed = getBedHeadPos(this.level(), targetBed);
+            BlockState st = this.level().getBlockState(targetBed);
+            // Verify block is still a bed, target is not blacklisted, and bed is not claimed/occupied by another
+            if (!(st.getBlock() instanceof BedBlock) || isTargetBlacklisted(targetBed) || isBedClaimedByOther(targetBed)) {
+                if (!this.isBedManuallyAssigned) {
+                    this.assignedBedPos = null;
+                }
+                this.currentShelterBedTarget = null;
+                targetBed = null;
+            }
         }
+
         if (targetBed == null) {
             targetBed = findNearestBedBlock(32);
             if (targetBed != null) {
-                this.assignedBedPos = targetBed;
+                targetBed = getBedHeadPos(this.level(), targetBed);
+                if (this.assignedBedPos == null && !this.isBedManuallyAssigned) {
+                    this.assignedBedPos = targetBed;
+                }
             }
         }
 
         if (targetBed != null) {
+            this.currentShelterBedTarget = targetBed;
             double distSq = this.distanceToSqr(Vec3.atCenterOf(targetBed));
             boolean canReachBedDirectly = distSq <= 4.0 && hasUnobstructedReachToTarget(targetBed);
             if (!canReachBedDirectly) {
@@ -7763,15 +7330,25 @@ public class AiBotPlayer extends ServerPlayer {
                 lookAtPos(Vec3.atCenterOf(targetBed));
                 if (this.tickCount % 20 == 0) {
                     try {
-                        boolean ok = this.startSleeping(targetBed);
-                        if (ok) {
-                            return true;
+                        if (!isBedOccupiedByOther(targetBed)) {
+                            boolean ok = this.startSleeping(targetBed);
+                            if (ok) {
+                                this.currentShelterBedTarget = null;
+                                return true;
+                            }
+                        } else {
+                            if (!this.isBedManuallyAssigned) {
+                                this.assignedBedPos = null;
+                            }
+                            this.currentShelterBedTarget = null;
                         }
                     } catch (Exception ignored) {}
                 }
                 return true;
             }
         }
+
+        this.currentShelterBedTarget = null;
 
         BlockPos targetHouse = this.assignedHousePos;
         if (targetHouse != null && !isTargetBlacklisted(targetHouse)) {
@@ -7803,16 +7380,21 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public @Nullable BlockPos findNearestBedBlock(int radius) {
-        return findNearestBedBlockNear(this.blockPosition(), radius);
+        return findNearestBedBlockNear(this.blockPosition(), radius, true);
     }
 
     public @Nullable BlockPos findNearestBedBlockNear(BlockPos pos, int radius) {
+        return findNearestBedBlockNear(pos, radius, true);
+    }
+
+    public @Nullable BlockPos findNearestBedBlockNear(BlockPos pos, int radius, boolean mustBeUnclaimed) {
         BlockPos best = null;
         double bestDistSq = Double.MAX_VALUE;
         for (BlockPos p : BlockPos.betweenClosed(pos.offset(-radius, -3, -radius), pos.offset(radius, 3, radius))) {
             if (isTargetBlacklisted(p)) continue;
             BlockState st = this.level().getBlockState(p);
             if (st.getBlock() instanceof BedBlock && st.getValue(BedBlock.PART) == BedPart.HEAD) {
+                if (mustBeUnclaimed && isBedClaimedByOther(p)) continue;
                 double d = Vec3.atCenterOf(pos).distanceToSqr(Vec3.atCenterOf(p));
                 if (d < bestDistSq) {
                     bestDistSq = d;
@@ -8164,14 +7746,17 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public @Nullable BlockPos findNearestBed(int radius) {
-        if (this.assignedBedPos != null && this.distanceToSqr(Vec3.atCenterOf(this.assignedBedPos)) <= radius * radius) {
+        if (this.assignedBedPos != null && !isBedClaimedByOther(this.assignedBedPos)
+                && this.distanceToSqr(Vec3.atCenterOf(this.assignedBedPos)) <= radius * radius) {
             return this.assignedBedPos;
         }
         BlockPos center = this.blockPosition();
         BlockPos best = null;
         double bestDistSq = Double.MAX_VALUE;
         for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -3, -radius), center.offset(radius, 3, radius))) {
-            if (this.level().getBlockState(p).getBlock() instanceof BedBlock) {
+            BlockState st = this.level().getBlockState(p);
+            if (st.getBlock() instanceof BedBlock && st.getValue(BedBlock.PART) == BedPart.HEAD) {
+                if (isBedClaimedByOther(p)) continue;
                 double d = center.distSqr(p);
                 if (d < bestDistSq) {
                     bestDistSq = d;
@@ -8269,10 +7854,10 @@ public class AiBotPlayer extends ServerPlayer {
         Set<BlockPos> claimedBeds = new HashSet<>();
         for (AiBotPlayer bot : BotManager.getActiveBots()) {
             if (bot.getAssignedBedPos() != null) {
-                claimedBeds.add(bot.getAssignedBedPos());
+                claimedBeds.add(getBedHeadPos(sl, bot.getAssignedBedPos()));
             }
         }
-        return poi.findAll(holder -> holder.is(PoiTypes.HOME), pos -> !claimedBeds.contains(pos), center, 50, PoiManager.Occupancy.ANY)
+        return poi.findAll(holder -> holder.is(PoiTypes.HOME), pos -> !claimedBeds.contains(getBedHeadPos(sl, pos)) && !isBedClaimedByOther(pos), center, 50, PoiManager.Occupancy.ANY)
                 .findFirst().orElse(null);
     }
 
@@ -8371,9 +7956,11 @@ public class AiBotPlayer extends ServerPlayer {
         double spawnZ = (this.getZ() + partner.getZ()) * 0.5;
         AiBotPlayer baby = BotManager.spawnBot(sl, babyName, "villager", spawnX, spawnY, spawnZ, this.getYRot(), 0.0f);
         baby.setBaby(true);
-        baby.setAssignedBedPos(vacantBed);
-        baby.setAssignedHousePos(vacantBed);
-        VillageManager.registerHouse("Compound", vacantBed, vacantBed, babyName);
+        BlockPos babyBedHead = getBedHeadPos(sl, vacantBed);
+        baby.setAssignedBedPos(babyBedHead);
+        baby.setBedManuallyAssigned(true);
+        baby.setAssignedHousePos(babyBedHead);
+        VillageManager.registerHouse("Compound", babyBedHead, babyBedHead, babyName);
 
         this.lastBreedingTime = now;
         sayRoutineInChat("A new baby companion was born into our colony! Welcoming baby " + baby.getPlainTextName() + " to the village (Parents: " + this.getPlainTextName() + " & " + partner.getPlainTextName() + ")!");
@@ -8520,9 +8107,17 @@ public class AiBotPlayer extends ServerPlayer {
             }
 
             if (targetBed != null) {
-                this.assignedBedPos = targetBed;
-                VillageManager.registerHouse("Compound", targetBed, targetBed, this.botName);
-                sayInChat("Understood! Assigned bed at (" + targetBed.getX() + ", " + targetBed.getY() + ", " + targetBed.getZ() + ") as my personal bed. I will return here to sleep every night!");
+                BlockPos headBed = getBedHeadPos(this.level(), targetBed);
+                for (AiBotPlayer other : BotManager.getActiveBots()) {
+                    if (other != this && other.getAssignedBedPos() != null && isSameBed(other.level(), other.getAssignedBedPos(), headBed)) {
+                        other.setAssignedBedPos(null);
+                        other.setBedManuallyAssigned(false);
+                    }
+                }
+                this.assignedBedPos = headBed;
+                this.isBedManuallyAssigned = true;
+                VillageManager.registerHouse("Compound", headBed, headBed, this.botName);
+                sayInChat("Understood! Assigned bed at (" + headBed.getX() + ", " + headBed.getY() + ", " + headBed.getZ() + ") as my personal bed. I will return here to sleep every night!");
                 return true;
             } else {
                 sayInChat("I couldn't find a bed nearby! Look at a bed or stand next to one and tell me again.");
@@ -8546,7 +8141,15 @@ public class AiBotPlayer extends ServerPlayer {
                 int maxRadius = Math.max(foundArea.getMaxX() - foundArea.getMinX(), foundArea.getMaxZ() - foundArea.getMinZ()) / 2 + 2;
                 BlockPos bedInArea = findNearestBedBlockNear(this.assignedHousePos, maxRadius);
                 if (bedInArea != null) {
-                    this.assignedBedPos = bedInArea;
+                    BlockPos headInArea = getBedHeadPos(this.level(), bedInArea);
+                    for (AiBotPlayer other : BotManager.getActiveBots()) {
+                        if (other != this && other.getAssignedBedPos() != null && isSameBed(other.level(), other.getAssignedBedPos(), headInArea)) {
+                            other.setAssignedBedPos(null);
+                            other.setBedManuallyAssigned(false);
+                        }
+                    }
+                    this.assignedBedPos = headInArea;
+                    this.isBedManuallyAssigned = true;
                 }
                 sayInChat("Understood! Assigned saved area '" + foundArea.name + "' as my home house. I will seek shelter here!");
                 return true;
@@ -8555,7 +8158,15 @@ public class AiBotPlayer extends ServerPlayer {
                 this.assignedHousePos = housePos;
                 BlockPos bedNear = findNearestBedBlockNear(housePos, 8);
                 if (bedNear != null) {
-                    this.assignedBedPos = bedNear;
+                    BlockPos headNear = getBedHeadPos(this.level(), bedNear);
+                    for (AiBotPlayer other : BotManager.getActiveBots()) {
+                        if (other != this && other.getAssignedBedPos() != null && isSameBed(other.level(), other.getAssignedBedPos(), headNear)) {
+                            other.setAssignedBedPos(null);
+                            other.setBedManuallyAssigned(false);
+                        }
+                    }
+                    this.assignedBedPos = headNear;
+                    this.isBedManuallyAssigned = true;
                 }
                 sayInChat("Understood! Assigned (" + housePos.getX() + ", " + housePos.getY() + ", " + housePos.getZ() + ") as my home house! I will seek shelter here at night.");
                 return true;

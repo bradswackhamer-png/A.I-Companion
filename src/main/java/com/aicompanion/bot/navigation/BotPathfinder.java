@@ -1,593 +1,678 @@
 package com.aicompanion.bot.navigation;
 
 import com.aicompanion.bot.AiBotPlayer;
-import com.aicompanion.bot.learning.HiveMindBrain;
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashMap;
 import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
-import java.util.Map;
-import java.util.PriorityQueue;
 import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.tags.BlockTags;
-import net.minecraft.tags.FluidTags;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.EntityDimensions;
+import net.minecraft.world.entity.EntityTypes;
+import net.minecraft.world.entity.PathfinderMob;
+import net.minecraft.world.entity.Pose;
+import net.minecraft.world.entity.ai.attributes.Attributes;
+import net.minecraft.world.entity.ai.navigation.GroundPathNavigation;
+import net.minecraft.world.entity.ai.navigation.PathNavigation;
+import net.minecraft.world.level.ClipContext;
+import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BedBlock;
-import net.minecraft.world.level.block.Block;
-import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CarpetBlock;
 import net.minecraft.world.level.block.DoorBlock;
-import net.minecraft.world.level.block.FenceBlock;
 import net.minecraft.world.level.block.FenceGateBlock;
 import net.minecraft.world.level.block.SlabBlock;
 import net.minecraft.world.level.block.StairBlock;
 import net.minecraft.world.level.block.TrapDoorBlock;
-import net.minecraft.world.level.block.WallBlock;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.material.FluidState;
+import net.minecraft.world.level.pathfinder.Node;
+import net.minecraft.world.level.pathfinder.Path;
+import net.minecraft.world.level.pathfinder.PathFinder;
+import net.minecraft.world.level.pathfinder.PathType;
+import net.minecraft.world.level.pathfinder.PathfindingContext;
+import net.minecraft.world.level.pathfinder.WalkNodeEvaluator;
+import net.minecraft.world.phys.AABB;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
 import org.jspecify.annotations.Nullable;
 
 /**
- * Vanilla Villager / GroundPathNavigation-style 3D Voxel A* Pathfinder.
+ * Genuine Vanilla Minecraft Mob Navigation Engine for {@link AiBotPlayer}.
  *
- * Serves as the deterministic base navigation engine for AI Companion Bots:
- * - Evaluates walkable floor surfaces, 2-block headroom, 1-block step-ups, and safe 1-3 block step-downs.
- * - Treats closed wooden doors and fence gates as openable passageways (just like vanilla Villagers).
- * - Enforces strict passage-axis alignment through doors and gates so bots walk squarely through doorways.
- * - Forbids corner-clipping diagonal moves when either adjacent cardinal block is obstructed.
- * - Layers HiveMindBrain learned trail pheromones and hazard penalties on top of base A* edge costs.
+ * Uses Minecraft's actual {@link GroundPathNavigation}, {@link WalkNodeEvaluator},
+ * {@link PathFinder}, {@link Path}, and {@link net.minecraft.world.entity.ai.control.MoveControl}
+ * via a lightweight, unspawned {@link PathfinderMob} proxy paired with each bot.
  */
 public final class BotPathfinder {
-
-    public enum NodeType {
-        WALKABLE,
-        STAIRS,
-        DOOR_OPEN,
-        DOOR_CLOSED_OPENABLE,
-        WATER,
-        FENCE_OR_WALL,
-        HAZARD,
-        BLOCKED
-    }
-
-    private static final class PathNode implements Comparable<PathNode> {
-        final BlockPos pos;
-        final long key;
-        final NodeType type;
-        float gCost;
-        float fCost;
-        @Nullable PathNode parent;
-
-        PathNode(BlockPos pos, NodeType type, float gCost, float fCost, @Nullable PathNode parent) {
-            this.pos = pos;
-            this.key = pos.asLong();
-            this.type = type;
-            this.gCost = gCost;
-            this.fCost = fCost;
-            this.parent = parent;
-        }
-
-        @Override
-        public int compareTo(PathNode other) {
-            return Float.compare(this.fCost, other.fCost);
-        }
-    }
 
     private BotPathfinder() {}
 
     /**
-     * Computes a voxel A* path from the bot's current block position to the target position.
-     * Returns an ordered list of BlockPos waypoints from start (exclusive) to goal (inclusive).
+     * Custom extension of Vanilla {@link WalkNodeEvaluator} that adds FenceGate support
+     * (treating closed fence gates like closed wooden doors when gate passage is allowed)
+     * and enforces cardinal alignment through doorways and fence gates.
+     */
+    public static final class BotWalkNodeEvaluator extends WalkNodeEvaluator {
+        private boolean canOpenFenceGates = true;
+
+        public void setCanOpenFenceGates(boolean canOpenFenceGates) {
+            this.canOpenFenceGates = canOpenFenceGates;
+        }
+
+        public boolean canOpenFenceGates() {
+            return this.canOpenFenceGates;
+        }
+
+        @Override
+        public PathType getPathType(PathfindingContext context, int x, int y, int z) {
+            BlockPos pos = new BlockPos(x, y, z);
+            BlockState state = context.getBlockState(pos);
+
+            if (state.getBlock() instanceof FenceGateBlock) {
+                BlockPos belowPos = pos.below();
+                BlockState belowState = context.getBlockState(belowPos);
+                if (!belowState.getCollisionShape(context.level(), belowPos).isEmpty()) {
+                    if (state.getValue(FenceGateBlock.OPEN)) {
+                        return PathType.DOOR_OPEN;
+                    }
+                    if (this.canOpenDoors() && this.canPassDoors() && this.canOpenFenceGates) {
+                        return PathType.DOOR_WOOD_CLOSED;
+                    }
+                }
+                return PathType.FENCE;
+            }
+
+            // Ensure the head space (y + 1) directly above a fence gate is treated as open air,
+            // and prevent the top of a fence gate from ever being evaluated as a walkable surface.
+            BlockPos belowPos = pos.below();
+            if (context.getBlockState(belowPos).getBlock() instanceof FenceGateBlock
+                    && state.getCollisionShape(context.level(), pos).isEmpty()) {
+                return PathType.OPEN;
+            }
+
+            return super.getPathType(context, x, y, z);
+        }
+
+        @Override
+        protected boolean isNeighborValid(@Nullable Node neighbor, Node current) {
+            if (!super.isNeighborValid(neighbor, current) || neighbor == null) {
+                return false;
+            }
+            if (this.currentContext != null) {
+                int dx = neighbor.x - current.x;
+                int dz = neighbor.z - current.z;
+                if (dx != 0 ^ dz != 0) {
+                    Direction.Axis moveAxis = (dx != 0) ? Direction.Axis.X : Direction.Axis.Z;
+                    BlockPos curPos = new BlockPos(current.x, current.y, current.z);
+                    BlockState curState = this.currentContext.getBlockState(curPos);
+                    if (curState.getBlock() instanceof FenceGateBlock && curState.hasProperty(FenceGateBlock.FACING)) {
+                        if (curState.getValue(FenceGateBlock.FACING).getAxis() != moveAxis) {
+                            return false;
+                        }
+                    }
+                    BlockPos nextPos = new BlockPos(neighbor.x, neighbor.y, neighbor.z);
+                    BlockState nextState = this.currentContext.getBlockState(nextPos);
+                    if (nextState.getBlock() instanceof FenceGateBlock && nextState.hasProperty(FenceGateBlock.FACING)) {
+                        if (nextState.getValue(FenceGateBlock.FACING).getAxis() != moveAxis) {
+                            return false;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
+
+        @Override
+        protected boolean isDiagonalValid(Node root, @Nullable Node xNode, @Nullable Node zNode) {
+            if (xNode != null && (xNode.type == PathType.DOOR_OPEN || xNode.type == PathType.WALKABLE_DOOR)) {
+                return false;
+            }
+            if (zNode != null && (zNode.type == PathType.DOOR_OPEN || zNode.type == PathType.WALKABLE_DOOR)) {
+                return false;
+            }
+            if (root.type == PathType.DOOR_OPEN || root.type == PathType.WALKABLE_DOOR) {
+                return false;
+            }
+            return super.isDiagonalValid(root, xNode, zNode);
+        }
+
+        @Override
+        protected boolean isDiagonalValid(@Nullable Node diagonalNode) {
+            if (diagonalNode != null && (diagonalNode.type == PathType.DOOR_OPEN || diagonalNode.type == PathType.WALKABLE_DOOR)) {
+                return false;
+            }
+            return super.isDiagonalValid(diagonalNode);
+        }
+    }
+
+    /**
+     * Vanilla {@link GroundPathNavigation} configured with {@link BotWalkNodeEvaluator}
+     * and indoor/underground target support.
+     */
+    public static final class BotGroundPathNavigation extends GroundPathNavigation {
+        private BotWalkNodeEvaluator botEvaluator;
+
+        public BotGroundPathNavigation(PathfinderMob mob, Level level) {
+            super(mob, level);
+            this.setCanOpenDoors(true);
+            this.setCanFloat(true);
+            this.setCanWalkOverFences(false);
+            this.setCanPathToTargetsBelowSurface(true);
+        }
+
+        @Override
+        protected PathFinder createPathFinder(int maxVisitedNodes) {
+            this.botEvaluator = new BotWalkNodeEvaluator();
+            this.botEvaluator.setCanPassDoors(true);
+            this.botEvaluator.setCanOpenDoors(true);
+            this.botEvaluator.setCanFloat(true);
+            this.botEvaluator.setCanWalkOverFences(false);
+            this.nodeEvaluator = this.botEvaluator;
+            return new PathFinder(this.nodeEvaluator, maxVisitedNodes);
+        }
+
+        public BotWalkNodeEvaluator getBotEvaluator() {
+            return this.botEvaluator;
+        }
+
+        @Override
+        public boolean canCutCorner(PathType pathType) {
+            return super.canCutCorner(pathType) && pathType != PathType.DOOR_OPEN;
+        }
+    }
+
+    /**
+     * Unspawned, server-side-only {@link PathfinderMob} proxy that mirrors an {@link AiBotPlayer}'s
+     * position, bounding box, step height, and ground/fluid state so Vanilla's {@link GroundPathNavigation}
+     * and {@link WalkNodeEvaluator} operate natively.
+     */
+    private static final class BotProxyMob extends PathfinderMob {
+        private final AiBotPlayer bot;
+
+        BotProxyMob(AiBotPlayer bot, ServerLevel level) {
+            super(EntityTypes.VILLAGER, level);
+            this.bot = bot;
+            this.noPhysics = true;
+            var followRange = this.getAttribute(Attributes.FOLLOW_RANGE);
+            if (followRange != null) {
+                followRange.setBaseValue(64.0);
+            }
+            var stepHeight = this.getAttribute(Attributes.STEP_HEIGHT);
+            if (stepHeight != null) {
+                stepHeight.setBaseValue(1.06);
+            }
+            var moveSpeed = this.getAttribute(Attributes.MOVEMENT_SPEED);
+            if (moveSpeed != null) {
+                moveSpeed.setBaseValue(0.35);
+            }
+            this.navigation.updatePathfinderMaxVisitedNodes();
+        }
+
+        @Override
+        protected PathNavigation createNavigation(Level level) {
+            return new BotGroundPathNavigation(this, level);
+        }
+
+        void syncFromBot() {
+            this.setPos(this.bot.getX(), this.bot.getY(), this.bot.getZ());
+            this.setBoundingBox(this.bot.getBoundingBox());
+            this.setYRot(this.bot.getYRot());
+            this.setXRot(this.bot.getXRot());
+            this.yHeadRot = this.bot.yHeadRot;
+            this.yBodyRot = this.bot.yBodyRot;
+            this.setOnGround(this.bot.onGround());
+            this.horizontalCollision = this.bot.horizontalCollision;
+            this.verticalCollision = this.bot.verticalCollision;
+        }
+
+        @Override
+        protected EntityDimensions getDefaultDimensions(Pose pose) {
+            if (this.bot != null) {
+                return this.bot.getDimensions(pose);
+            }
+            return super.getDefaultDimensions(pose);
+        }
+
+        @Override
+        public boolean onGround() {
+            return this.bot != null ? this.bot.onGround() : super.onGround();
+        }
+
+        @Override
+        public boolean isInWater() {
+            return this.bot != null ? this.bot.isInWater() : super.isInWater();
+        }
+
+        @Override
+        public boolean isInLava() {
+            return this.bot != null ? this.bot.isInLava() : super.isInLava();
+        }
+
+        @Override
+        public boolean isInLiquid() {
+            return this.bot != null ? (this.bot.isInWater() || this.bot.isInLava()) : super.isInLiquid();
+        }
+
+        @Override
+        public boolean isPassenger() {
+            return this.bot != null ? this.bot.isPassenger() : super.isPassenger();
+        }
+
+        @Override
+        public float maxUpStep() {
+            return this.bot != null ? this.bot.maxUpStep() : 1.06f;
+        }
+
+        @Override
+        public int getMaxFallDistance() {
+            return 3;
+        }
+
+        @Override
+        public boolean canStandOnFluid(FluidState fluidState) {
+            return this.bot != null && this.bot.canStandOnFluid(fluidState);
+        }
+    }
+
+    /**
+     * Per-bot Vanilla Navigation controller instance stored on {@link AiBotPlayer}.
+     */
+    public static final class Navigator {
+        private final AiBotPlayer bot;
+        private @Nullable BotProxyMob proxyMob;
+        private @Nullable BlockPos lastTargetBlock = null;
+        private int lastRecomputeTick = -999;
+        private int unreachableTicks = 0;
+        private int consecutiveVanillaStuckCount = 0;
+        private final Set<BlockPos> openedDoorsAndGates = new HashSet<>();
+
+        public Navigator(AiBotPlayer bot) {
+            this.bot = bot;
+        }
+
+        private @Nullable BotProxyMob ensureProxy() {
+            if (!(this.bot.level() instanceof ServerLevel serverLevel)) {
+                return null;
+            }
+            if (this.proxyMob == null || this.proxyMob.level() != serverLevel) {
+                this.proxyMob = new BotProxyMob(this.bot, serverLevel);
+            }
+            this.proxyMob.syncFromBot();
+            return this.proxyMob;
+        }
+
+        public void stop() {
+            if (this.proxyMob != null) {
+                this.proxyMob.getNavigation().stop();
+            }
+            this.lastTargetBlock = null;
+            this.lastRecomputeTick = -999;
+            this.unreachableTicks = 0;
+            this.consecutiveVanillaStuckCount = 0;
+            if (this.bot.level() instanceof ServerLevel level) {
+                closePassedDoorsAndGates(level, null);
+            }
+        }
+
+        /**
+         * Drives the bot toward {@code target} for a single server tick using Vanilla's
+         * {@link GroundPathNavigation} and {@link WalkNodeEvaluator}.
+         */
+        public void tickMoveTowards(Vec3 target, boolean sprint) {
+            BotProxyMob proxy = ensureProxy();
+            if (proxy == null || !(this.bot.level() instanceof ServerLevel level)) {
+                return;
+            }
+
+            BotGroundPathNavigation nav = (BotGroundPathNavigation) proxy.getNavigation();
+            boolean forbidFenceExit = this.bot.shouldRespectFencePerimeter();
+            nav.getBotEvaluator().setCanOpenFenceGates(!forbidFenceExit);
+
+            BlockPos rawGoalBlock = BlockPos.containing(target);
+            GoalResolution resolved = resolveGoal(level, rawGoalBlock, this.bot.blockPosition());
+            BlockPos goalBlock = resolved.goalPos();
+            int accuracy = resolved.accuracy();
+
+            double dxGoal = target.x - this.bot.getX();
+            double dzGoal = target.z - this.bot.getZ();
+            double horizDistSqToTarget = dxGoal * dxGoal + dzGoal * dzGoal;
+            double vertDiffToTarget = Math.abs(target.y - this.bot.getY());
+
+            // Direct arrival within final step when unobstructed
+            if (horizDistSqToTarget <= 1.21 && vertDiffToTarget <= 1.5 && hasDirectStepClearance(level, this.bot, target)) {
+                closePassedDoorsAndGates(level, null);
+                steerBotDirectly(target, sprint);
+                return;
+            }
+
+            boolean needRecompute = nav.isDone()
+                    || this.lastTargetBlock == null
+                    || !this.lastTargetBlock.closerThan(goalBlock, 1.5)
+                    || (this.bot.tickCount - this.lastRecomputeTick >= 20);
+
+            if (needRecompute) {
+                Path newPath = nav.createPath(goalBlock, accuracy);
+                this.lastTargetBlock = goalBlock.immutable();
+                this.lastRecomputeTick = this.bot.tickCount;
+                if (newPath != null) {
+                    nav.moveTo(newPath, 1.0);
+                } else {
+                    nav.stop();
+                }
+            }
+
+            Path path = nav.getPath();
+
+            // Check if a nearby target (<= 28 blocks, e.g. inside a sealed building) is unreachable according to Vanilla PathFinder
+            int manhattanToGoal = this.bot.blockPosition().distManhattan(goalBlock);
+            if (manhattanToGoal <= 28 && (path == null || (!path.canReach() && path.getDistToTarget() > Math.max(1.5f, accuracy + 0.5f)))) {
+                this.unreachableTicks++;
+                if (this.unreachableTicks >= 20) {
+                    this.bot.blacklistUnreachableTarget(rawGoalBlock, 600);
+                    this.bot.blacklistUnreachableTarget(goalBlock, 600);
+                    this.bot.stopMovement();
+                    return;
+                }
+            } else {
+                this.unreachableTicks = 0;
+            }
+
+            if (path != null && !path.isDone()) {
+                // 1. Open any wooden doors or fence gates along the current/upcoming vanilla path nodes
+                interactWithDoorsAlongPath(level, path, forbidFenceExit);
+
+                // 2. Tick Vanilla GroundPathNavigation (advances nodes, checks corner cutting & 100-tick stuck detection)
+                nav.tick();
+
+                // 3. Check if Vanilla's 100-tick stuck detector triggered
+                if (nav.isStuck()) {
+                    this.consecutiveVanillaStuckCount++;
+                    this.lastRecomputeTick = -999; // Force fresh path on next tick
+                    if (this.consecutiveVanillaStuckCount >= 2) {
+                        this.bot.blacklistUnreachableTarget(rawGoalBlock, 600);
+                        this.bot.blacklistUnreachableTarget(goalBlock, 600);
+                        this.bot.stopMovement();
+                        return;
+                    }
+                } else {
+                    this.consecutiveVanillaStuckCount = 0;
+                }
+
+                // 4. Steer bot toward the current Vanilla Path node (or final target on the last node)
+                Path activePath = nav.getPath();
+                if (activePath != null && !activePath.isDone()) {
+                    int nextIdx = activePath.getNextNodeIndex();
+                    Vec3 nextNodePos;
+                    if (nextIdx >= activePath.getNodeCount() - 1 && accuracy == 0 && horizDistSqToTarget <= 4.0) {
+                        nextNodePos = target;
+                    } else {
+                        Node node = activePath.getNode(nextIdx);
+                        double floorY = WalkNodeEvaluator.getFloorLevel(level, node.asBlockPos());
+                        nextNodePos = new Vec3(node.x + 0.5, floorY, node.z + 0.5);
+                    }
+                    closePassedDoorsAndGates(level, activePath);
+                    steerBotDirectly(nextNodePos, sprint);
+                    return;
+                }
+            }
+
+            // Close any doors we passed once path finishes
+            closePassedDoorsAndGates(level, null);
+
+            // If within close reach of goal or when path just finished at destination, step toward target if clear
+            if (horizDistSqToTarget <= 4.0 && hasDirectStepClearance(level, this.bot, target)) {
+                steerBotDirectly(target, sprint);
+            } else {
+                this.bot.zza = 0.0f;
+                this.bot.xxa = 0.0f;
+                this.bot.setJumping(this.bot.isInWater() || this.bot.isInLava());
+            }
+        }
+
+        private void steerBotDirectly(Vec3 waypoint, boolean sprint) {
+            Vec3 eye = this.bot.getEyePosition();
+            double dx = waypoint.x - eye.x;
+            double dy = (waypoint.y + this.bot.getEyeHeight()) - eye.y;
+            double dz = waypoint.z - eye.z;
+            double horiz = Math.sqrt(dx * dx + dz * dz);
+            if (horiz > 1.0E-4) {
+                float yaw = (float) (Mth.atan2(dz, dx) * (180.0 / Math.PI)) - 90.0f;
+                float pitch = (float) (-(Mth.atan2(dy, horiz) * (180.0 / Math.PI)));
+                this.bot.setYRot(yaw);
+                this.bot.setYHeadRot(yaw);
+                this.bot.setYBodyRot(yaw);
+                this.bot.setXRot(Mth.clamp(pitch, -45.0f, 45.0f));
+            }
+            this.bot.setSprinting(sprint);
+            this.bot.zza = sprint ? 1.0f : 0.8f;
+            this.bot.xxa = 0.0f;
+            // With STEP_HEIGHT = 1.06, bots step up 1-block ledges and stairs smoothly without jumping;
+            // only jump to swim in fluids.
+            this.bot.setJumping(this.bot.isInWater() || this.bot.isInLava() || this.bot.isInHazardousFluid());
+        }
+
+        /**
+         * Vanilla {@code InteractWithDoor}-style door and fence gate opener along the active {@link Path}.
+         */
+        private void interactWithDoorsAlongPath(ServerLevel level, Path path, boolean forbidFenceExit) {
+            int nextIdx = path.getNextNodeIndex();
+            int startIdx = Math.max(0, nextIdx - 1);
+            int endIdx = Math.min(path.getNodeCount() - 1, nextIdx + 1);
+
+            for (int i = startIdx; i <= endIdx; i++) {
+                Node node = path.getNode(i);
+                BlockPos nodePos = node.asBlockPos();
+                if (this.bot.distanceToSqr(nodePos.getX() + 0.5, this.bot.getY(), nodePos.getZ() + 0.5) <= 4.0) {
+                    tryOpenDoorOrGateAt(level, nodePos, forbidFenceExit);
+                    tryOpenDoorOrGateAt(level, nodePos.above(), forbidFenceExit);
+                }
+            }
+
+            // Also check the block the bot is currently standing in and immediately facing
+            BlockPos feet = this.bot.blockPosition();
+            tryOpenDoorOrGateAt(level, feet, forbidFenceExit);
+            tryOpenDoorOrGateAt(level, feet.above(), forbidFenceExit);
+            BlockPos front = feet.relative(this.bot.getDirection());
+            if (this.bot.distanceToSqr(front.getX() + 0.5, this.bot.getY(), front.getZ() + 0.5) <= 2.5) {
+                tryOpenDoorOrGateAt(level, front, forbidFenceExit);
+                tryOpenDoorOrGateAt(level, front.above(), forbidFenceExit);
+            }
+        }
+
+        private void tryOpenDoorOrGateAt(ServerLevel level, BlockPos pos, boolean forbidFenceExit) {
+            BlockState state = level.getBlockState(pos);
+            if (state.getBlock() instanceof DoorBlock door) {
+                if (door.type().canOpenByHand()) {
+                    if (!state.getValue(DoorBlock.OPEN)) {
+                        door.setOpen(this.bot, level, state, pos, true);
+                    }
+                    BlockPos bottomDoorPos = state.hasProperty(DoorBlock.HALF)
+                            && state.getValue(DoorBlock.HALF) == net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER
+                            ? pos.below() : pos.immutable();
+                    this.openedDoorsAndGates.add(bottomDoorPos);
+                    this.bot.rememberOpenedDoor(bottomDoorPos);
+                }
+            } else if (!forbidFenceExit && state.getBlock() instanceof FenceGateBlock) {
+                if (!state.getValue(FenceGateBlock.OPEN)) {
+                    BlockState openState = state.setValue(FenceGateBlock.OPEN, true);
+                    if (openState.hasProperty(FenceGateBlock.FACING)) {
+                        Direction botDir = this.bot.getDirection();
+                        if (openState.getValue(FenceGateBlock.FACING) == botDir.getOpposite()) {
+                            openState = openState.setValue(FenceGateBlock.FACING, botDir);
+                        }
+                    }
+                    level.setBlockAndUpdate(pos, openState);
+                    level.playSound(null, pos, SoundEvents.FENCE_GATE_OPEN, SoundSource.BLOCKS, 1.0f, 1.0f);
+                }
+                this.openedDoorsAndGates.add(pos.immutable());
+                this.bot.rememberOpenedGate(pos.immutable());
+            }
+        }
+
+        /**
+         * Closes doors and fence gates behind the bot once it has passed the doorway node
+         * and is clear of the door's bounding box (matching Vanilla {@code InteractWithDoor}).
+         */
+        private void closePassedDoorsAndGates(ServerLevel level, @Nullable Path activePath) {
+            if (this.openedDoorsAndGates.isEmpty()) {
+                return;
+            }
+            BlockPos prevNodePos = (activePath != null && activePath.getPreviousNode() != null)
+                    ? activePath.getPreviousNode().asBlockPos() : null;
+            BlockPos nextNodePos = (activePath != null && !activePath.isDone())
+                    ? activePath.getNextNodePos() : null;
+
+            Iterator<BlockPos> it = this.openedDoorsAndGates.iterator();
+            while (it.hasNext()) {
+                BlockPos pos = it.next();
+                if (pos.equals(prevNodePos) || pos.equals(nextNodePos)) {
+                    continue;
+                }
+                if (pos.equals(this.bot.blockPosition()) || pos.equals(this.bot.blockPosition().below())) {
+                    continue;
+                }
+                AABB doorBox = new AABB(pos).inflate(0.3);
+                if (this.bot.getBoundingBox().intersects(doorBox)) {
+                    continue;
+                }
+                double distSq = this.bot.distanceToSqr(pos.getX() + 0.5, this.bot.getY(), pos.getZ() + 0.5);
+                if (distSq < 1.8) {
+                    continue;
+                }
+                BlockState state = level.getBlockState(pos);
+                if (state.getBlock() instanceof DoorBlock door && door.type().canOpenByHand()) {
+                    if (state.getValue(DoorBlock.OPEN)) {
+                        door.setOpen(this.bot, level, state, pos, false);
+                    }
+                } else if (state.getBlock() instanceof FenceGateBlock) {
+                    if (state.getValue(FenceGateBlock.OPEN)) {
+                        level.setBlockAndUpdate(pos, state.setValue(FenceGateBlock.OPEN, false));
+                        level.playSound(null, pos, SoundEvents.FENCE_GATE_CLOSE, SoundSource.BLOCKS, 1.0f, 1.0f);
+                    }
+                }
+                it.remove();
+            }
+        }
+    }
+
+    private record GoalResolution(BlockPos goalPos, int accuracy) {}
+
+    /**
+     * Resolves a target {@link BlockPos} (which may be a walkable floor block, an air block above floor,
+     * or a solid interactive block like a Bed, Workstation, or Chest) into the optimal goal position and
+     * reach accuracy for Vanilla {@link GroundPathNavigation#createPath(BlockPos, int)}.
+     */
+    private static GoalResolution resolveGoal(ServerLevel level, BlockPos rawGoal, BlockPos startPos) {
+        BlockState rawState = level.getBlockState(rawGoal);
+
+        // If rawGoal is a Bed, Workstation, Chest, or solid obstacle, find the best adjacent walkable floor block
+        // so Vanilla PathFinder paths directly onto the floor tile next to it with accuracy = 0.
+        if (rawState.getBlock() instanceof BedBlock || isSolidInteractiveOrObstacle(level, rawGoal, rawState)) {
+            BlockPos bestAdj = null;
+            double bestDistSq = Double.MAX_VALUE;
+            for (Direction dir : Direction.Plane.HORIZONTAL) {
+                for (int dy : new int[]{0, -1, 1}) {
+                    BlockPos adj = rawGoal.relative(dir).above(dy);
+                    if (isStandableForGoal(level, adj)) {
+                        double d = adj.distSqr(startPos);
+                        if (d < bestDistSq) {
+                            bestDistSq = d;
+                            bestAdj = adj;
+                        }
+                    }
+                }
+            }
+            if (bestAdj != null) {
+                return new GoalResolution(bestAdj, 0);
+            }
+            return new GoalResolution(rawGoal, 1);
+        }
+
+        // If rawGoal is slightly above the floor (e.g. Vec3.atCenterOf), snap down 1 block to the floor
+        if (!isStandableForGoal(level, rawGoal) && isStandableForGoal(level, rawGoal.below())) {
+            return new GoalResolution(rawGoal.below(), 0);
+        }
+
+        return new GoalResolution(rawGoal, 0);
+    }
+
+    private static boolean isSolidInteractiveOrObstacle(ServerLevel level, BlockPos pos, BlockState state) {
+        if (state.isAir()) return false;
+        if (state.getBlock() instanceof DoorBlock || state.getBlock() instanceof FenceGateBlock) return false;
+        if (state.getBlock() instanceof StairBlock || state.getBlock() instanceof SlabBlock) return false;
+        if (state.getBlock() instanceof CarpetBlock || state.getBlock() instanceof TrapDoorBlock) return false;
+        VoxelShape shape = state.getCollisionShape(level, pos);
+        return !shape.isEmpty() && shape.max(Direction.Axis.Y) > 0.3;
+    }
+
+    private static boolean isStandableForGoal(ServerLevel level, BlockPos pos) {
+        BlockState feet = level.getBlockState(pos);
+        BlockState head = level.getBlockState(pos.above());
+        BlockState floor = level.getBlockState(pos.below());
+        if (feet.getBlock() instanceof BedBlock) return false;
+        if (!head.getCollisionShape(level, pos.above()).isEmpty()
+                && !(head.getBlock() instanceof DoorBlock)
+                && !(head.getBlock() instanceof FenceGateBlock)) {
+            return false;
+        }
+        if (feet.getBlock() instanceof StairBlock || feet.getBlock() instanceof SlabBlock) {
+            return level.getBlockState(pos.above(2)).getCollisionShape(level, pos.above(2)).isEmpty();
+        }
+        VoxelShape feetShape = feet.getCollisionShape(level, pos);
+        if (!feetShape.isEmpty() && feetShape.max(Direction.Axis.Y) > 0.25
+                && !(feet.getBlock() instanceof DoorBlock)
+                && !(feet.getBlock() instanceof FenceGateBlock)) {
+            return false;
+        }
+        return !floor.getCollisionShape(level, pos.below()).isEmpty();
+    }
+
+    private static boolean hasDirectStepClearance(ServerLevel level, AiBotPlayer bot, Vec3 target) {
+        Vec3 from = new Vec3(bot.getX(), bot.getY() + 0.6, bot.getZ());
+        Vec3 to = new Vec3(target.x, target.y + 0.6, target.z);
+        BlockHitResult hit = level.clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, bot));
+        if (hit.getType() == HitResult.Type.MISS) {
+            return true;
+        }
+        BlockPos hitPos = hit.getBlockPos();
+        BlockState hitState = level.getBlockState(hitPos);
+        if (hitState.getBlock() instanceof DoorBlock && hitState.getValue(DoorBlock.OPEN)) {
+            return true;
+        }
+        if (hitState.getBlock() instanceof FenceGateBlock && hitState.getValue(FenceGateBlock.OPEN)) {
+            return true;
+        }
+        return hitPos.equals(BlockPos.containing(target));
+    }
+
+    /**
+     * Computes a list of {@link BlockPos} waypoints using Vanilla's {@link GroundPathNavigation}.
      */
     public static List<BlockPos> findPath(AiBotPlayer bot, BlockPos startPos, BlockPos goalPos, int maxExpandedNodes) {
         if (!(bot.level() instanceof ServerLevel level)) {
             return Collections.emptyList();
         }
-        String dimension = level.dimension().identifier().toString();
-
-        // Snap startPos to a valid walkable Y near the bot's feet
-        BlockPos start = snapToStandable(level, startPos);
-        // Resolve the best standable goal block (either goalPos itself or an adjacent floor block next to a bed/workstation/chest)
-        BlockPos resolvedGoal = resolveGoalStandPos(level, goalPos, start);
-
-        if (start.equals(resolvedGoal)) {
-            return List.of(resolvedGoal);
+        BotProxyMob proxy = new BotProxyMob(bot, level);
+        proxy.syncFromBot();
+        BotGroundPathNavigation nav = (BotGroundPathNavigation) proxy.getNavigation();
+        nav.getBotEvaluator().setCanOpenFenceGates(!bot.shouldRespectFencePerimeter());
+        GoalResolution resolved = resolveGoal(level, goalPos, startPos);
+        Path path = nav.createPath(resolved.goalPos(), resolved.accuracy());
+        if (path == null) {
+            return Collections.emptyList();
         }
-
-        PriorityQueue<PathNode> openSet = new PriorityQueue<>();
-        Map<Long, PathNode> allNodes = new HashMap<>();
-        Set<Long> closedSet = new HashSet<>();
-
-        NodeType startType = evaluateFootprint(level, start);
-        PathNode startNode = new PathNode(start, startType, 0.0f, heuristic(start, resolvedGoal), null);
-        openSet.add(startNode);
-        allNodes.put(startNode.key, startNode);
-
-        PathNode bestFallbackNode = startNode;
-        float bestFallbackHeuristic = startNode.fCost;
-
-        int expanded = 0;
-        int limit = Math.max(128, Math.min(2048, maxExpandedNodes));
-
-        int[] dxs = {0, 0, 1, -1, 1, 1, -1, -1};
-        int[] dzs = {-1, 1, 0, 0, -1, 1, -1, 1};
-
-        while (!openSet.isEmpty() && expanded < limit) {
-            PathNode current = openSet.poll();
-            if (!closedSet.add(current.key)) {
-                continue;
-            }
-            expanded++;
-
-            if (isAtGoal(level, current.pos, resolvedGoal, goalPos)) {
-                return reconstructPath(current);
-            }
-
-            float hToGoal = heuristic(current.pos, resolvedGoal);
-            if (hToGoal < bestFallbackHeuristic) {
-                bestFallbackHeuristic = hToGoal;
-                bestFallbackNode = current;
-            }
-
-            for (int i = 0; i < 8; i++) {
-                int dx = dxs[i];
-                int dz = dzs[i];
-                boolean isDiagonal = (dx != 0 && dz != 0);
-
-                // If currently standing in a doorway or gate, only allow exiting along the passage axis!
-                if (isDoorOrGate(current.type)) {
-                    if (isDiagonal) continue;
-                    Direction moveDir = cardinalFromDelta(dx, dz);
-                    if (moveDir != null && !isAlignedWithDoorPassage(level, current.pos, moveDir)) {
-                        continue;
-                    }
-                }
-
-                // Strict corner-clipping prevention for diagonals (just like vanilla WalkNodeEvaluator)
-                if (isDiagonal) {
-                    BlockPos sideX = current.pos.offset(dx, 0, 0);
-                    BlockPos sideZ = current.pos.offset(0, 0, dz);
-                    NodeType typeX = evaluateFootprint(level, sideX);
-                    NodeType typeZ = evaluateFootprint(level, sideZ);
-                    if (!isFreelyPassableForDiagonal(typeX) || !isFreelyPassableForDiagonal(typeZ)) {
-                        continue;
-                    }
-                }
-
-                PathNodeCandidate candidate = findTransitionCandidate(level, current.pos, dx, dz, isDiagonal);
-                if (candidate == null) {
-                    continue;
-                }
-
-                // If entering a doorway or gate, forbid diagonal entry and enforce passage axis alignment!
-                if (isDoorOrGate(candidate.type)) {
-                    if (isDiagonal) continue;
-                    Direction moveDir = cardinalFromDelta(dx, dz);
-                    if (moveDir != null && !isAlignedWithDoorPassage(level, candidate.pos, moveDir)) {
-                        continue;
-                    }
-                }
-
-                long neighborKey = candidate.pos.asLong();
-                if (closedSet.contains(neighborKey)) {
-                    continue;
-                }
-
-                // Base A* movement cost
-                float stepCost = isDiagonal ? 1.4142f : 1.0f;
-                int dy = candidate.pos.getY() - current.pos.getY();
-                if (dy > 0) {
-                    stepCost += (candidate.type == NodeType.STAIRS) ? 0.15f : 0.4f;
-                } else if (dy < 0) {
-                    stepCost += Math.abs(dy) * 0.25f;
-                }
-
-                if (candidate.type == NodeType.DOOR_CLOSED_OPENABLE) {
-                    stepCost += 0.25f;
-                } else if (candidate.type == NodeType.WATER) {
-                    stepCost += 3.5f;
-                } else if (candidate.type == NodeType.STAIRS) {
-                    stepCost *= 0.92f;
-                }
-
-                // Layer HiveMindBrain learned pheromones & block walkability on top of base A* cost
-                float learnedScore = HiveMindBrain.getNodeScore(dimension, candidate.pos);
-                if (learnedScore > 0.5f) {
-                    float discount = Math.max(0.45f, 1.0f - (learnedScore / 70.0f));
-                    stepCost *= discount;
-                } else if (learnedScore < -0.5f) {
-                    stepCost += Math.min(45.0f, -learnedScore * 2.5f);
-                }
-
-                Block floorBlock = level.getBlockState(candidate.pos.below()).getBlock();
-                String floorId = BuiltInRegistries.BLOCK.getKey(floorBlock).toString();
-                float walkability = HiveMindBrain.getBlockWalkability(floorId);
-                if (walkability < -0.15f) {
-                    stepCost += Math.min(15.0f, -walkability * 8.0f);
-                }
-
-                float tentativeG = current.gCost + stepCost;
-                PathNode existing = allNodes.get(neighborKey);
-                if (existing == null) {
-                    float f = tentativeG + heuristic(candidate.pos, resolvedGoal);
-                    PathNode nextNode = new PathNode(candidate.pos, candidate.type, tentativeG, f, current);
-                    allNodes.put(neighborKey, nextNode);
-                    openSet.add(nextNode);
-                } else if (tentativeG < existing.gCost) {
-                    openSet.remove(existing);
-                    existing.gCost = tentativeG;
-                    existing.fCost = tentativeG + heuristic(candidate.pos, resolvedGoal);
-                    existing.parent = current;
-                    openSet.add(existing);
-                }
-            }
+        List<BlockPos> waypoints = new ArrayList<>(path.getNodeCount());
+        for (int i = 0; i < path.getNodeCount(); i++) {
+            waypoints.add(path.getNodePos(i));
         }
-
-        // Only use partial fallback path when the destination is far away beyond the search horizon (> 28 blocks).
-        // If a nearby destination (<= 28 blocks, e.g. inside a house) was not reached within maxExpandedNodes,
-        // it is walled off / unreachable — do NOT walk up to the exterior wall closest to the indoor target!
-        int manhattanDist = start.distManhattan(resolvedGoal);
-        if (manhattanDist > 28 && bestFallbackNode != startNode && bestFallbackHeuristic < startNode.fCost - 2.0f) {
-            return reconstructPath(bestFallbackNode);
-        }
-
-        return Collections.emptyList();
-    }
-
-    private record PathNodeCandidate(BlockPos pos, NodeType type) {}
-
-    private static @Nullable PathNodeCandidate findTransitionCandidate(
-            ServerLevel level, BlockPos fromPos, int dx, int dz, boolean isDiagonal) {
-        int targetX = fromPos.getX() + dx;
-        int targetZ = fromPos.getZ() + dz;
-        int fromY = fromPos.getY();
-
-        // 1. Try flat move (dy = 0)
-        BlockPos flatPos = new BlockPos(targetX, fromY, targetZ);
-        NodeType flatType = evaluateFootprint(level, flatPos);
-        if (isWalkableType(flatType)) {
-            return new PathNodeCandidate(flatPos, flatType);
-        }
-
-        // Diagonals are only allowed on the same Y level to prevent clipping wall ledges
-        if (isDiagonal) {
-            return null;
-        }
-
-        // 2. Try 1-block step UP (dy = +1)
-        // Requires 3rd block above current feet (fromPos.above(2)) to be passable so head doesn't hit ceiling
-        BlockPos stepUpPos = new BlockPos(targetX, fromY + 1, targetZ);
-        if (!isFenceOrWallBlock(level, flatPos) && isHeadroomPassable(level, fromPos.above(2))) {
-            NodeType upType = evaluateFootprint(level, stepUpPos);
-            if (isWalkableType(upType)) {
-                return new PathNodeCandidate(stepUpPos, upType);
-            }
-        }
-
-        // 3. Try 1 to 3 block step DOWN (dy = -1, -2, -3)
-        // Requires flatPos and flatPos.above() to be passable air/doors so the bot can walk off the ledge
-        if (isPassableSpace(level, flatPos) && isHeadroomPassable(level, flatPos.above())) {
-            for (int drop = 1; drop <= 3; drop++) {
-                BlockPos downPos = new BlockPos(targetX, fromY - drop, targetZ);
-                NodeType downType = evaluateFootprint(level, downPos);
-                if (downType == NodeType.HAZARD || downType == NodeType.FENCE_OR_WALL) {
-                    return null; // Don't drop onto hazards or fences
-                }
-                if (isWalkableType(downType)) {
-                    return new PathNodeCandidate(downPos, downType);
-                }
-                if (!isPassableSpace(level, downPos)) {
-                    break;
-                }
-            }
-        }
-
-        return null;
-    }
-
-    /**
-     * Evaluates whether a 1x2 bot footprint with feet at `pos` and head at `pos.above()`
-     * and supporting floor at `pos.below()` is walkable.
-     */
-    public static NodeType evaluateFootprint(ServerLevel level, BlockPos pos) {
-        BlockState feetState = level.getBlockState(pos);
-        BlockState headState = level.getBlockState(pos.above());
-        BlockState floorState = level.getBlockState(pos.below());
-        FluidState feetFluid = level.getFluidState(pos);
-        FluidState floorFluid = level.getFluidState(pos.below());
-
-        // Check hazards first
-        if (isHazard(feetState, feetFluid) || isHazard(headState, level.getFluidState(pos.above())) || isHazard(floorState, floorFluid)) {
-            return NodeType.HAZARD;
-        }
-
-        // Never stand on or walk through fences/walls
-        if (isFenceOrWallState(feetState) || isFenceOrWallState(headState) || isFenceOrWallState(floorState)) {
-            return NodeType.FENCE_OR_WALL;
-        }
-
-        // Check Doors (Feet or Head)
-        if (feetState.getBlock() instanceof DoorBlock door) {
-            if (!hasSolidSupport(level, pos.below(), floorState)) {
-                return NodeType.BLOCKED;
-            }
-            if (feetState.getValue(DoorBlock.OPEN)) {
-                return NodeType.DOOR_OPEN;
-            }
-            return door.type().canOpenByHand() ? NodeType.DOOR_CLOSED_OPENABLE : NodeType.BLOCKED;
-        }
-
-        // Check Fence Gates
-        if (feetState.getBlock() instanceof FenceGateBlock) {
-            if (!hasSolidSupport(level, pos.below(), floorState)) {
-                return NodeType.BLOCKED;
-            }
-            if (!isHeadroomPassable(level, pos.above())) {
-                return NodeType.BLOCKED;
-            }
-            return feetState.getValue(FenceGateBlock.OPEN) ? NodeType.DOOR_OPEN : NodeType.DOOR_CLOSED_OPENABLE;
-        }
-
-        // Headroom must always be clear of solid collision
-        if (!isHeadroomPassable(level, pos.above())) {
-            return NodeType.BLOCKED;
-        }
-
-        // Stairs & Slabs at feet position (e.g., walking up stairs where feetPos is the stair block itself)
-        if (isStairOrSlab(feetState)) {
-            if (isHeadroomPassable(level, pos.above(2))) {
-                return NodeType.STAIRS;
-            }
-            return NodeType.BLOCKED;
-        }
-
-        // Feet space must be passable
-        if (!isPassableSpace(level, pos)) {
-            return NodeType.BLOCKED;
-        }
-
-        // Shallow water check
-        if (feetFluid.is(FluidTags.WATER)) {
-            if (hasSolidSupport(level, pos.below(), floorState)) {
-                return NodeType.WATER;
-            }
-            return NodeType.BLOCKED;
-        }
-
-        // Floor support check
-        if (isStairOrSlab(floorState)) {
-            return NodeType.STAIRS;
-        }
-        if (hasSolidSupport(level, pos.below(), floorState)) {
-            return NodeType.WALKABLE;
-        }
-
-        return NodeType.BLOCKED;
-    }
-
-    private static boolean hasSolidSupport(ServerLevel level, BlockPos floorPos, BlockState floorState) {
-        if (floorState.isAir()) return false;
-        if (isFenceOrWallState(floorState)) return false;
-        if (floorState.getBlock() instanceof DoorBlock || floorState.getBlock() instanceof FenceGateBlock) return false;
-        VoxelShape shape = floorState.getCollisionShape(level, floorPos);
-        return !shape.isEmpty();
-    }
-
-    private static boolean isPassableSpace(ServerLevel level, BlockPos pos) {
-        BlockState state = level.getBlockState(pos);
-        if (state.isAir()) return true;
-        if (isFenceOrWallState(state)) return false;
-        if (state.getBlock() instanceof DoorBlock door) {
-            return state.getValue(DoorBlock.OPEN) || door.type().canOpenByHand();
-        }
-        if (state.getBlock() instanceof FenceGateBlock) {
-            return true;
-        }
-        if (state.getBlock() instanceof CarpetBlock) {
-            return true;
-        }
-        if (state.getBlock() instanceof TrapDoorBlock) {
-            return !state.getValue(TrapDoorBlock.OPEN);
-        }
-        VoxelShape shape = state.getCollisionShape(level, pos);
-        if (shape.isEmpty()) return true;
-        // Allow very thin ground cover (< 0.2 blocks tall, e.g. snow layer, carpet, pressure plate, rail)
-        return shape.max(Direction.Axis.Y) <= 0.25;
-    }
-
-    private static boolean isHeadroomPassable(ServerLevel level, BlockPos pos) {
-        BlockState state = level.getBlockState(pos);
-        if (state.isAir()) return true;
-        if (isFenceOrWallState(state)) return false;
-        if (state.getBlock() instanceof DoorBlock door) {
-            return state.getValue(DoorBlock.OPEN) || door.type().canOpenByHand();
-        }
-        if (state.getBlock() instanceof FenceGateBlock) {
-            return true;
-        }
-        VoxelShape shape = state.getCollisionShape(level, pos);
-        return shape.isEmpty();
-    }
-
-    private static boolean isHazard(BlockState state, FluidState fluid) {
-        if (fluid.is(FluidTags.LAVA)) return true;
-        if (!fluid.isEmpty() && !fluid.is(FluidTags.WATER)) return true;
-        Block b = state.getBlock();
-        return b == Blocks.LAVA || b == Blocks.FIRE || b == Blocks.SOUL_FIRE
-                || b == Blocks.CAMPFIRE || b == Blocks.SOUL_CAMPFIRE
-                || b == Blocks.MAGMA_BLOCK || b == Blocks.CACTUS
-                || b == Blocks.SWEET_BERRY_BUSH || b == Blocks.WITHER_ROSE
-                || b == Blocks.POWDER_SNOW;
-    }
-
-    private static boolean isFenceOrWallBlock(ServerLevel level, BlockPos pos) {
-        return isFenceOrWallState(level.getBlockState(pos));
-    }
-
-    private static boolean isFenceOrWallState(BlockState state) {
-        if (state.isAir()) return false;
-        if (state.getBlock() instanceof FenceGateBlock) return false;
-        if (state.is(BlockTags.FENCES) || state.is(BlockTags.WALLS)
-                || state.getBlock() instanceof FenceBlock
-                || state.getBlock() instanceof WallBlock) {
-            return true;
-        }
-        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
-        return (path.contains("fence") && !path.contains("gate"))
-                || path.endsWith("_wall")
-                || path.contains("railing")
-                || path.contains("balustrade");
-    }
-
-    private static boolean isStairOrSlab(BlockState state) {
-        if (state.isAir()) return false;
-        if (state.is(BlockTags.STAIRS) || state.is(BlockTags.SLABS)
-                || state.getBlock() instanceof StairBlock
-                || state.getBlock() instanceof SlabBlock) {
-            return true;
-        }
-        String path = BuiltInRegistries.BLOCK.getKey(state.getBlock()).getPath();
-        return path.contains("stair") || path.contains("step") || path.contains("bridge_stair");
-    }
-
-    private static boolean isWalkableType(NodeType type) {
-        return type == NodeType.WALKABLE
-                || type == NodeType.STAIRS
-                || type == NodeType.DOOR_OPEN
-                || type == NodeType.DOOR_CLOSED_OPENABLE
-                || type == NodeType.WATER;
-    }
-
-    private static boolean isDoorOrGate(NodeType type) {
-        return type == NodeType.DOOR_OPEN || type == NodeType.DOOR_CLOSED_OPENABLE;
-    }
-
-    private static boolean isFreelyPassableForDiagonal(NodeType type) {
-        return type == NodeType.WALKABLE || type == NodeType.STAIRS;
-    }
-
-    private static @Nullable Direction cardinalFromDelta(int dx, int dz) {
-        if (dx == 0 && dz == -1) return Direction.NORTH;
-        if (dx == 0 && dz == 1) return Direction.SOUTH;
-        if (dx == 1 && dz == 0) return Direction.EAST;
-        if (dx == -1 && dz == 0) return Direction.WEST;
-        return null;
-    }
-
-    /**
-     * Ensures that entering or exiting a DoorBlock or FenceGateBlock only occurs along the door's passage axis,
-     * never diagonally or through the solid jamb/wall beside the door.
-     */
-    private static boolean isAlignedWithDoorPassage(ServerLevel level, BlockPos doorPos, Direction moveDir) {
-        BlockState state = level.getBlockState(doorPos);
-        if (state.getBlock() instanceof FenceGateBlock && state.hasProperty(FenceGateBlock.FACING)) {
-            Direction gateFacing = state.getValue(FenceGateBlock.FACING);
-            return moveDir.getAxis() == gateFacing.getAxis();
-        }
-        if (state.getBlock() instanceof DoorBlock && state.hasProperty(DoorBlock.FACING)) {
-            // Check adjacent walls to infer the wall axis vs passage axis
-            boolean wallNorth = level.getBlockState(doorPos.north()).isSolid();
-            boolean wallSouth = level.getBlockState(doorPos.south()).isSolid();
-            boolean wallEast = level.getBlockState(doorPos.east()).isSolid();
-            boolean wallWest = level.getBlockState(doorPos.west()).isSolid();
-            if ((wallNorth || wallSouth) && !(wallEast || wallWest)) {
-                return moveDir.getAxis() == Direction.Axis.X;
-            }
-            if ((wallEast || wallWest) && !(wallNorth || wallSouth)) {
-                return moveDir.getAxis() == Direction.Axis.Z;
-            }
-            Direction doorFacing = state.getValue(DoorBlock.FACING);
-            return moveDir.getAxis() == doorFacing.getAxis();
-        }
-        return true;
-    }
-
-    private static BlockPos snapToStandable(ServerLevel level, BlockPos pos) {
-        if (isWalkableType(evaluateFootprint(level, pos))) {
-            return pos;
-        }
-        for (int dy : new int[]{1, -1, -2}) {
-            BlockPos candidate = pos.above(dy);
-            if (isWalkableType(evaluateFootprint(level, candidate))) {
-                return candidate;
-            }
-        }
-        return pos;
-    }
-
-    /**
-     * Resolves a target block (which may be a BedBlock, Workstation, Chest, or elevated block)
-     * into the best walkable floor block from which the bot can stand and interact with it.
-     */
-    private static BlockPos resolveGoalStandPos(ServerLevel level, BlockPos goalPos, BlockPos startPos) {
-        NodeType directType = evaluateFootprint(level, goalPos);
-        if (isWalkableType(directType) && !(level.getBlockState(goalPos).getBlock() instanceof BedBlock)) {
-            return goalPos;
-        }
-
-        // Check immediately above/below first if goalPos is a floor block or slightly off Y
-        for (int dy : new int[]{1, -1}) {
-            BlockPos vert = goalPos.above(dy);
-            if (isWalkableType(evaluateFootprint(level, vert))
-                    && !(level.getBlockState(vert).getBlock() instanceof BedBlock)
-                    && level.getBlockState(goalPos).getCollisionShape(level, goalPos).isEmpty()) {
-                return vert;
-            }
-        }
-
-        // Target is a solid interactive block (Bed, Workstation, Chest, etc.):
-        // Find all adjacent walkable floor tiles that have direct unobstructed access to goalPos
-        BlockPos bestAdj = null;
-        double bestDistSq = Double.MAX_VALUE;
-        for (Direction dir : Direction.Plane.HORIZONTAL) {
-            for (int dy : new int[]{0, -1, 1}) {
-                BlockPos adj = goalPos.relative(dir).above(dy);
-                if (isWalkableType(evaluateFootprint(level, adj))) {
-                    double d = adj.distSqr(startPos);
-                    if (d < bestDistSq) {
-                        bestDistSq = d;
-                        bestAdj = adj;
-                    }
-                }
-            }
-        }
-        return bestAdj != null ? bestAdj : goalPos;
-    }
-
-    private static boolean isAtGoal(ServerLevel level, BlockPos currentPos, BlockPos resolvedGoal, BlockPos rawGoal) {
-        if (currentPos.equals(resolvedGoal) || currentPos.equals(rawGoal)) {
-            return true;
-        }
-        // If rawGoal is a bed, workstation, or solid interactive block, standing cardinally adjacent on the same floor level counts as arrival
-        if (currentPos.getY() == rawGoal.getY()
-                && Math.abs(currentPos.getX() - rawGoal.getX()) + Math.abs(currentPos.getZ() - rawGoal.getZ()) == 1) {
-            return true;
-        }
-        return false;
-    }
-
-    private static float heuristic(BlockPos a, BlockPos b) {
-        int dx = Math.abs(a.getX() - b.getX());
-        int dy = Math.abs(a.getY() - b.getY());
-        int dz = Math.abs(a.getZ() - b.getZ());
-        int diag = Math.min(dx, dz);
-        int straight = Math.max(dx, dz) - diag;
-        return diag * 1.4142f + straight * 1.0f + dy * 1.2f;
-    }
-
-    private static List<BlockPos> reconstructPath(PathNode endNode) {
-        List<BlockPos> path = new ArrayList<>();
-        PathNode curr = endNode;
-        while (curr != null && curr.parent != null) {
-            path.add(curr.pos);
-            curr = curr.parent;
-        }
-        Collections.reverse(path);
-        return path;
+        return waypoints;
     }
 }

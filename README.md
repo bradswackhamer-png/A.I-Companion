@@ -56,7 +56,30 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🍞 Farmer Wheat-to-Bread Auto-Crafting & Precise Crafting Parser *(New in v1.2.25)*
+### 🛏️ Exclusive Bed Reservation & Anti-Bed Sharing System *(New in v1.2.27)*
+* **Zero Bed Sharing & Strict Bed Occupancy Checks**:
+  * Companions will never share beds or sleep on top of one another.
+  * `AiBotPlayer.startSleeping()` strictly checks multi-tier occupancy (`isBedOccupiedByOther`): verifying blockstate `BedBlock.OCCUPIED`, living entities sleeping within the full 2-block bed bounding box (head and foot), active companion bot sleep positions, and server player sleep positions.
+* **Distributed Bed Reservation & Conflict Resolution**:
+  * Companions actively communicate bed intentions: navigation targets during night shelter (`currentShelterBedTarget`) and assigned beds (`assignedBedPos`) are tracked across all bots.
+  * When two bots claim or target the same bed, automatic arbitration (manual assignment priority, distance proximity, and deterministic tie-breaking) grants exclusive ownership to one bot while directing other bots to release duplicate claims and search for alternate vacant beds.
+  * Manual bed assignments (`/bot setbed` or `"this is your bed"`) immediately release the bed from any other companion to guarantee strict 1-to-1 bed allocation.
+  * Companions without available beds safely shelter indoors on the floor inside designated houses or shelter structures instead of clipping into occupied beds.
+
+---
+
+### 🧭 Genuine Vanilla Minecraft Mob Pathfinding Engine *(v1.2.26)*
+* **Real Vanilla `GroundPathNavigation` & `WalkNodeEvaluator`**:
+  * Companion movement is now driven directly by Minecraft's authentic `GroundPathNavigation`, `WalkNodeEvaluator`, `PathFinder`, and `Path` classes via a lightweight, unspawned server-side `PathfinderMob` proxy (`BotProxyMob`).
+  * Extended `WalkNodeEvaluator` (`BotWalkNodeEvaluator`) so closed fence gates (`FenceGateBlock`) are evaluated and opened just like wooden doors along their cardinal passage axis, while preventing diagonal corner-cutting through doorways and gates.
+  * Enabled `setCanPathToTargetsBelowSurface(true)` so indoor beds, chests, and workstations under roofs are pathed directly rather than snapping onto rooftops.
+* **Removed Conflicting Custom Steering & Premature Stuck Resets**:
+  * Removed the old 16-tick Euclidean distance stuck check (which previously wiped out valid paths whenever a bot walked around a house wall or fence), blind `activeBypassWaypoint` overrides, `HiveMindBrain` negative doorway cost poisoning, random sideways neural strafing, and `setDeltaMovement` velocity hacks.
+  * Bots now use Vanilla's `followThePath()` waypoint advancement, smooth open-ground corner cutting, `InteractWithDoor`-style automatic door/gate opening and closing, and Vanilla's 100-tick stuck detection.
+
+---
+
+### 🍞 Farmer Wheat-to-Bread Auto-Crafting & Precise Crafting Parser *(v1.2.25)*
 * **Conversational Bread Crafting & Auto-Baking for Farmers**:
   * Tell your farmer companions `"use this crafting table to turn your wheat into bread"`, `"craft bread"`, `"turn your wheat into bread"`, `"make bread"`, or `"bake bread"`, and they will immediately bake bread from their harvested wheat (3 wheat per loaf) and configure their farm routine to bake bread instead of compacting wheat into hay bales.
   * Toggle wheat-to-bread auto-crafting anytime with `/bot farm autobread <botName> <true|false>`, or via natural chat (`"stop crafting bread"` / `"do not combine wheat into hay"`).
