@@ -56,7 +56,20 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🥖 Conversational Negation Override & Chest Bread Crafting *(New in v1.2.30)*
+### 🌾 Active Villager Farmer & Water/Pond Avoidance *(New in v1.2.31)*
+* **Zero Water Loitering & Dry Land Bell Gathering**:
+  * Fixed an issue where villager companions would walk into ponds around the town bell and stand in the water all day.
+  * Added water pathfinding malus (`PathType.WATER = 16.0f`, `WATER_BORDER = 8.0f`) to route around water bodies, ponds, and rivers naturally.
+  * Added dry ground targeting for town bell gathering: companions automatically identify and stand on solid dry land 2-4 blocks from the bell, never stopping in water.
+  * Added proactive dry bank recovery (`escapeWaterToDryLand()`): whenever a companion touches water outside intentional swimming paths, they immediately jump and steer back onto dry shore.
+* **Expanded Farming Range & Natural Crop Patrol**:
+  * Farmland search radius expanded from 10 to 32 blocks (vertical `dy = -8..+8`), allowing farmers to reliably work on multi-field, terraced, or street-separated village farms.
+  * Added `wanderNearFarm()` patrol: when crops are growing (stages 1-6), farmers patrol and inspect the farm field and composter instead of abandoning the farm to loiter at the town bell.
+  * Autonomous farm work triggers even before composter discovery, and composter claiming strictly prioritizes the Farmer profession to prevent accidental career swaps.
+
+---
+
+### 🥖 Conversational Negation Override & Chest Bread Crafting *(v1.2.30)*
 * **Precision Intent Parsing for Food & Bread**:
   * Fixed an issue where natural phrases containing words like `"has wheat come make bread"` were incorrectly matched by negation filters as requests to stop crafting bread.
   * Explicit craft verbs (`make`, `bake`, `craft`, `turn`, `come`) now prevent false cancellation responses unless an explicit stop command (`stop`, `don't`, `never`, `cease`) is specified.

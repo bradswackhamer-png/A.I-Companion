@@ -4,6 +4,22 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.31] - 2026-11-08
+
+### Fixed
+- **Villager Water Loitering & Pond Around Bell (`AiBotPlayer`, `BotPathfinder`):**
+  - Fixed an issue where villager companions would walk into ponds around the town bell and stand in the water all day.
+  - Added water pathfinding malus (`PathType.WATER = 16.0f`, `WATER_BORDER = 8.0f`) to `BotProxyMob` so the vanilla navigation engine strictly routes around ponds, rivers, and water bodies.
+  - Added `findSafeDryStandNearBell()`: when villagers gather at the bell during afternoon meeting hours (`dayTime = 9000L..11500L`), companions identify and stand on solid, dry ground blocks 2-4 blocks from the bell rather than pathfinding directly into water.
+  - Enhanced fluid evasion (`escapeWaterToDryLand()`): companions stepping into shallow water or ponds immediately jump and steer toward the nearest dry bank with forward impulse rather than idling submerged in water.
+- **Villager Farmer Active Farming & Bell Loitering Fix (`AiBotPlayer`):**
+  - Fixed an issue where villager companions who took the Farmer trait would not farm anything and spent 99% of their time wandering at the town bell.
+  - Expanded farmland and crop detection radius from 10 blocks to 32 blocks (with vertical tolerance `dy = -8..+8`), allowing farmer villagers to discover and work on village crops located across streets, slopes, and distant plots.
+  - Added fallback search so that if a companion has an assigned colony area without crops, the search seamlessly falls through to discover surrounding village crops and bare farmland.
+  - Added `wanderNearFarm()` crop patrol: when crops in the field are still growing (stages 1-6), the farmer stays near the farm plots and composter inspecting crops and checking the field rather than abandoning the farm for the town bell.
+  - Added autonomous farming fallback: even before an unclaimed composter is discovered, villager farmers actively harvest and replant nearby farmland rather than waiting idly at the bell.
+  - Prioritized composter claiming in `findAvailableWorkstation()` for existing farmers, preventing them from accidentally switching to other professions (like librarians or armorers).
+
 ## [1.2.30] - 2026-11-07
 
 ### Fixed

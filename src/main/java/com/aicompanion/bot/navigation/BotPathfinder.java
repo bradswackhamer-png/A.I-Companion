@@ -190,6 +190,8 @@ public final class BotPathfinder {
             if (moveSpeed != null) {
                 moveSpeed.setBaseValue(0.35);
             }
+            this.setPathfindingMalus(PathType.WATER, 16.0f);
+            this.setPathfindingMalus(PathType.WATER_BORDER, 8.0f);
             this.navigation.updatePathfinderMaxVisitedNodes();
         }
 
