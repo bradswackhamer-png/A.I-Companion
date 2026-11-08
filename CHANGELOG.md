@@ -4,6 +4,23 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.32] - 2026-11-08
+
+### Added
+- **Global & Per-Companion Water Avoidance System (`AiBotPlayer`, `BotPathfinder`, `BotCommands`, `BotPersistence`):**
+  - Companions across all roles (villager, farmer, miner, guard, builder, idle, sentry) now strictly avoid walking into or standing in water bodies, ponds, puddles, rivers, and oceans by default (`allowWaterEntry = false`).
+  - Added new command `/bot water <avoid|allow|status> [botName]` and squad command `/bot all water <avoid|allow>` to give players total control over water avoidance.
+  - Added natural chat command triggers for water management (e.g. `"avoid water"`, `"stay out of water"`, `"stay out of the water"`, `"stop standing in water"`, `"get out of the water"`, `"allow water"`, `"water status"`).
+  - Water avoidance preference is saved across server restarts and world reloads in `BotPersistence`.
+
+### Fixed
+- **Impassable Water Pathfinding (`BotPathfinder`):**
+  - Configured vanilla navigation engine with `PathType.WATER = -1.0f` (strictly impassable) and `PathType.WATER_BORDER = 16.0f` whenever water is not permitted. The pathfinder will refuse routes through ponds, water hazards, and flooded areas, steering across bridges and dry terrain instead.
+  - Interaction target goals (such as town bells, workstations, beds, and chests) now strictly reject fluid positions in `isStandableForGoal`, automatically snapping to the closest dry bank via `findNearestDryStandableNear()`.
+  - Added emergency dry-land water escape: if a companion ever ends up submerged in water while water is not permitted, they immediately turn, jump, and drive towards the nearest dry shore (`escapeWaterToDryLand()`), with an emergency shore step-out if submerged for more than 3 seconds (60 ticks).
+
+---
+
 ## [1.2.31] - 2026-11-08
 
 ### Fixed

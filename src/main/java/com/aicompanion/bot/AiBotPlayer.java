@@ -173,6 +173,10 @@ public class AiBotPlayer extends ServerPlayer {
 
     // Conductor / Train configuration
     private String conductorDestStation = "";
+
+    // Water avoidance configuration (unless instructed otherwise, avoid water and standing in water)
+    private boolean allowWaterEntry = false;
+    private int inWaterTicks = 0;
     private String conductorReturnStation = "";
     private String conductorFreightItem = "";
     private int conductorFreightCount = 0;
@@ -617,6 +621,32 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized void setMaxSeedsInChest(int max) { this.maxSeedsInChest = Math.max(0, max); }
     public synchronized boolean isAutoCompostExcessSeeds() { return this.autoCompostExcessSeeds; }
     public synchronized void setAutoCompostExcessSeeds(boolean autoCompost) { this.autoCompostExcessSeeds = autoCompost; }
+
+    public synchronized boolean isAllowWaterEntry() { return this.allowWaterEntry; }
+    public synchronized void setAllowWaterEntry(boolean allow) { this.allowWaterEntry = allow; }
+
+    public boolean isWaterAllowed() {
+        if (this.allowWaterEntry) return true;
+        if (!this.actionQueue.isEmpty()) {
+            String actType = this.actionQueue.peek().type;
+            if ("SWIM".equalsIgnoreCase(actType) || "FISH".equalsIgnoreCase(actType) || "WATER".equalsIgnoreCase(actType)) {
+                return true;
+            }
+        }
+        if (this.currentAction != null) {
+            String actType = this.currentAction.type;
+            if ("SWIM".equalsIgnoreCase(actType) || "FISH".equalsIgnoreCase(actType) || "WATER".equalsIgnoreCase(actType)) {
+                return true;
+            }
+            if ("FOLLOW".equalsIgnoreCase(actType)) {
+                ServerPlayer target = findPlayer(this.currentAction.getPrimaryTarget());
+                if (target != null && target.isAlive() && (target.isInWater() || target.isEyeInFluid(FluidTags.WATER))) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
 
     public synchronized void setRanchConfig(@Nullable BlockPos origin, double radius, String animal, String food,
                                             int maxPop, int minPop, boolean autoBreed, boolean autoCull, boolean adultsOnly) {
@@ -1722,18 +1752,17 @@ public class AiBotPlayer extends ServerPlayer {
             this.setDeltaMovement(motion.x, Math.max(motion.y, 0.25), motion.z);
             escapeHazardousFluidToDryLand();
         } else if (this.isInWater()) {
+            this.inWaterTicks++;
             this.setJumping(true);
             Vec3 motion = this.getDeltaMovement();
             if (this.isEyeInFluid(FluidTags.WATER) || motion.y < 0.04) {
                 this.setDeltaMovement(motion.x, Math.max(motion.y, 0.08), motion.z);
             }
-            boolean isSwimmingNav = !this.actionQueue.isEmpty() && "SWIM".equalsIgnoreCase(this.actionQueue.peek().type);
-            boolean wantsDryLand = this.isEyeInFluid(FluidTags.WATER) || this.getAirSupply() < 250
-                    || !isSwimmingNav;
-            if (wantsDryLand) {
+            if (!this.isWaterAllowed() || this.isEyeInFluid(FluidTags.WATER) || this.getAirSupply() < 250) {
                 escapeWaterToDryLand();
             }
         } else {
+            this.inWaterTicks = 0;
             // Default jumping to false on dry land every tick so jump state can NEVER get stuck on!
             this.setJumping(false);
         }
@@ -5936,15 +5965,16 @@ public class AiBotPlayer extends ServerPlayer {
         BlockPos nearestBank = null;
         double bestDistSq = Double.MAX_VALUE;
 
-        for (int dx = -10; dx <= 10; dx++) {
-            for (int dz = -10; dz <= 10; dz++) {
-                for (int dy = -2; dy <= 4; dy++) {
+        for (int dx = -16; dx <= 16; dx++) {
+            for (int dz = -16; dz <= 16; dz++) {
+                for (int dy = -3; dy <= 6; dy++) {
                     BlockPos p = current.offset(dx, dy, dz);
                     if (this.level().getFluidState(p).isEmpty() && !this.level().getBlockState(p).getCollisionShape(this.level(), p).isEmpty()) {
                         BlockPos feet = p.above();
                         BlockPos head = feet.above();
                         if (this.level().getFluidState(feet).isEmpty() && this.level().getBlockState(feet).getCollisionShape(this.level(), feet).isEmpty()
-                                && this.level().getFluidState(head).isEmpty() && this.level().getBlockState(head).getCollisionShape(this.level(), head).isEmpty()) {
+                                && this.level().getFluidState(head).isEmpty() && this.level().getBlockState(head).getCollisionShape(this.level(), head).isEmpty()
+                                && !(this.level().getBlockState(p).getBlock() instanceof BedBlock)) {
                             double d = this.distanceToSqr(Vec3.atCenterOf(feet));
                             if (d < bestDistSq) {
                                 bestDistSq = d;
@@ -5960,14 +5990,21 @@ public class AiBotPlayer extends ServerPlayer {
             Vec3 target = Vec3.atCenterOf(nearestBank);
             lookAtPos(target);
             this.setJumping(true);
-            this.zza = 0.5f;
+            this.zza = 0.6f;
             Vec3 m = this.getDeltaMovement();
-            Vec3 dir = target.subtract(this.position()).normalize().scale(0.24);
-            this.setDeltaMovement(dir.x, Math.max(m.y, 0.22), dir.z);
+            Vec3 dir = target.subtract(this.position()).normalize().scale(0.26);
+            this.setDeltaMovement(dir.x, Math.max(m.y, 0.24), dir.z);
+
+            // If stuck struggling in water for > 3 seconds (e.g. enclosed pond or steep 2-block waterfall bank), safely step onto shore
+            if (this.inWaterTicks > 60) {
+                this.teleportTo(nearestBank.getX() + 0.5, nearestBank.getY(), nearestBank.getZ() + 0.5);
+                this.inWaterTicks = 0;
+                this.stopMovement();
+            }
         } else {
             this.setJumping(true);
             Vec3 m = this.getDeltaMovement();
-            this.setDeltaMovement(m.x, Math.max(m.y, 0.20), m.z);
+            this.setDeltaMovement(m.x, Math.max(m.y, 0.22), m.z);
         }
     }
 
@@ -8460,6 +8497,60 @@ public class AiBotPlayer extends ServerPlayer {
             this.setJumping(false);
             this.invalidatePath();
             applyPlayerReinforcement(-15.0f, text);
+            return true;
+        }
+
+        return false;
+    }
+
+    public synchronized boolean handleWaterChatCommand(String text, @Nullable ServerPlayer speaker) {
+        if (text == null || text.isBlank()) return false;
+        String clean = stripBotReference(text).toLowerCase(Locale.ROOT).replaceAll("[,!?:;.]", " ").replaceAll("\\s+", " ").trim();
+
+        // Avoid water triggers
+        boolean wantsAvoid = clean.equals("avoid water") || clean.equals("stay out of water")
+                || clean.equals("stay out of the water") || clean.equals("stay away from water")
+                || clean.equals("stop standing in water") || clean.equals("dont stand in water")
+                || clean.equals("don't stand in water") || clean.equals("no water")
+                || clean.equals("dont go in water") || clean.equals("don't go in water")
+                || clean.equals("get out of water") || clean.equals("get out of the water")
+                || clean.equals("leave water") || clean.equals("leave the water")
+                || clean.contains("avoid water") || clean.contains("stay out of water")
+                || clean.contains("stay out of the water") || clean.contains("avoid standing in water")
+                || clean.contains("dont stand in water") || clean.contains("don't stand in water")
+                || clean.contains("stop standing in water") || clean.contains("get out of the water");
+
+        // Allow water triggers
+        boolean wantsAllow = clean.equals("allow water") || clean.equals("permit water")
+                || clean.equals("enter water") || clean.equals("you can enter water")
+                || clean.equals("you can swim") || clean.equals("swim with me")
+                || clean.contains("allow water") || clean.contains("permit water")
+                || clean.contains("you can enter water");
+
+        boolean wantsStatus = clean.equals("water status") || clean.equals("check water")
+                || clean.equals("can you enter water") || clean.equals("do you avoid water");
+
+        if (wantsAvoid) {
+            setAllowWaterEntry(false);
+            escapeWaterToDryLand();
+            sayInChat("Understood! I will strictly avoid water and stay on dry land.");
+            if (this.level() != null && this.level().getServer() != null) {
+                BotPersistence.saveAll(this.level().getServer());
+            }
+            return true;
+        }
+
+        if (wantsAllow) {
+            setAllowWaterEntry(true);
+            sayInChat("Understood! I am now permitted to enter water.");
+            if (this.level() != null && this.level().getServer() != null) {
+                BotPersistence.saveAll(this.level().getServer());
+            }
+            return true;
+        }
+
+        if (wantsStatus) {
+            sayInChat("Water entry status: " + (allowWaterEntry ? "ALLOWED" : "STRICTLY AVOIDED (staying on dry land)."));
             return true;
         }
 

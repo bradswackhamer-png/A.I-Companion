@@ -182,6 +182,7 @@ public class BotPersistence {
         public Integer sentryX = null;
         public Integer sentryY = null;
         public Integer sentryZ = null;
+        public boolean allowWaterEntry = false;
 
         // Bed, House & Night Shelter configuration
         public Integer bedX = null;
@@ -490,6 +491,7 @@ public class BotPersistence {
                 data.standingBy = bot.isStandingBy();
                 data.absoluteCommandMode = bot.isAbsoluteCommandMode();
                 data.sentryMode = bot.isSentryMode();
+                data.allowWaterEntry = bot.isAllowWaterEntry();
                 if (bot.getSentryPos() != null) {
                     data.sentryX = bot.getSentryPos().getX();
                     data.sentryY = bot.getSentryPos().getY();
@@ -716,6 +718,7 @@ public class BotPersistence {
                     bot.setTetherRadius(data.tetherRadius > 0 ? data.tetherRadius : 4.0);
                     bot.setStandingBy(data.standingBy);
                     bot.setAbsoluteCommandMode(data.absoluteCommandMode);
+                    bot.setAllowWaterEntry(data.allowWaterEntry);
                     if (data.sentryMode && data.sentryX != null && data.sentryY != null && data.sentryZ != null) {
                         bot.setSentryMode(true, new BlockPos(data.sentryX, data.sentryY, data.sentryZ));
                     }

@@ -56,7 +56,20 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🌾 Active Villager Farmer & Water/Pond Avoidance *(New in v1.2.31)*
+### 🌊 Water Avoidance & Dry Land Policy *(New in v1.2.32)*
+* **Strict Avoidance of Standing Water & Ponds**:
+  * Companions across all roles strictly avoid walking into, cutting across, or standing in water bodies, ponds, puddles, rivers, and oceans by default.
+  * Configured pathfinding navigation with `PathType.WATER = -1.0f` (strictly impassable) unless water entry is permitted, ensuring companions route over bridges, boardwalks, and dry banks.
+  * Destination goals near water (e.g. workstations, town bells, chests, beds) automatically snap to dry standable ground blocks rather than submerged tiles.
+  * If pushed or knocked into water, companions immediately jump and steer toward the nearest dry shore (`escapeWaterToDryLand()`), with an emergency shore step-out if submerged for more than 3 seconds.
+* **Full Player Control via Commands & Natural Voice**:
+  * **Commands**: `/bot water <avoid|allow|status> [botName]` and squad command `/bot all water <avoid|allow>`.
+  * **Natural Chat**: Direct your companion with natural speech like `"avoid water"`, `"stay out of the water"`, `"stop standing in water"`, `"allow water"`, or `"water status"`.
+  * Settings persist across server restarts and world reloads.
+
+---
+
+### 🌾 Active Villager Farmer & Water/Pond Avoidance *(v1.2.31)*
 * **Zero Water Loitering & Dry Land Bell Gathering**:
   * Fixed an issue where villager companions would walk into ponds around the town bell and stand in the water all day.
   * Added water pathfinding malus (`PathType.WATER = 16.0f`, `WATER_BORDER = 8.0f`) to route around water bodies, ponds, and rivers naturally.

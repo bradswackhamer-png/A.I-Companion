@@ -601,6 +601,12 @@ public class BotManager {
             return;
         }
 
+        if (bot.handleWaterChatCommand(requestText, speaker)) {
+            GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
+            BotPersistence.saveAll(server);
+            return;
+        }
+
         if (bot.handleHousingChatCommand(requestText, speaker)) {
             GeminiService.recordMemory(bot.getBotName(), speakerName + ": " + requestText);
             BotPersistence.saveAll(server);

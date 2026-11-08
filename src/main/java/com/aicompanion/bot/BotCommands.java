@@ -125,6 +125,11 @@ public class BotCommands {
                                 .executes(ctx -> allBotsShelterCmd(ctx, null))
                                 .then(Commands.argument("enabled", BoolArgumentType.bool())
                                         .executes(ctx -> allBotsShelterCmd(ctx, BoolArgumentType.getBool(ctx, "enabled")))))
+                        .then(Commands.literal("water")
+                                .then(Commands.literal("avoid")
+                                        .executes(ctx -> allBotsWaterCmd(ctx, false)))
+                                .then(Commands.literal("allow")
+                                        .executes(ctx -> allBotsWaterCmd(ctx, true))))
                         .then(Commands.literal("tp")
                                 .executes(BotCommands::tpAllBots)))
                 .then(Commands.literal("reward")
@@ -322,6 +327,22 @@ public class BotCommands {
                                                 .executes(ctx -> setAutoBreadCmd(ctx,
                                                         StringArgumentType.getString(ctx, "botName"),
                                                         BoolArgumentType.getBool(ctx, "enabled")))))))
+                .then(Commands.literal("water")
+                        .then(Commands.literal("avoid")
+                                .executes(ctx -> setWaterCmd(ctx, null, false))
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> setWaterCmd(ctx, StringArgumentType.getString(ctx, "botName"), false))))
+                        .then(Commands.literal("allow")
+                                .executes(ctx -> setWaterCmd(ctx, null, true))
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> setWaterCmd(ctx, StringArgumentType.getString(ctx, "botName"), true))))
+                        .then(Commands.literal("status")
+                                .executes(ctx -> showWaterStatusCmd(ctx, null))
+                                .then(Commands.argument("botName", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> showWaterStatusCmd(ctx, StringArgumentType.getString(ctx, "botName"))))))
                 .then(Commands.literal("tp")
                         .executes(BotCommands::tpNearestBot)
                         .then(Commands.literal("all")
@@ -1622,6 +1643,86 @@ public class BotCommands {
         return 1;
     }
 
+    private static int allBotsWaterCmd(CommandContext<CommandSourceStack> ctx, boolean allow) {
+        CommandSourceStack source = ctx.getSource();
+        var bots = BotManager.getActiveBots();
+        if (bots.isEmpty()) {
+            source.sendFailure(Component.literal("No active AI companions found."));
+            return 0;
+        }
+        for (AiBotPlayer bot : bots) {
+            bot.setAllowWaterEntry(allow);
+            if (!allow) {
+                bot.escapeWaterToDryLand();
+            }
+        }
+        BotPersistence.saveAll(source.getServer());
+        String actionStr = allow ? "allowed to enter water" : "strictly avoiding water (staying on dry land)";
+        source.sendSuccess(() -> Component.literal("All active AI companions are now " + actionStr + ".").withStyle(ChatFormatting.GREEN), false);
+        return bots.size();
+    }
+
+    private static int setWaterCmd(CommandContext<CommandSourceStack> ctx, @Nullable String botName, boolean allow) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = null;
+        if (botName != null && !botName.isBlank()) {
+            bot = BotManager.getBot(botName);
+            if (bot == null) {
+                source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+                return 0;
+            }
+        } else if (source.getEntity() instanceof ServerPlayer player) {
+            bot = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        }
+
+        if (bot == null) {
+            return allBotsWaterCmd(ctx, allow);
+        }
+
+        bot.setAllowWaterEntry(allow);
+        if (!allow) {
+            bot.escapeWaterToDryLand();
+        }
+        BotPersistence.saveAll(source.getServer());
+        String actionStr = allow ? "allowed to enter water" : "strictly avoiding water (staying on dry land)";
+        AiBotPlayer targetBot = bot;
+        source.sendSuccess(() -> Component.literal(targetBot.getPlainTextName() + " is now " + actionStr + ".").withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
+    private static int showWaterStatusCmd(CommandContext<CommandSourceStack> ctx, @Nullable String botName) {
+        CommandSourceStack source = ctx.getSource();
+        AiBotPlayer bot = null;
+        if (botName != null && !botName.isBlank()) {
+            bot = BotManager.getBot(botName);
+            if (bot == null) {
+                source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+                return 0;
+            }
+        } else if (source.getEntity() instanceof ServerPlayer player) {
+            bot = BotManager.findNearestBot(player, BotManager.getActiveBots());
+        }
+
+        if (bot == null) {
+            var bots = BotManager.getActiveBots();
+            if (bots.isEmpty()) {
+                source.sendFailure(Component.literal("No active AI companions found."));
+                return 0;
+            }
+            source.sendSuccess(() -> Component.literal("=== AI Companion Water Entry Status ===").withStyle(ChatFormatting.GOLD), false);
+            for (AiBotPlayer b : bots) {
+                String st = b.isAllowWaterEntry() ? "ALLOWED" : "AVOIDING (dry land only)";
+                source.sendSuccess(() -> Component.literal("- " + b.getPlainTextName() + ": " + st).withStyle(ChatFormatting.YELLOW), false);
+            }
+            return bots.size();
+        }
+
+        String st = bot.isAllowWaterEntry() ? "ALLOWED" : "AVOIDING (dry land only)";
+        AiBotPlayer targetBot = bot;
+        source.sendSuccess(() -> Component.literal(targetBot.getPlainTextName() + " water entry status: " + st).withStyle(ChatFormatting.GREEN), false);
+        return 1;
+    }
+
     private static void teleportBotToSource(AiBotPlayer bot, CommandSourceStack source) {
         ServerLevel targetLevel = source.getLevel();
         Vec3 pos = source.getPosition();
@@ -2052,6 +2153,9 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot farm autohay <name> [true|false]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Toggle automatic wheat-to-hay compaction").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot water <avoid|allow|status> [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Configure whether companion strictly avoids water/ponds or is allowed to enter").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot list")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - List all active bots and current tasks").withStyle(ChatFormatting.GRAY)), false);
@@ -2061,9 +2165,9 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot gui [name]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Open interactive Speedometer Dashboard & Inventory").withStyle(ChatFormatting.GRAY)), false);
-        src.sendSuccess(() -> Component.literal("/bot all <remove|come|stop|stay|sentry|resume|shelter|tp>")
+        src.sendSuccess(() -> Component.literal("/bot all <remove|come|stop|stay|sentry|resume|shelter|water|tp>")
                 .withStyle(ChatFormatting.YELLOW)
-                .append(Component.literal(" - Global squad commands: remove, come here, stop, stay, sentry, resume, shelter, tp").withStyle(ChatFormatting.GRAY)), false);
+                .append(Component.literal(" - Global squad commands: remove, come here, stop, stay, sentry, resume, shelter, water, tp").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot stop [name|all]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Stop bot's tasks immediately into Absolute Standby Mode").withStyle(ChatFormatting.GRAY)), false);

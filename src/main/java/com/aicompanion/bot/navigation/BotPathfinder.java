@@ -210,6 +210,10 @@ public final class BotPathfinder {
             this.setOnGround(this.bot.onGround());
             this.horizontalCollision = this.bot.horizontalCollision;
             this.verticalCollision = this.bot.verticalCollision;
+
+            boolean allowWater = this.bot.isWaterAllowed();
+            this.setPathfindingMalus(PathType.WATER, allowWater ? 8.0f : -1.0f);
+            this.setPathfindingMalus(PathType.WATER_BORDER, allowWater ? 4.0f : 16.0f);
         }
 
         @Override
@@ -316,7 +320,7 @@ public final class BotPathfinder {
             nav.getBotEvaluator().setCanOpenFenceGates(!forbidFenceExit);
 
             BlockPos rawGoalBlock = BlockPos.containing(target);
-            GoalResolution resolved = resolveGoal(level, rawGoalBlock, this.bot.blockPosition());
+            GoalResolution resolved = resolveGoal(level, rawGoalBlock, this.bot.blockPosition(), this.bot.isWaterAllowed());
             BlockPos goalBlock = resolved.goalPos();
             int accuracy = resolved.accuracy();
 
@@ -423,15 +427,23 @@ public final class BotPathfinder {
             // Arrival check: if within close reach of the goal, stop completely!
             double arrivalThresholdSq = Math.max(0.36, (double) (accuracy * accuracy));
             if (horizDistSqToTarget <= arrivalThresholdSq) {
-                this.bot.zza = 0.0f;
-                this.bot.xxa = 0.0f;
-                this.bot.setJumping(this.bot.isInWater() || this.bot.isInLava());
+                if (this.bot.isInWater() && !this.bot.isWaterAllowed()) {
+                    this.bot.escapeWaterToDryLand();
+                } else {
+                    this.bot.zza = 0.0f;
+                    this.bot.xxa = 0.0f;
+                    this.bot.setJumping(this.bot.isInWater() || this.bot.isInLava());
+                }
             } else if (horizDistSqToTarget <= 4.0 && hasDirectStepClearance(level, this.bot, target)) {
                 steerBotDirectly(target, sprint);
             } else {
-                this.bot.zza = 0.0f;
-                this.bot.xxa = 0.0f;
-                this.bot.setJumping(this.bot.isInWater() || this.bot.isInLava());
+                if (this.bot.isInWater() && !this.bot.isWaterAllowed()) {
+                    this.bot.escapeWaterToDryLand();
+                } else {
+                    this.bot.zza = 0.0f;
+                    this.bot.xxa = 0.0f;
+                    this.bot.setJumping(this.bot.isInWater() || this.bot.isInLava());
+                }
             }
         }
 
@@ -572,7 +584,7 @@ public final class BotPathfinder {
      * or a solid interactive block like a Bed, Workstation, or Chest) into the optimal goal position and
      * reach accuracy for Vanilla {@link GroundPathNavigation#createPath(BlockPos, int)}.
      */
-    private static GoalResolution resolveGoal(ServerLevel level, BlockPos rawGoal, BlockPos startPos) {
+    private static GoalResolution resolveGoal(ServerLevel level, BlockPos rawGoal, BlockPos startPos, boolean allowWater) {
         BlockState rawState = level.getBlockState(rawGoal);
 
         // If rawGoal is a Bed, Workstation, Chest, or solid obstacle, find the best adjacent walkable floor block
@@ -583,7 +595,7 @@ public final class BotPathfinder {
             for (Direction dir : Direction.Plane.HORIZONTAL) {
                 for (int dy : new int[]{0, -1, 1}) {
                     BlockPos adj = rawGoal.relative(dir).above(dy);
-                    if (isStandableForGoal(level, adj)) {
+                    if (isStandableForGoal(level, adj, allowWater)) {
                         double d = adj.distSqr(startPos);
                         if (d < bestDistSq) {
                             bestDistSq = d;
@@ -599,11 +611,34 @@ public final class BotPathfinder {
         }
 
         // If rawGoal is slightly above the floor (e.g. Vec3.atCenterOf), snap down 1 block to the floor
-        if (!isStandableForGoal(level, rawGoal) && isStandableForGoal(level, rawGoal.below())) {
+        if (!isStandableForGoal(level, rawGoal, allowWater) && isStandableForGoal(level, rawGoal.below(), allowWater)) {
             return new GoalResolution(rawGoal.below(), 0);
         }
 
+        // If rawGoal itself is in water and water is not allowed, snap to the nearest dry standable block on the bank
+        if (!allowWater && !isStandableForGoal(level, rawGoal, false)) {
+            BlockPos dryNear = findNearestDryStandableNear(level, rawGoal, 4);
+            if (dryNear != null) {
+                return new GoalResolution(dryNear, 0);
+            }
+        }
+
         return new GoalResolution(rawGoal, 0);
+    }
+
+    private static @Nullable BlockPos findNearestDryStandableNear(ServerLevel level, BlockPos center, int radius) {
+        BlockPos best = null;
+        double bestDistSq = Double.MAX_VALUE;
+        for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -2, -radius), center.offset(radius, 2, radius))) {
+            if (isStandableForGoal(level, p, false)) {
+                double d = center.distSqr(p);
+                if (d < bestDistSq) {
+                    bestDistSq = d;
+                    best = p.immutable();
+                }
+            }
+        }
+        return best;
     }
 
     private static boolean isSolidInteractiveOrObstacle(ServerLevel level, BlockPos pos, BlockState state) {
@@ -615,7 +650,10 @@ public final class BotPathfinder {
         return !shape.isEmpty() && shape.max(Direction.Axis.Y) > 0.3;
     }
 
-    private static boolean isStandableForGoal(ServerLevel level, BlockPos pos) {
+    private static boolean isStandableForGoal(ServerLevel level, BlockPos pos, boolean allowWater) {
+        if (!allowWater && (!level.getFluidState(pos).isEmpty() || !level.getFluidState(pos.below()).isEmpty())) {
+            return false;
+        }
         BlockState feet = level.getBlockState(pos);
         BlockState head = level.getBlockState(pos.above());
         BlockState floor = level.getBlockState(pos.below());
@@ -666,7 +704,7 @@ public final class BotPathfinder {
         proxy.syncFromBot();
         BotGroundPathNavigation nav = (BotGroundPathNavigation) proxy.getNavigation();
         nav.getBotEvaluator().setCanOpenFenceGates(!bot.shouldRespectFencePerimeter());
-        GoalResolution resolved = resolveGoal(level, goalPos, startPos);
+        GoalResolution resolved = resolveGoal(level, goalPos, startPos, bot.isWaterAllowed());
         Path path = nav.createPath(resolved.goalPos(), resolved.accuracy());
         if (path == null) {
             return Collections.emptyList();
