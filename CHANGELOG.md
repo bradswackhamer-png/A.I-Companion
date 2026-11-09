@@ -4,6 +4,22 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.34] - 2026-11-09
+
+### Fixed
+- **Continuous Per-Tick Navigation for Passive Farming, Wandering & Roles (`AiBotPlayer`):**
+  - Resolved the root cause of companions pacing back and forth inside houses or overshooting crops by 2-3 blocks in farm fields. Previously, `tickPassiveFarmer`, `wanderNearFarm`, `wanderAroundHomeOrAnchor`, and `wanderOutdoorsInVillage` only invoked `moveTowards(...)` on throttled intervals (every 20, 60, or 100 ticks) while leaving `zza = 0.8f` active on intermediate ticks. This caused bots to walk blindly in a fixed yaw for 1 to 5 seconds without advancing `GroundPathNavigation` waypoints, turning corners through doorways, or stopping at target arrival thresholds.
+  - Added active target tracking (`currentPassiveFarmTarget` and `currentWanderTarget`) so expensive block scans remain throttled while `moveTowards(...)` drives `BotPathfinder` every single server tick until arrival.
+  - Farmer companions waking up indoors when all crops are still growing now automatically transition to outdoor farm patrolling (`wanderNearFarm`) instead of standing or pacing inside bedrooms.
+- **Repeated Door Opening & Closing Oscillation Fix (`BotPathfinder`, `AiBotPlayer`):**
+  - Resolved an oscillation loop where a companion near a doorway would open and close its house door every tick. Previously, `interactWithDoorsAlongPath` opened doors up to `distSq <= 4.0` (`2.0` blocks) including at `nextIdx + 1`, while `closePassedDoorsAndGates` only protected `prevNodePos` and `nextNodePos` and closed doors at `distSq >= 1.8` (`1.34` blocks), and `AiBotPlayer.tick()` bypassed `doorCloseTimer` whenever 3D `distSq > 3.0` (`1.73` blocks).
+  - Added a strict 40-tick (2.0s) minimum open cooldown (`doorLastOpenTick`) per door/gate in `BotPathfinder.Navigator`, protected active path nodes through `nextIdx + 2`, and enforced distance hysteresis (open within `<= 1.8` blocks, close only after `>= 40` ticks AND `> 2.25` blocks horizontal clearance).
+  - Updated `findNearestShelterBlock` to prefer interior room tiles away from doorways and roof overhangs.
+- **Morning Wake-Up & `/bot status` Task String Cleanup (`AiBotPlayer`):**
+  - Fixed stale night status strings (`Task: Sleeping in bed [actively walking]` and `Task: Sheltering indoors for the night`) persisting into daytime after companions woke up. Added `clearStaleNightActivity()` and descriptive daytime activity strings across farming, workstation, and village patrol routines.
+
+---
+
 ## [1.2.33] - 2026-11-08
 
 ### Fixed

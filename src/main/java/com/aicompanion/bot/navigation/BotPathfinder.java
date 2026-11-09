@@ -3,9 +3,11 @@ package com.aicompanion.bot.navigation;
 import com.aicompanion.bot.AiBotPlayer;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -276,6 +278,7 @@ public final class BotPathfinder {
         private int unreachableTicks = 0;
         private int consecutiveVanillaStuckCount = 0;
         private final Set<BlockPos> openedDoorsAndGates = new HashSet<>();
+        private final Map<BlockPos, Integer> doorLastOpenTick = new HashMap<>();
 
         public Navigator(AiBotPlayer bot) {
             this.bot = bot;
@@ -485,20 +488,22 @@ public final class BotPathfinder {
             for (int i = startIdx; i <= endIdx; i++) {
                 Node node = path.getNode(i);
                 BlockPos nodePos = node.asBlockPos();
-                if (this.bot.distanceToSqr(nodePos.getX() + 0.5, this.bot.getY(), nodePos.getZ() + 0.5) <= 4.0) {
+                if (this.bot.distanceToSqr(nodePos.getX() + 0.5, this.bot.getY(), nodePos.getZ() + 0.5) <= 3.24) {
                     tryOpenDoorOrGateAt(level, nodePos, forbidFenceExit);
                     tryOpenDoorOrGateAt(level, nodePos.above(), forbidFenceExit);
                 }
             }
 
-            // Also check the block the bot is currently standing in and immediately facing
+            // Also check the block the bot is currently standing in and immediately facing while actively moving
             BlockPos feet = this.bot.blockPosition();
             tryOpenDoorOrGateAt(level, feet, forbidFenceExit);
             tryOpenDoorOrGateAt(level, feet.above(), forbidFenceExit);
-            BlockPos front = feet.relative(this.bot.getDirection());
-            if (this.bot.distanceToSqr(front.getX() + 0.5, this.bot.getY(), front.getZ() + 0.5) <= 2.5) {
-                tryOpenDoorOrGateAt(level, front, forbidFenceExit);
-                tryOpenDoorOrGateAt(level, front.above(), forbidFenceExit);
+            if (path.getNodeCount() > 1) {
+                BlockPos front = feet.relative(this.bot.getDirection());
+                if (this.bot.distanceToSqr(front.getX() + 0.5, this.bot.getY(), front.getZ() + 0.5) <= 2.25) {
+                    tryOpenDoorOrGateAt(level, front, forbidFenceExit);
+                    tryOpenDoorOrGateAt(level, front.above(), forbidFenceExit);
+                }
             }
         }
 
@@ -506,16 +511,22 @@ public final class BotPathfinder {
             BlockState state = level.getBlockState(pos);
             if (state.getBlock() instanceof DoorBlock door) {
                 if (door.type().canOpenByHand()) {
-                    if (!state.getValue(DoorBlock.OPEN)) {
-                        door.setOpen(this.bot, level, state, pos, true);
-                    }
                     BlockPos bottomDoorPos = state.hasProperty(DoorBlock.HALF)
                             && state.getValue(DoorBlock.HALF) == net.minecraft.world.level.block.state.properties.DoubleBlockHalf.UPPER
                             ? pos.below() : pos.immutable();
-                    this.openedDoorsAndGates.add(bottomDoorPos);
-                    this.bot.rememberOpenedDoor(bottomDoorPos);
+                    if (!state.getValue(DoorBlock.OPEN)) {
+                        door.setOpen(this.bot, level, state, pos, true);
+                        this.doorLastOpenTick.put(bottomDoorPos, this.bot.tickCount);
+                        this.openedDoorsAndGates.add(bottomDoorPos);
+                        this.bot.rememberOpenedDoor(bottomDoorPos);
+                    } else if (this.bot.distanceToSqr(bottomDoorPos.getX() + 0.5, this.bot.getY(), bottomDoorPos.getZ() + 0.5) <= 2.5) {
+                        this.doorLastOpenTick.put(bottomDoorPos, this.bot.tickCount);
+                        this.openedDoorsAndGates.add(bottomDoorPos);
+                        this.bot.rememberOpenedDoor(bottomDoorPos);
+                    }
                 }
             } else if (!forbidFenceExit && state.getBlock() instanceof FenceGateBlock) {
+                BlockPos gatePos = pos.immutable();
                 if (!state.getValue(FenceGateBlock.OPEN)) {
                     BlockState openState = state.setValue(FenceGateBlock.OPEN, true);
                     if (openState.hasProperty(FenceGateBlock.FACING)) {
@@ -526,40 +537,58 @@ public final class BotPathfinder {
                     }
                     level.setBlockAndUpdate(pos, openState);
                     level.playSound(null, pos, SoundEvents.FENCE_GATE_OPEN, SoundSource.BLOCKS, 1.0f, 1.0f);
+                    this.doorLastOpenTick.put(gatePos, this.bot.tickCount);
+                    this.openedDoorsAndGates.add(gatePos);
+                    this.bot.rememberOpenedGate(gatePos);
+                } else if (this.bot.distanceToSqr(gatePos.getX() + 0.5, this.bot.getY(), gatePos.getZ() + 0.5) <= 2.5) {
+                    this.doorLastOpenTick.put(gatePos, this.bot.tickCount);
+                    this.openedDoorsAndGates.add(gatePos);
+                    this.bot.rememberOpenedGate(gatePos);
                 }
-                this.openedDoorsAndGates.add(pos.immutable());
-                this.bot.rememberOpenedGate(pos.immutable());
             }
         }
 
         /**
-         * Closes doors and fence gates behind the bot once it has passed the doorway node
-         * and is clear of the door's bounding box (matching Vanilla {@code InteractWithDoor}).
+         * Closes doors and fence gates behind the bot once it has passed the doorway node,
+         * waited at least 40 ticks since opening, and moved at least 2.25 blocks clear of the doorway.
          */
         private void closePassedDoorsAndGates(ServerLevel level, @Nullable Path activePath) {
             if (this.openedDoorsAndGates.isEmpty()) {
                 return;
             }
-            BlockPos prevNodePos = (activePath != null && activePath.getPreviousNode() != null)
-                    ? activePath.getPreviousNode().asBlockPos() : null;
-            BlockPos nextNodePos = (activePath != null && !activePath.isDone())
-                    ? activePath.getNextNodePos() : null;
 
             Iterator<BlockPos> it = this.openedDoorsAndGates.iterator();
             while (it.hasNext()) {
                 BlockPos pos = it.next();
-                if (pos.equals(prevNodePos) || pos.equals(nextNodePos)) {
+                int lastOpen = this.doorLastOpenTick.getOrDefault(pos, -999);
+                if (this.bot.tickCount - lastOpen < 40) {
                     continue;
+                }
+                if (activePath != null && !activePath.isDone()) {
+                    int nextIdx = activePath.getNextNodeIndex();
+                    int startIdx = Math.max(0, nextIdx - 1);
+                    int endIdx = Math.min(activePath.getNodeCount() - 1, nextIdx + 2);
+                    boolean onActivePathSegment = false;
+                    for (int i = startIdx; i <= endIdx; i++) {
+                        BlockPos np = activePath.getNode(i).asBlockPos();
+                        if (pos.equals(np) || pos.equals(np.below()) || pos.equals(np.above())) {
+                            onActivePathSegment = true;
+                            break;
+                        }
+                    }
+                    if (onActivePathSegment) {
+                        continue;
+                    }
                 }
                 if (pos.equals(this.bot.blockPosition()) || pos.equals(this.bot.blockPosition().below())) {
                     continue;
                 }
-                AABB doorBox = new AABB(pos).inflate(0.3);
+                AABB doorBox = new AABB(pos).inflate(0.5);
                 if (this.bot.getBoundingBox().intersects(doorBox)) {
                     continue;
                 }
                 double distSq = this.bot.distanceToSqr(pos.getX() + 0.5, this.bot.getY(), pos.getZ() + 0.5);
-                if (distSq < 1.8) {
+                if (distSq < 5.06) {
                     continue;
                 }
                 BlockState state = level.getBlockState(pos);

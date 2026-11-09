@@ -56,7 +56,19 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🛏️ Shelter Navigation Deadlock & Lifelike Village Routines *(New in v1.2.33)*
+### 🚪 Smooth Per-Tick House Exit, Crop Arrival & Anti-Spam Door Control *(New in v1.2.34)*
+* **Zero Indoor Pacing & Exact Crop Arrival**:
+  * Fixed the root cause of companions pacing back and forth inside houses or overshooting crops by 2–3 blocks in farm fields. Passive farming and village wandering routines now drive `GroundPathNavigation` on every server tick toward their active target (`currentPassiveFarmTarget` / `currentWanderTarget`) while keeping area scans throttled, ensuring crisp corner turns through doorways and immediate stops upon reaching a crop or workstation.
+  * Farmer companions waking up indoors when all crops are still growing now automatically head outside to patrol their farm plot rather than remaining inside their bedroom.
+* **Hysteresis Door & Gate Control (No Door Spam)**:
+  * Eliminated rapid door opening/closing loops when companions stand near doorways. Added a 40-tick (2-second) minimum open cooldown, full active-path segment protection (`nextIdx - 1` through `nextIdx + 2`), and a `2.25`-block horizontal clearance requirement before closing passed doors.
+  * Improved indoor night shelter selection to target deep interior room tiles rather than doorway thresholds.
+* **Accurate Daytime `/bot status` Reporting**:
+  * Automatically clears stale `"Sleeping in bed"` and `"Sheltering indoors"` statuses at sunrise and reports live daytime activities (`Harvesting crops`, `Planting seeds`, `Patrolling farm area`, `Working at workstation`, `Strolling through village`).
+
+---
+
+### 🛏️ Shelter Navigation Deadlock & Lifelike Village Routines *(v1.2.33)*
 * **Zero Frozen Bots at Bedtime**:
   * Fixed an issue where companions would stand frozen in fields at night with status "Walking to night shelter". Expanded pathfinder unreachable target detection up to 64 blocks, eliminating an infinite timeout reset bug and ensuring unreachable beds/shelters are promptly blacklisted so companions seek alternative shelter.
   * Expanded bed discovery range to 64 blocks horizontally and `dy = -12..+12` vertically, allowing companions to easily discover and claim beds in 2-story buildings or on village hills.

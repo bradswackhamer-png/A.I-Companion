@@ -215,6 +215,19 @@ public class AiBotPlayer extends ServerPlayer {
     private int insanityStuckTicks = 0;
     private final Map<Long, Integer> unreachableTargetBlacklist = new java.util.HashMap<>();
     private String activePassiveActivity = "";
+    private @Nullable BlockPos currentPassiveFarmTarget = null;
+    private @Nullable BlockPos currentWanderTarget = null;
+
+    private void clearStaleNightActivity() {
+        this.currentShelterBedTarget = null;
+        if (!this.activePassiveActivity.isBlank()) {
+            String lower = this.activePassiveActivity.toLowerCase(Locale.ROOT);
+            if (lower.contains("sleep") || lower.contains("shelter") || lower.contains("bed")
+                    || lower.contains("night") || lower.contains("house")) {
+                this.activePassiveActivity = "";
+            }
+        }
+    }
 
     public boolean isTargetBlacklisted(BlockPos pos) {
         if (pos == null) return false;
@@ -1565,8 +1578,11 @@ public class AiBotPlayer extends ServerPlayer {
             if (this.standingBy) {
                 return "Standing by (stationary)";
             }
+            if (!isNightTime() && !this.level().isThundering()) {
+                clearStaleNightActivity();
+            }
             boolean physicallyMoving = this.zza > 0.01f || this.getDeltaMovement().horizontalDistanceSqr() > 0.002;
-            if (!this.activePassiveActivity.isBlank()) {
+            if (!this.activePassiveActivity.isBlank() && !this.activePassiveActivity.startsWith("Sleeping")) {
                 return this.activePassiveActivity + (physicallyMoving ? " [actively walking]" : " [at position]");
             }
             if (physicallyMoving) {
@@ -1778,15 +1794,15 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        // Auto-close passed doors and gates (only when fully clear of the opening)
+        // Auto-close passed doors and gates (only after timer expires AND bot is >= 2.25 blocks clear of the opening)
         if (this.lastOpenedGatePos != null) {
             this.gateCloseTimer--;
             Vec3 gateCenter = Vec3.atCenterOf(this.lastOpenedGatePos);
-            double distSq = this.distanceToSqr(gateCenter);
-            net.minecraft.world.phys.AABB gateBox = new net.minecraft.world.phys.AABB(this.lastOpenedGatePos).inflate(0.25);
+            double distSq = this.distanceToSqr(gateCenter.x, this.getY(), gateCenter.z);
+            net.minecraft.world.phys.AABB gateBox = new net.minecraft.world.phys.AABB(this.lastOpenedGatePos).inflate(0.5);
             boolean stillInGate = this.getBoundingBox().intersects(gateBox);
 
-            boolean clearedGate = !stillInGate && (distSq > 3.0 || (this.gateCloseTimer <= 0 && distSq > 1.5));
+            boolean clearedGate = !stillInGate && this.gateCloseTimer <= 0 && distSq > 5.06;
             if (clearedGate) {
                 BlockState gs = this.level().getBlockState(this.lastOpenedGatePos);
                 if (gs.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock && gs.getValue(net.minecraft.world.level.block.FenceGateBlock.OPEN)) {
@@ -1799,11 +1815,11 @@ public class AiBotPlayer extends ServerPlayer {
         if (this.lastOpenedDoorPos != null) {
             this.doorCloseTimer--;
             Vec3 doorCenter = Vec3.atCenterOf(this.lastOpenedDoorPos);
-            double distSq = this.distanceToSqr(doorCenter);
-            net.minecraft.world.phys.AABB doorBox = new net.minecraft.world.phys.AABB(this.lastOpenedDoorPos).inflate(0.25);
+            double distSq = this.distanceToSqr(doorCenter.x, this.getY(), doorCenter.z);
+            net.minecraft.world.phys.AABB doorBox = new net.minecraft.world.phys.AABB(this.lastOpenedDoorPos).inflate(0.5);
             boolean stillInDoor = this.getBoundingBox().intersects(doorBox);
 
-            boolean clearedDoor = !stillInDoor && (distSq > 3.0 || (this.doorCloseTimer <= 0 && distSq > 1.5));
+            boolean clearedDoor = !stillInDoor && this.doorCloseTimer <= 0 && distSq > 5.06;
             if (clearedDoor) {
                 BlockState ds = this.level().getBlockState(this.lastOpenedDoorPos);
                 if (ds.getBlock() instanceof DoorBlock door && ds.getValue(DoorBlock.OPEN)) {
@@ -1926,9 +1942,12 @@ public class AiBotPlayer extends ServerPlayer {
             if (tickNightShelterAndSleep()) {
                 return;
             }
-        } else if (this.isSleeping()) {
-            this.stopSleepInBed(false, true);
-            stepOffBedIfStandingOnIt();
+        } else {
+            if (this.isSleeping()) {
+                this.stopSleepInBed(false, true);
+                stepOffBedIfStandingOnIt();
+            }
+            clearStaleNightActivity();
         }
 
         // 1. Guard / Bodyguard: Automatically patrol compound / anchor or follow player, intercepting nearby monsters (never jumping fences!)
@@ -3455,7 +3474,7 @@ public class AiBotPlayer extends ServerPlayer {
                     for (int z = minZ; z <= maxZ; z++) {
                         for (int y = minY; y <= maxY; y++) {
                             BlockPos p = new BlockPos(x, y, z);
-                            if (!area.contains(p)) continue;
+                            if (!area.contains(p) || isTargetBlacklisted(p)) continue;
                             BlockState s = this.level().getBlockState(p);
                             if (s.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop && crop.isMaxAge(s)) {
                                 if (isCropAllowed(crop)) {
@@ -3484,7 +3503,7 @@ public class AiBotPlayer extends ServerPlayer {
             for (int dy = -8; dy <= 8; dy++) {
                 for (int dz = -rz; dz <= rz; dz++) {
                     BlockPos p = center.offset(dx, dy, dz);
-                    if (!isInsideFarmArea(p)) continue;
+                    if (!isInsideFarmArea(p) || isTargetBlacklisted(p)) continue;
                     BlockState s = this.level().getBlockState(p);
                     if (s.getBlock() instanceof net.minecraft.world.level.block.CropBlock crop && crop.isMaxAge(s)) {
                         if (isCropAllowed(crop)) {
@@ -3518,7 +3537,7 @@ public class AiBotPlayer extends ServerPlayer {
                     for (int z = minZ; z <= maxZ; z++) {
                         for (int y = minY; y <= maxY; y++) {
                             BlockPos p = new BlockPos(x, y, z);
-                            if (!area.contains(p)) continue;
+                            if (!area.contains(p) || isTargetBlacklisted(p)) continue;
                             if (this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
                                 double d = this.distanceToSqr(Vec3.atCenterOf(p));
                                 if (d < bestDist) {
@@ -3544,7 +3563,7 @@ public class AiBotPlayer extends ServerPlayer {
             for (int dy = -8; dy <= 8; dy++) {
                 for (int dz = -rz; dz <= rz; dz++) {
                     BlockPos p = center.offset(dx, dy, dz);
-                    if (!isInsideFarmArea(p)) continue;
+                    if (!isInsideFarmArea(p) || isTargetBlacklisted(p)) continue;
                     if (this.level().getBlockState(p).is(Blocks.FARMLAND) && this.level().getBlockState(p.above()).isAir()) {
                         double d = this.distanceToSqr(Vec3.atCenterOf(p));
                         if (d < bestDist) {
@@ -3565,6 +3584,7 @@ public class AiBotPlayer extends ServerPlayer {
         BlockPos best = null;
         double bestDistSq = Double.MAX_VALUE;
         for (BlockPos p : BlockPos.betweenClosed(center.offset(-r, -8, -r), center.offset(r, 8, r))) {
+            if (isTargetBlacklisted(p)) continue;
             BlockState s = this.level().getBlockState(p);
             if (s.getBlock() instanceof net.minecraft.world.level.block.CropBlock || s.is(Blocks.FARMLAND)) {
                 double d = this.distanceToSqr(Vec3.atCenterOf(p));
@@ -3594,7 +3614,7 @@ public class AiBotPlayer extends ServerPlayer {
                     for (int z = minZ; z <= maxZ; z++) {
                         for (int y = minY; y <= maxY; y++) {
                             BlockPos p = new BlockPos(x, y, z);
-                            if (!area.contains(p)) continue;
+                            if (!area.contains(p) || isTargetBlacklisted(p)) continue;
                             BlockState state = this.level().getBlockState(p);
                             if ((state.is(Blocks.DIRT) || state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.COARSE_DIRT))
                                     && this.level().getBlockState(p.above()).isAir()) {
@@ -3618,7 +3638,7 @@ public class AiBotPlayer extends ServerPlayer {
             for (int dy = -3; dy <= 3; dy++) {
                 for (int dz = -this.farmRadiusZ; dz <= this.farmRadiusZ; dz++) {
                     BlockPos p = origin.offset(dx, dy, dz);
-                    if (!isInsideFarmArea(p)) continue;
+                    if (!isInsideFarmArea(p) || isTargetBlacklisted(p)) continue;
                     BlockState state = this.level().getBlockState(p);
                     if ((state.is(Blocks.DIRT) || state.is(Blocks.GRASS_BLOCK) || state.is(Blocks.DIRT_PATH) || state.is(Blocks.COARSE_DIRT))
                             && this.level().getBlockState(p.above()).isAir()) {
@@ -3662,10 +3682,13 @@ public class AiBotPlayer extends ServerPlayer {
 
         double distSq = this.distanceToSqr(Vec3.atCenterOf(tillTarget));
         if (distSq > 9.0) {
+            this.currentPassiveFarmTarget = tillTarget;
+            this.activePassiveActivity = "Tilling farmland at (" + tillTarget.getX() + ", " + tillTarget.getY() + ", " + tillTarget.getZ() + ")";
             moveTowards(Vec3.atCenterOf(tillTarget), false);
             return true;
         }
 
+        this.currentPassiveFarmTarget = null;
         stopMovement();
         lookAtPos(Vec3.atCenterOf(tillTarget));
         this.level().setBlockAndUpdate(tillTarget, Blocks.FARMLAND.defaultBlockState());
@@ -3814,7 +3837,34 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void tickPassiveFarmer() {
-        if (this.tickCount % 20 != 0) return;
+        // Drive active navigation every single tick so the bot smoothly follows path nodes, opens doors,
+        // and stops immediately on arrival without overshooting during intermediate ticks!
+        if (this.tickCount % 20 != 0) {
+            if (this.currentPassiveFarmTarget != null) {
+                if (isTargetBlacklisted(this.currentPassiveFarmTarget)) {
+                    this.currentPassiveFarmTarget = null;
+                    stopMovement();
+                    return;
+                }
+                double distSq = this.position().distanceToSqr(Vec3.atCenterOf(this.currentPassiveFarmTarget));
+                if (distSq > 9.0) {
+                    moveTowards(Vec3.atCenterOf(this.currentPassiveFarmTarget), false);
+                    return;
+                }
+                // Reached target on an intermediate tick: fall through immediately to harvest/plant/interact!
+            } else if (this.currentWanderTarget != null) {
+                if (isTargetBlacklisted(this.currentWanderTarget)
+                        || this.distanceToSqr(Vec3.atCenterOf(this.currentWanderTarget)) <= 2.5) {
+                    this.currentWanderTarget = null;
+                    stopMovement();
+                } else {
+                    moveTowards(Vec3.atCenterOf(this.currentWanderTarget), false);
+                }
+                return;
+            } else {
+                return;
+            }
+        }
 
         // Auto-craft wheat to bread or hay bales to save inventory and chest space
         if (this.autoCraftWheatToBread && countMatching(s -> s.is(Items.WHEAT)) >= 3) {
@@ -3857,9 +3907,11 @@ public class AiBotPlayer extends ServerPlayer {
                 if (nearbyTractor != null && (this.tractorMode || this.botRole.toLowerCase().contains("tractor"))) {
                     double distSq = this.distanceToSqr(nearbyTractor);
                     if (distSq > 6.0) {
+                        this.currentPassiveFarmTarget = nearbyTractor.blockPosition();
                         moveTowards(nearbyTractor.position(), false);
                         return;
                     } else {
+                        this.currentPassiveFarmTarget = null;
                         TractorCompat.mountTractor(this, nearbyTractor);
                         sayRoutineInChat("Mounted the JaneMoose tractor! Beginning mechanized farm work.");
                         return;
@@ -3872,17 +3924,21 @@ public class AiBotPlayer extends ServerPlayer {
         int depositable = getFarmerDepositableCropCount();
         if (depositable >= 16) {
             BlockPos chestPos = findNearestAvailableContainerBlock(24);
-            if (chestPos != null) {
+            if (chestPos != null && !isTargetBlacklisted(chestPos)) {
                 double distSq = this.distanceToSqr(Vec3.atCenterOf(chestPos));
                 if (distSq > 9.0) {
+                    this.currentPassiveFarmTarget = chestPos;
+                    this.activePassiveActivity = "Storing harvested crops in chest";
                     moveTowards(Vec3.atCenterOf(chestPos), false);
                     return;
                 } else {
+                    this.currentPassiveFarmTarget = null;
                     stopMovement();
                     depositFarmerCropsIntoChest(chestPos);
                     if (getFarmerDepositableCropCount() >= 16) {
                         BlockPos nextChest = findNearestAvailableContainerBlock(24);
-                        if (nextChest != null && !nextChest.equals(chestPos)) {
+                        if (nextChest != null && !nextChest.equals(chestPos) && !isTargetBlacklisted(nextChest)) {
+                            this.currentPassiveFarmTarget = nextChest;
                             moveTowards(Vec3.atCenterOf(nextChest), false);
                         }
                     }
@@ -3898,12 +3954,15 @@ public class AiBotPlayer extends ServerPlayer {
             int totalSeeds = countMatching(s -> BuiltInRegistries.ITEM.getKey(s.getItem()).toString().contains("seed"));
             if (totalSeeds > this.maxSeedsToKeepOnHand) {
                 BlockPos composterPos = findNearestComposterBlock(24);
-                if (composterPos != null) {
+                if (composterPos != null && !isTargetBlacklisted(composterPos)) {
                     double distSq = this.distanceToSqr(Vec3.atCenterOf(composterPos));
                     if (distSq > 9.0) {
+                        this.currentPassiveFarmTarget = composterPos;
+                        this.activePassiveActivity = "Composting surplus seeds";
                         moveTowards(Vec3.atCenterOf(composterPos), false);
                         return;
                     } else {
+                        this.currentPassiveFarmTarget = null;
                         stopMovement();
                         int composted = compostExcessSeeds(composterPos, this.maxSeedsToKeepOnHand);
                         if (composted > 0) {
@@ -3919,8 +3978,12 @@ public class AiBotPlayer extends ServerPlayer {
         if (matureCrop != null) {
             double distSq = this.position().distanceToSqr(Vec3.atCenterOf(matureCrop));
             if (distSq > 9.0) {
+                this.currentPassiveFarmTarget = matureCrop;
+                this.activePassiveActivity = "Harvesting crops at (" + matureCrop.getX() + ", " + matureCrop.getY() + ", " + matureCrop.getZ() + ")";
                 moveTowards(Vec3.atCenterOf(matureCrop), false);
             } else {
+                this.currentPassiveFarmTarget = null;
+                this.activePassiveActivity = "Harvesting crops at (" + matureCrop.getX() + ", " + matureCrop.getY() + ", " + matureCrop.getZ() + ")";
                 stopMovement();
                 lookAtPos(Vec3.atCenterOf(matureCrop));
                 BlockState cropState = this.level().getBlockState(matureCrop);
@@ -3938,8 +4001,12 @@ public class AiBotPlayer extends ServerPlayer {
             if (hasAnySeeds()) {
                 double distSq = this.position().distanceToSqr(Vec3.atCenterOf(bareFarmland));
                 if (distSq > 9.0) {
+                    this.currentPassiveFarmTarget = bareFarmland;
+                    this.activePassiveActivity = "Planting seeds at (" + bareFarmland.getX() + ", " + bareFarmland.getY() + ", " + bareFarmland.getZ() + ")";
                     moveTowards(Vec3.atCenterOf(bareFarmland), false);
                 } else {
+                    this.currentPassiveFarmTarget = null;
+                    this.activePassiveActivity = "Planting seeds at (" + bareFarmland.getX() + ", " + bareFarmland.getY() + ", " + bareFarmland.getZ() + ")";
                     stopMovement();
                     lookAtPos(Vec3.atCenterOf(bareFarmland));
                     tryPlantSeedOnFarmland(bareFarmland);
@@ -3963,10 +4030,22 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
+        this.currentPassiveFarmTarget = null;
+
+        // If all crops are currently growing, patrol outdoors near the farm plot instead of standing in a house
+        BlockPos anyFarm = findNearestAnyCropOrFarmland(farmR);
+        if (anyFarm != null) {
+            wanderNearFarm(anyFarm, this.assignedWorkstationPos, 10.0);
+            return;
+        }
+
         // Return to farm center if drifted beyond farm boundary
         if (this.farmOriginPos != null && this.distanceToSqr(Vec3.atCenterOf(this.farmOriginPos)) > (double) (farmR * farmR)) {
+            this.currentPassiveFarmTarget = this.farmOriginPos;
+            this.activePassiveActivity = "Returning to farm zone";
             moveTowards(Vec3.atCenterOf(this.farmOriginPos), false);
         } else {
+            this.activePassiveActivity = "Watching over farm";
             stopMovement();
         }
     }
@@ -4283,7 +4362,16 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void tickPassiveRancher() {
-        if (this.tickCount % 20 != 0) return;
+        if (this.tickCount % 20 != 0) {
+            if (this.lastMoveTarget != null && this.zza > 0.01f) {
+                if (this.distanceToSqr(this.lastMoveTarget) > 6.25) {
+                    moveTowards(this.lastMoveTarget, false);
+                } else {
+                    stopMovement();
+                }
+            }
+            return;
+        }
 
         // 1. Store animal drops into chest if count >= 8
         if (countAnimalDrops() >= 8) {
@@ -6947,7 +7035,21 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private void tickPassiveLumberjack() {
-        if (this.tickCount % 20 != 0) return;
+        if (!this.targetTreeLogs.isEmpty()) {
+            this.activePassiveActivity = "Chopping tree logs";
+            chopNextTreeLog();
+            return;
+        }
+        if (this.tickCount % 20 != 0) {
+            if (this.lastMoveTarget != null && this.zza > 0.01f) {
+                if (this.distanceToSqr(this.lastMoveTarget) > 6.25) {
+                    moveTowards(this.lastMoveTarget, false);
+                } else {
+                    stopMovement();
+                }
+            }
+            return;
+        }
 
         BlockPos origin = this.lumberOriginPos != null ? this.lumberOriginPos : this.blockPosition();
         int radius = this.lumberRadius > 0 ? this.lumberRadius : 32;
@@ -7692,6 +7794,7 @@ public class AiBotPlayer extends ServerPlayer {
     public @Nullable BlockPos findNearestShelterBlock(int radius) {
         BlockPos center = this.blockPosition();
         int maxR = Math.max(24, radius);
+        BlockPos fallback = null;
         for (int r = 1; r <= maxR; r += 2) {
             for (BlockPos p : BlockPos.betweenClosed(center.offset(-r, -4, -r), center.offset(r, 6, r))) {
                 if (isTargetBlacklisted(p)) continue;
@@ -7701,12 +7804,27 @@ public class AiBotPlayer extends ServerPlayer {
                     if (this.level().getBlockState(stand).isSolid() && this.level().getFluidState(stand).isEmpty() && this.level().getFluidState(p).isEmpty()) {
                         BlockState roofState = this.level().getBlockState(p.above(2));
                         if (roofState.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock) continue;
-                        return p.immutable();
+                        if (fallback == null) {
+                            fallback = p.immutable();
+                        }
+                        // Prefer an interior room tile that is not adjacent to a doorway or outdoor sky overhang
+                        boolean nearDoorOrSky = false;
+                        for (Direction dir : Direction.Plane.HORIZONTAL) {
+                            BlockPos n = p.relative(dir);
+                            BlockState ns = this.level().getBlockState(n);
+                            if (ns.getBlock() instanceof DoorBlock || ns.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock || this.level().canSeeSky(n)) {
+                                nearDoorOrSky = true;
+                                break;
+                            }
+                        }
+                        if (!nearDoorOrSky) {
+                            return p.immutable();
+                        }
                     }
                 }
             }
         }
-        return null;
+        return fallback;
     }
 
     public @Nullable BlockPos findNearestBlockType(Block blockType, int radius) {
@@ -7767,17 +7885,30 @@ public class AiBotPlayer extends ServerPlayer {
             escapeWaterToDryLand();
             return;
         }
+        if (isNightTime()) {
+            this.currentWanderTarget = null;
+            stopMovement();
+            return;
+        }
+        // During daytime, if inside a house, stroll outdoors in the village rather than pacing inside a small room
+        if (!this.level().canSeeSky(this.blockPosition())) {
+            wanderOutdoorsInVillage(Math.max(20.0, maxDist));
+            return;
+        }
 
-        BlockPos center = this.assignedHousePos != null ? this.assignedHousePos
-                : (this.guardAnchorPos != null ? this.guardAnchorPos : this.blockPosition());
+        this.activePassiveActivity = "Strolling around compound";
+        BlockPos center = this.guardAnchorPos != null ? this.guardAnchorPos
+                : (this.assignedHousePos != null ? this.assignedHousePos : this.blockPosition());
         double distSq = this.distanceToSqr(Vec3.atCenterOf(center));
         if (distSq > (maxDist * maxDist)) {
+            this.currentWanderTarget = center;
             moveTowards(Vec3.atCenterOf(center), false);
             return;
         }
 
-        if (this.tickCount % 60 == 0) {
-            if (isNightTime()) {
+        if (this.tickCount % 80 == 0) {
+            if (this.random.nextFloat() < 0.40f) {
+                this.currentWanderTarget = null;
                 stopMovement();
                 return;
             }
@@ -7787,9 +7918,21 @@ public class AiBotPlayer extends ServerPlayer {
             double targetZ = center.getZ() + Math.sin(angle) * r;
             BlockPos targetPos = new BlockPos((int) targetX, center.getY(), (int) targetZ);
             BlockPos safeStand = (this.level() instanceof ServerLevel sl) ? findSafeDryRespawnPos(sl, targetPos, 3) : null;
-            if (safeStand != null && this.level().getFluidState(safeStand).isEmpty()) {
-                moveTowards(Vec3.atCenterOf(safeStand), false);
+            if (safeStand != null && this.level().getFluidState(safeStand).isEmpty() && !isTargetBlacklisted(safeStand)) {
+                this.currentWanderTarget = safeStand;
             }
+        }
+
+        if (this.currentWanderTarget != null) {
+            if (isTargetBlacklisted(this.currentWanderTarget)
+                    || this.distanceToSqr(Vec3.atCenterOf(this.currentWanderTarget)) <= 2.5) {
+                this.currentWanderTarget = null;
+                stopMovement();
+            } else {
+                moveTowards(Vec3.atCenterOf(this.currentWanderTarget), false);
+            }
+        } else {
+            stopMovement();
         }
     }
 
@@ -7798,22 +7941,47 @@ public class AiBotPlayer extends ServerPlayer {
             escapeWaterToDryLand();
             return;
         }
+        this.activePassiveActivity = "Strolling through village";
         BlockPos bell = findNearestBlockType(Blocks.BELL, 48);
         BlockPos center = bell != null ? bell
                 : (this.guardAnchorPos != null ? this.guardAnchorPos : this.blockPosition());
 
-        if (this.tickCount % 100 == 0) {
-            double angle = this.random.nextDouble() * 2 * Math.PI;
-            double r = 4.0 + this.random.nextDouble() * (maxDist - 4.0);
-            double targetX = center.getX() + Math.cos(angle) * r;
-            double targetZ = center.getZ() + Math.sin(angle) * r;
-            BlockPos targetPos = new BlockPos((int) targetX, center.getY(), (int) targetZ);
+        // If currently indoors during daytime and we have no outdoor target yet, pick one immediately
+        boolean currentlyIndoors = !this.level().canSeeSky(this.blockPosition());
+
+        if (this.tickCount % 100 == 0 || (currentlyIndoors && this.currentWanderTarget == null)) {
+            if (!currentlyIndoors && this.random.nextFloat() < 0.40f) {
+                this.currentWanderTarget = null;
+                stopMovement();
+                return;
+            }
             if (this.level() instanceof ServerLevel sl) {
-                BlockPos safe = findSafeDryRespawnPos(sl, targetPos, 3);
-                if (safe != null && this.level().getFluidState(safe).isEmpty()) {
-                    moveTowards(Vec3.atCenterOf(safe), false);
+                for (int attempt = 0; attempt < 5; attempt++) {
+                    double angle = this.random.nextDouble() * 2 * Math.PI;
+                    double r = 4.0 + this.random.nextDouble() * Math.max(4.0, maxDist - 4.0);
+                    double targetX = center.getX() + Math.cos(angle) * r;
+                    double targetZ = center.getZ() + Math.sin(angle) * r;
+                    BlockPos targetPos = new BlockPos((int) targetX, center.getY(), (int) targetZ);
+                    BlockPos safe = findSafeDryRespawnPos(sl, targetPos, 3);
+                    if (safe != null && this.level().getFluidState(safe).isEmpty()
+                            && sl.canSeeSky(safe) && !isTargetBlacklisted(safe)) {
+                        this.currentWanderTarget = safe;
+                        break;
+                    }
                 }
             }
+        }
+
+        if (this.currentWanderTarget != null) {
+            if (isTargetBlacklisted(this.currentWanderTarget)
+                    || this.distanceToSqr(Vec3.atCenterOf(this.currentWanderTarget)) <= 2.5) {
+                this.currentWanderTarget = null;
+                stopMovement();
+            } else {
+                moveTowards(Vec3.atCenterOf(this.currentWanderTarget), false);
+            }
+        } else {
+            stopMovement();
         }
     }
 
@@ -7976,19 +8144,8 @@ public class AiBotPlayer extends ServerPlayer {
                 searchAndClaimWorkstation(48);
             }
             if ("farmer".equalsIgnoreCase(this.botSubRole)) {
-                int searchR = Math.max(32, this.farmRadiusX);
-                BlockPos matureCrop = findNearestMatureCrop(searchR);
-                BlockPos bareFarmland = findNearestBareFarmland(searchR);
-                int depositable = getFarmerDepositableCropCount();
-                if (matureCrop != null || bareFarmland != null || depositable >= 16) {
-                    tickPassiveFarmer();
-                    return;
-                }
-                BlockPos anyFarm = findNearestAnyCropOrFarmland(searchR);
-                if (anyFarm != null) {
-                    wanderNearFarm(anyFarm, null, 8.0);
-                    return;
-                }
+                tickPassiveFarmer();
+                return;
             }
             wanderAroundHomeOrAnchor(16.0);
             return;
@@ -8000,22 +8157,11 @@ public class AiBotPlayer extends ServerPlayer {
             if (this.farmOriginPos == null) {
                 this.farmOriginPos = workstation;
             }
-            int searchR = Math.max(32, this.farmRadiusX);
-            BlockPos matureCrop = findNearestMatureCrop(searchR);
-            BlockPos bareFarmland = findNearestBareFarmland(searchR);
-            int depositable = getFarmerDepositableCropCount();
-            if (matureCrop != null || bareFarmland != null || depositable >= 16) {
-                tickPassiveFarmer();
-                return;
-            }
-
-            BlockPos anyFarm = findNearestAnyCropOrFarmland(searchR);
-            if (anyFarm != null) {
-                wanderNearFarm(anyFarm, workstation, 8.0);
-                return;
-            }
+            tickPassiveFarmer();
+            return;
         }
 
+        this.activePassiveActivity = "Working at workstation (" + capitalize(this.botSubRole) + ")";
         double distSq = this.distanceToSqr(Vec3.atCenterOf(workstation));
         if (distSq > 4.0) {
             moveTowards(Vec3.atCenterOf(workstation), false);
@@ -8069,19 +8215,41 @@ public class AiBotPlayer extends ServerPlayer {
             escapeWaterToDryLand();
             return;
         }
+        this.activePassiveActivity = "Patrolling farm area";
         BlockPos center = this.farmOriginPos != null ? this.farmOriginPos
                 : (workstation != null ? workstation : (farmPlot != null ? farmPlot : this.blockPosition()));
         double allowedRadius = Math.max(20.0, Math.max((double) this.farmRadiusX, maxDist));
         double distSq = this.distanceToSqr(Vec3.atCenterOf(center));
         if (distSq > allowedRadius * allowedRadius) {
+            this.currentWanderTarget = center;
             moveTowards(Vec3.atCenterOf(center), false);
             return;
         }
 
+        // If currently indoors during daytime, step out toward the farm plot or workstation immediately
+        if (!this.level().canSeeSky(this.blockPosition()) && !isNightTime()) {
+            BlockPos outdoorTarget = farmPlot != null ? farmPlot : (workstation != null ? workstation : center);
+            if (!outdoorTarget.equals(this.blockPosition()) && this.distanceToSqr(Vec3.atCenterOf(outdoorTarget)) > 4.0) {
+                this.currentWanderTarget = outdoorTarget;
+                moveTowards(Vec3.atCenterOf(outdoorTarget), false);
+                return;
+            }
+        }
+
         if (this.tickCount % 100 == 0) {
-            if (this.random.nextFloat() < 0.25f && workstation != null) {
-                moveTowards(Vec3.atCenterOf(workstation), false);
-                lookAtPos(Vec3.atCenterOf(workstation));
+            if (this.random.nextFloat() < 0.35f) {
+                this.currentWanderTarget = null;
+                stopMovement();
+                if (workstation != null) {
+                    lookAtPos(Vec3.atCenterOf(workstation));
+                } else if (farmPlot != null) {
+                    lookAtPos(Vec3.atCenterOf(farmPlot));
+                }
+                equipProfessionWorkItem("farmer");
+                return;
+            }
+            if (this.random.nextFloat() < 0.25f && workstation != null && !isTargetBlacklisted(workstation)) {
+                this.currentWanderTarget = workstation;
                 equipProfessionWorkItem("farmer");
             } else {
                 BlockPos anyCrop = findNearestAnyCropOrFarmland(Math.max(32, this.farmRadiusX));
@@ -8093,13 +8261,24 @@ public class AiBotPlayer extends ServerPlayer {
                 BlockPos targetPos = new BlockPos((int) tx, patrolTarget.getY(), (int) tz);
                 if (this.level() instanceof ServerLevel sl) {
                     BlockPos safe = findSafeDryRespawnPos(sl, targetPos, 2);
-                    if (safe != null && this.level().getFluidState(safe).isEmpty()) {
-                        moveTowards(Vec3.atCenterOf(safe), false);
-                        lookAtPos(Vec3.atCenterOf(patrolTarget));
+                    if (safe != null && this.level().getFluidState(safe).isEmpty() && !isTargetBlacklisted(safe)) {
+                        this.currentWanderTarget = safe;
                         equipProfessionWorkItem("farmer");
                     }
                 }
             }
+        }
+
+        if (this.currentWanderTarget != null) {
+            if (isTargetBlacklisted(this.currentWanderTarget)
+                    || this.distanceToSqr(Vec3.atCenterOf(this.currentWanderTarget)) <= 2.5) {
+                this.currentWanderTarget = null;
+                stopMovement();
+            } else {
+                moveTowards(Vec3.atCenterOf(this.currentWanderTarget), false);
+            }
+        } else {
+            stopMovement();
         }
     }
 
@@ -8108,6 +8287,7 @@ public class AiBotPlayer extends ServerPlayer {
             escapeWaterToDryLand();
             return;
         }
+        this.activePassiveActivity = "Socializing near town bell";
 
         BlockPos bell = findNearestBlockType(Blocks.BELL, 36);
         AiBotPlayer nearestOtherBot = null;
@@ -8208,6 +8388,7 @@ public class AiBotPlayer extends ServerPlayer {
             escapeWaterToDryLand();
             return;
         }
+        this.activePassiveActivity = "Heading home for the evening";
         BlockPos homeTarget = this.assignedBedPos != null ? this.assignedBedPos : this.assignedHousePos;
         if (homeTarget == null) {
             homeTarget = findNearestBedBlock(48);
@@ -8270,6 +8451,7 @@ public class AiBotPlayer extends ServerPlayer {
             this.stopSleepInBed(false, true);
             stepOffBedIfStandingOnIt();
         }
+        clearStaleNightActivity();
 
         if (dayTime < 9000L) {
             if (this.isBaby) {
