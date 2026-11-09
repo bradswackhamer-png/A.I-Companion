@@ -4,6 +4,26 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.33] - 2026-11-08
+
+### Fixed
+- **Unreachable Shelter & Bed Pathfinder Deadlock (`BotPathfinder`, `AiBotPlayer`):**
+  - Resolved an issue where companions would stand frozen in fields at night with status "Walking to night shelter" or "Walking to bed". In `BotPathfinder`, an arbitrary Manhattan distance clamp (`<= 28`) caused any goal further than 28 Manhattan blocks (approx 20 Euclidean blocks) with a null or blocked path to constantly reset `unreachableTicks = 0`, never triggering a timeout and leaving the bot completely frozen with zero forward drive (`zza = 0`).
+  - Expanded unreachable goal detection to 64 Manhattan blocks and reduced timeout to 30 ticks (1.5s), blacklisting unreachable targets so companions immediately select alternative beds, shelters, or village safe zones.
+  - Expanded `findNearestBedBlockNear` vertical search from `[-3..+3]` to `[-12..+12]` (64 block radius), allowing companions to locate and claim beds placed on hill slopes, second-story floors, and elevated village cottages.
+  - Hardened `findNearestShelterBlock` with blacklist checks and proper ceiling validation (rejecting leaf canopies and flooded tiles).
+  - Added town bell safe dry-ground fallback in `tickNightShelterAndSleep` so companions stranded outdoors safely gather at the village center instead of freezing in fields.
+- **Farmer Farm Pacing & Partial Harvest Discrepancy (`AiBotPlayer`):**
+  - Fixed an issue where farmer companions only harvested a few crops and paced between 2-3 blocks in a tug-of-war loop. `tickPassiveFarmer` was constrained to `this.farmRadiusX` (10 blocks) and clamped bot movement to within 5 blocks (`25.0` sq) of `farmOriginPos`, while `tickVillagerWork` searched up to 32 blocks. Crops between 10 and 32 blocks triggered work mode but were invisible to the harvester, causing the bot to bounce back and forth.
+  - Synchronized mature crop and farmland detection across `tickPassiveFarmer` and `tickFarmAction` to `Math.max(32, this.farmRadiusX)` and expanded boundary tolerance.
+  - Overhauled `wanderNearFarm` to anchor to the farm center with a 20-block patrol radius, eliminating the 2-block jitter between composter and random offset.
+- **Unemployed Villager House Pacing & Workstation Claiming (`AiBotPlayer`):**
+  - Fixed an issue where unemployed villager companions would spend all morning pacing back and forth inside bedrooms. `searchAndClaimWorkstation` was previously nested inside `tickVillagerWork`, which was never invoked for unemployed bots.
+  - Unemployed villagers now actively scan and claim unclaimed workstations (`searchAndClaimWorkstation(48)`) every 60 ticks during daytime. If nearby crops are present without an assigned farmer, they seamlessly adopt the farmer role.
+  - Added `wanderOutdoorsInVillage(24.0)`: unemployed villagers leave bedrooms in the morning to stroll outdoors through the village square, visit the town bell, and socialize instead of pacing indoors.
+
+---
+
 ## [1.2.32] - 2026-11-08
 
 ### Added

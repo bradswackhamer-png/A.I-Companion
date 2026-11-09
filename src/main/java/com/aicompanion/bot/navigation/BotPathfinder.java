@@ -362,7 +362,7 @@ public final class BotPathfinder {
 
             Path path = nav.getPath();
 
-            // Check if a nearby target (<= 28 blocks, e.g. inside a sealed building) is unreachable according to Vanilla PathFinder
+            // Check if a target (<= 64 blocks) is unreachable according to Vanilla PathFinder
             int manhattanToGoal = this.bot.blockPosition().distManhattan(goalBlock);
             boolean isInteractiveTarget = level.getBlockState(rawGoalBlock).getBlock() instanceof BedBlock
                     || level.getBlockState(rawGoalBlock).getBlock() instanceof net.minecraft.world.level.block.ChestBlock
@@ -370,11 +370,12 @@ public final class BotPathfinder {
                     || level.getBlockEntity(rawGoalBlock) instanceof Container;
             float maxAllowableDist = isInteractiveTarget ? 3.5f : Math.max(1.5f, accuracy + 0.5f);
 
-            if (manhattanToGoal <= 28 && (path == null || (!path.canReach() && path.getDistToTarget() > maxAllowableDist))) {
+            if (manhattanToGoal <= 64 && (path == null || (!path.canReach() && path.getDistToTarget() > maxAllowableDist))) {
                 this.unreachableTicks++;
-                if (this.unreachableTicks >= 60) {
-                    this.bot.blacklistUnreachableTarget(rawGoalBlock, 400);
-                    this.bot.blacklistUnreachableTarget(goalBlock, 400);
+                if (this.unreachableTicks >= 30) {
+                    this.bot.blacklistUnreachableTarget(rawGoalBlock, 600);
+                    this.bot.blacklistUnreachableTarget(goalBlock, 600);
+                    this.unreachableTicks = 0;
                     this.bot.stopMovement();
                     return;
                 }

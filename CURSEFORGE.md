@@ -56,7 +56,21 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🌊 Water Avoidance & Dry Land Policy *(New in v1.2.32)*
+### 🛏️ Shelter Navigation Deadlock & Lifelike Village Routines *(New in v1.2.33)*
+* **Zero Frozen Bots at Bedtime**:
+  * Fixed an issue where companions would stand frozen in fields at night with status "Walking to night shelter". Expanded pathfinder unreachable target detection up to 64 blocks, eliminating an infinite timeout reset bug and ensuring unreachable beds/shelters are promptly blacklisted so companions seek alternative shelter.
+  * Expanded bed discovery range to 64 blocks horizontally and `dy = -12..+12` vertically, allowing companions to easily discover and claim beds in 2-story buildings or on village hills.
+  * Added town bell safe-ground fallback so stranded companions safely gather at the village center instead of freezing outdoors.
+* **Full Farm Coverage & Zero Pacing**:
+  * Synchronized all farming detection algorithms (`tickPassiveFarmer`, `tickFarmAction`, `tickVillagerWork`) to 32 blocks, ensuring mature crops across the entire village farm are harvested and replanted.
+  * Fixed the 2-block farm jitter: anchored farm patrols to the central farm origin with a 20-block patrol radius.
+* **Unemployed Villager Daytime Activity**:
+  * Unemployed villagers now actively discover and claim unclaimed workstations (`searchAndClaimWorkstation(48)`) during work hours, or assist with farming if crops are present.
+  * Replaced bedroom pacing with outdoor village strolling (`wanderOutdoorsInVillage`): unemployed villagers head outside in the morning, visit the town bell, and socialize.
+
+---
+
+### 🌊 Water Avoidance & Dry Land Policy *(v1.2.32)*
 * **Strict Avoidance of Standing Water & Ponds**:
   * Companions across all roles strictly avoid walking into, cutting across, or standing in water bodies, ponds, puddles, rivers, and oceans by default.
   * Configured pathfinding navigation with `PathType.WATER = -1.0f` (strictly impassable) unless water entry is permitted, ensuring companions route over bridges, boardwalks, and dry banks.

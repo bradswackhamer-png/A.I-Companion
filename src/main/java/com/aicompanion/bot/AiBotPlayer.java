@@ -3706,7 +3706,8 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
-        BlockPos matureCrop = findNearestMatureCrop(this.farmRadiusX);
+        int searchFarmR = Math.max(32, this.farmRadiusX);
+        BlockPos matureCrop = findNearestMatureCrop(searchFarmR);
         if (matureCrop != null) {
             double distSq = this.position().distanceToSqr(Vec3.atCenterOf(matureCrop));
             if (distSq > 9.0) {
@@ -3725,7 +3726,7 @@ public class AiBotPlayer extends ServerPlayer {
             return false;
         }
 
-        BlockPos bareFarmland = findNearestBareFarmland(this.farmRadiusX);
+        BlockPos bareFarmland = findNearestBareFarmland(searchFarmR);
         if (bareFarmland != null) {
             if (hasAnySeeds()) {
                 double distSq = this.position().distanceToSqr(Vec3.atCenterOf(bareFarmland));
@@ -3913,7 +3914,8 @@ public class AiBotPlayer extends ServerPlayer {
             }
         }
 
-        BlockPos matureCrop = findNearestMatureCrop(this.farmRadiusX);
+        int farmR = Math.max(32, this.farmRadiusX);
+        BlockPos matureCrop = findNearestMatureCrop(farmR);
         if (matureCrop != null) {
             double distSq = this.position().distanceToSqr(Vec3.atCenterOf(matureCrop));
             if (distSq > 9.0) {
@@ -3931,7 +3933,7 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        BlockPos bareFarmland = findNearestBareFarmland(this.farmRadiusX);
+        BlockPos bareFarmland = findNearestBareFarmland(farmR);
         if (bareFarmland != null) {
             if (hasAnySeeds()) {
                 double distSq = this.position().distanceToSqr(Vec3.atCenterOf(bareFarmland));
@@ -3961,8 +3963,8 @@ public class AiBotPlayer extends ServerPlayer {
             return;
         }
 
-        // Return to farm center if drifted away
-        if (this.farmOriginPos != null && this.distanceToSqr(Vec3.atCenterOf(this.farmOriginPos)) > 25.0) {
+        // Return to farm center if drifted beyond farm boundary
+        if (this.farmOriginPos != null && this.distanceToSqr(Vec3.atCenterOf(this.farmOriginPos)) > (double) (farmR * farmR)) {
             moveTowards(Vec3.atCenterOf(this.farmOriginPos), false);
         } else {
             stopMovement();
@@ -7571,7 +7573,7 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         if (targetBed == null) {
-            targetBed = findNearestBedBlock(48);
+            targetBed = findNearestBedBlock(64);
             if (targetBed != null) {
                 targetBed = getBedHeadPos(this.level(), targetBed);
                 if (this.assignedBedPos == null && !this.isBedManuallyAssigned) {
@@ -7627,7 +7629,7 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
-        BlockPos shelter = findNearestShelterBlock(24);
+        BlockPos shelter = findNearestShelterBlock(32);
         if (shelter != null) {
             double distSq = this.distanceToSqr(Vec3.atCenterOf(shelter));
             if (distSq > 3.0) {
@@ -7640,21 +7642,39 @@ public class AiBotPlayer extends ServerPlayer {
             return true;
         }
 
+        // Fallback: If no indoor shelter can be reached, seek safety near the town bell / village center
+        BlockPos bell = findNearestBlockType(Blocks.BELL, 48);
+        if (bell != null) {
+            BlockPos safeStand = findSafeDryStandNearBell(bell, 4);
+            if (safeStand != null) {
+                double distSq = this.distanceToSqr(Vec3.atCenterOf(safeStand));
+                if (distSq > 4.0) {
+                    this.activePassiveActivity = "Gathering near town bell for night safety";
+                    moveTowards(Vec3.atCenterOf(safeStand), false);
+                } else {
+                    this.activePassiveActivity = "Holding night watch near town bell";
+                    stopMovement();
+                }
+                return true;
+            }
+        }
+
         return false;
     }
 
     public @Nullable BlockPos findNearestBedBlock(int radius) {
-        return findNearestBedBlockNear(this.blockPosition(), radius, true);
+        return findNearestBedBlockNear(this.blockPosition(), Math.max(64, radius), true);
     }
 
     public @Nullable BlockPos findNearestBedBlockNear(BlockPos pos, int radius) {
-        return findNearestBedBlockNear(pos, radius, true);
+        return findNearestBedBlockNear(pos, Math.max(64, radius), true);
     }
 
     public @Nullable BlockPos findNearestBedBlockNear(BlockPos pos, int radius, boolean mustBeUnclaimed) {
         BlockPos best = null;
         double bestDistSq = Double.MAX_VALUE;
-        for (BlockPos p : BlockPos.betweenClosed(pos.offset(-radius, -3, -radius), pos.offset(radius, 3, radius))) {
+        int r = Math.max(64, radius);
+        for (BlockPos p : BlockPos.betweenClosed(pos.offset(-r, -12, -r), pos.offset(r, 12, r))) {
             if (isTargetBlacklisted(p)) continue;
             BlockState st = this.level().getBlockState(p);
             if (st.getBlock() instanceof BedBlock && st.getValue(BedBlock.PART) == BedPart.HEAD) {
@@ -7671,12 +7691,16 @@ public class AiBotPlayer extends ServerPlayer {
 
     public @Nullable BlockPos findNearestShelterBlock(int radius) {
         BlockPos center = this.blockPosition();
-        for (int r = 1; r <= radius; r += 2) {
-            for (BlockPos p : BlockPos.betweenClosed(center.offset(-r, -2, -r), center.offset(r, 2, r))) {
+        int maxR = Math.max(24, radius);
+        for (int r = 1; r <= maxR; r += 2) {
+            for (BlockPos p : BlockPos.betweenClosed(center.offset(-r, -4, -r), center.offset(r, 6, r))) {
+                if (isTargetBlacklisted(p)) continue;
                 if (this.level().getBlockState(p).isAir() && this.level().getBlockState(p.above()).isAir()) {
                     if (this.level().canSeeSky(p)) continue;
                     BlockPos stand = p.below();
-                    if (this.level().getBlockState(stand).isSolid()) {
+                    if (this.level().getBlockState(stand).isSolid() && this.level().getFluidState(stand).isEmpty() && this.level().getFluidState(p).isEmpty()) {
+                        BlockState roofState = this.level().getBlockState(p.above(2));
+                        if (roofState.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock) continue;
                         return p.immutable();
                     }
                 }
@@ -7765,6 +7789,30 @@ public class AiBotPlayer extends ServerPlayer {
             BlockPos safeStand = (this.level() instanceof ServerLevel sl) ? findSafeDryRespawnPos(sl, targetPos, 3) : null;
             if (safeStand != null && this.level().getFluidState(safeStand).isEmpty()) {
                 moveTowards(Vec3.atCenterOf(safeStand), false);
+            }
+        }
+    }
+
+    public void wanderOutdoorsInVillage(double maxDist) {
+        if (this.isInWater()) {
+            escapeWaterToDryLand();
+            return;
+        }
+        BlockPos bell = findNearestBlockType(Blocks.BELL, 48);
+        BlockPos center = bell != null ? bell
+                : (this.guardAnchorPos != null ? this.guardAnchorPos : this.blockPosition());
+
+        if (this.tickCount % 100 == 0) {
+            double angle = this.random.nextDouble() * 2 * Math.PI;
+            double r = 4.0 + this.random.nextDouble() * (maxDist - 4.0);
+            double targetX = center.getX() + Math.cos(angle) * r;
+            double targetZ = center.getZ() + Math.sin(angle) * r;
+            BlockPos targetPos = new BlockPos((int) targetX, center.getY(), (int) targetZ);
+            if (this.level() instanceof ServerLevel sl) {
+                BlockPos safe = findSafeDryRespawnPos(sl, targetPos, 3);
+                if (safe != null && this.level().getFluidState(safe).isEmpty()) {
+                    moveTowards(Vec3.atCenterOf(safe), false);
+                }
             }
         }
     }
@@ -8021,29 +8069,34 @@ public class AiBotPlayer extends ServerPlayer {
             escapeWaterToDryLand();
             return;
         }
-        BlockPos center = farmPlot != null ? farmPlot : (workstation != null ? workstation : this.blockPosition());
+        BlockPos center = this.farmOriginPos != null ? this.farmOriginPos
+                : (workstation != null ? workstation : (farmPlot != null ? farmPlot : this.blockPosition()));
+        double allowedRadius = Math.max(20.0, Math.max((double) this.farmRadiusX, maxDist));
         double distSq = this.distanceToSqr(Vec3.atCenterOf(center));
-        if (distSq > maxDist * maxDist) {
+        if (distSq > allowedRadius * allowedRadius) {
             moveTowards(Vec3.atCenterOf(center), false);
             return;
         }
 
-        if (this.tickCount % 60 == 0) {
-            if (this.random.nextFloat() < 0.35f && workstation != null) {
+        if (this.tickCount % 100 == 0) {
+            if (this.random.nextFloat() < 0.25f && workstation != null) {
                 moveTowards(Vec3.atCenterOf(workstation), false);
                 lookAtPos(Vec3.atCenterOf(workstation));
                 equipProfessionWorkItem("farmer");
             } else {
+                BlockPos anyCrop = findNearestAnyCropOrFarmland(Math.max(32, this.farmRadiusX));
+                BlockPos patrolTarget = anyCrop != null ? anyCrop : center;
                 double angle = this.random.nextDouble() * 2 * Math.PI;
-                double r = 1.5 + this.random.nextDouble() * (maxDist - 1.5);
-                double tx = center.getX() + Math.cos(angle) * r;
-                double tz = center.getZ() + Math.sin(angle) * r;
-                BlockPos targetPos = new BlockPos((int) tx, center.getY(), (int) tz);
+                double r = 2.0 + this.random.nextDouble() * Math.min(10.0, Math.max(2.0, allowedRadius - 4.0));
+                double tx = patrolTarget.getX() + Math.cos(angle) * r;
+                double tz = patrolTarget.getZ() + Math.sin(angle) * r;
+                BlockPos targetPos = new BlockPos((int) tx, patrolTarget.getY(), (int) tz);
                 if (this.level() instanceof ServerLevel sl) {
                     BlockPos safe = findSafeDryRespawnPos(sl, targetPos, 2);
                     if (safe != null && this.level().getFluidState(safe).isEmpty()) {
                         moveTowards(Vec3.atCenterOf(safe), false);
-                        lookAtPos(Vec3.atCenterOf(safe.below()));
+                        lookAtPos(Vec3.atCenterOf(patrolTarget));
+                        equipProfessionWorkItem("farmer");
                     }
                 }
             }
@@ -8228,10 +8281,28 @@ public class AiBotPlayer extends ServerPlayer {
             } else if (this.assignedWorkstationPos != null || "farmer".equalsIgnoreCase(this.botSubRole)) {
                 tickVillagerWork();
             } else {
+                // Unemployed Villager routine:
+                // 1. Actively scan and claim unclaimed workstations in the village
+                if (this.tickCount % 60 == 0) {
+                    searchAndClaimWorkstation(48);
+                }
+                // 2. If claimed, transition immediately to work
+                if (this.assignedWorkstationPos != null || "farmer".equalsIgnoreCase(this.botSubRole)) {
+                    tickVillagerWork();
+                    return;
+                }
+                // 3. Fallback: If nearby crops/farmland exist, adopt farmer role and help
+                int searchR = Math.max(32, this.farmRadiusX);
+                if (findNearestMatureCrop(searchR) != null || findNearestBareFarmland(searchR) != null) {
+                    this.botSubRole = "farmer";
+                    tickVillagerWork();
+                    return;
+                }
+                // 4. Stroll outdoors in the village / town bell instead of pacing in bedroom
                 if (this.tickCount % 80 == 0) {
                     this.level().playSound(null, this.getX(), this.getY(), this.getZ(), SoundEvents.VILLAGER_AMBIENT, SoundSource.NEUTRAL, 1.0f, 1.0f);
                 }
-                wanderAroundHomeOrAnchor(12.0);
+                wanderOutdoorsInVillage(24.0);
             }
             return;
         }
