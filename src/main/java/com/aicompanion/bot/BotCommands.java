@@ -192,9 +192,29 @@ public class BotCommands {
                         .then(Commands.literal("list")
                                 .executes(BotCommands::chestListCmd)))
                 .then(Commands.literal("status")
+                        .executes(BotCommands::showNearestStatus)
                         .then(Commands.argument("name", StringArgumentType.word())
                                 .suggests(BOT_NAME_SUGGESTIONS)
                                 .executes(ctx -> showStatus(ctx, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("debug")
+                        .executes(BotCommands::showNearestDebug)
+                        .then(Commands.argument("name", StringArgumentType.word())
+                                .suggests(BOT_NAME_SUGGESTIONS)
+                                .executes(ctx -> showBotDebug(ctx, StringArgumentType.getString(ctx, "name")))))
+                .then(Commands.literal("village")
+                        .executes(ctx -> showVillageStatusCmd(ctx, null))
+                        .then(Commands.literal("status")
+                                .executes(ctx -> showVillageStatusCmd(ctx, null))
+                                .then(Commands.argument("name", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> showVillageStatusCmd(ctx, StringArgumentType.getString(ctx, "name"))))))
+                .then(Commands.literal("villager")
+                        .executes(ctx -> showVillageStatusCmd(ctx, null))
+                        .then(Commands.literal("status")
+                                .executes(ctx -> showVillageStatusCmd(ctx, null))
+                                .then(Commands.argument("name", StringArgumentType.word())
+                                        .suggests(BOT_NAME_SUGGESTIONS)
+                                        .executes(ctx -> showVillageStatusCmd(ctx, StringArgumentType.getString(ctx, "name"))))))
                 .then(Commands.literal("stop")
                         .executes(BotCommands::stopNearestOrAllBots)
                         .then(Commands.argument("name", StringArgumentType.word())
@@ -1165,6 +1185,81 @@ public class BotCommands {
                 .append(Component.literal(extra.toString()).withStyle(ChatFormatting.YELLOW))
                 .append(Component.literal("Task: " + bot.getCurrentTaskSummary() + "\n").withStyle(ChatFormatting.AQUA))
                 .append(Component.literal("Inventory: " + invStr).withStyle(ChatFormatting.GRAY)), false);
+        return 1;
+    }
+
+    private static int showNearestStatus(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (source.getEntity() instanceof ServerPlayer player) {
+            AiBotPlayer nearest = BotManager.findNearestBot(player, BotManager.getActiveBots());
+            if (nearest != null) {
+                return showStatus(ctx, nearest.getPlainTextName());
+            }
+        }
+        source.sendFailure(Component.literal("No nearby companion bots found. Specify a bot name: /bot status <name>"));
+        return 0;
+    }
+
+    private static int showNearestDebug(CommandContext<CommandSourceStack> ctx) {
+        CommandSourceStack source = ctx.getSource();
+        if (source.getEntity() instanceof ServerPlayer player) {
+            AiBotPlayer nearest = BotManager.findNearestBot(player, BotManager.getActiveBots());
+            if (nearest != null) {
+                return showBotDebug(ctx, nearest.getPlainTextName());
+            }
+        }
+        source.sendFailure(Component.literal("No nearby companion bots found. Specify a bot name: /bot debug <name>"));
+        return 0;
+    }
+
+    private static int showBotDebug(CommandContext<CommandSourceStack> ctx, String name) {
+        AiBotPlayer bot = BotManager.getBot(name);
+        if (bot == null) {
+            ctx.getSource().sendFailure(Component.literal("No active bot named '" + name + "' found."));
+            return 0;
+        }
+        List<Component> reportLines = VillageManager.formatBotDebug(bot);
+        for (Component line : reportLines) {
+            ctx.getSource().sendSuccess(() -> line, false);
+        }
+        return 1;
+    }
+
+    private static int showVillageStatusCmd(CommandContext<CommandSourceStack> ctx, @Nullable String botName) {
+        CommandSourceStack source = ctx.getSource();
+        BlockPos centerPos;
+        ServerLevel level = source.getLevel();
+
+        if (botName != null && !botName.isBlank()) {
+            AiBotPlayer bot = BotManager.getBot(botName);
+            if (bot == null) {
+                source.sendFailure(Component.literal("No active bot named '" + botName + "' found."));
+                return 0;
+            }
+            centerPos = bot.blockPosition();
+            if (bot.level() instanceof ServerLevel sl) {
+                level = sl;
+            }
+        } else if (source.getEntity() instanceof ServerPlayer player) {
+            centerPos = player.blockPosition();
+        } else {
+            if (!BotManager.getActiveBots().isEmpty()) {
+                AiBotPlayer first = BotManager.getActiveBots().iterator().next();
+                centerPos = first.blockPosition();
+                if (first.level() instanceof ServerLevel sl) {
+                    level = sl;
+                }
+            } else {
+                source.sendFailure(Component.literal("Cannot determine village location: no player or active bots found."));
+                return 0;
+            }
+        }
+
+        VillageManager.VillageStatusReport report = VillageManager.generateReport(level, centerPos, 48);
+        List<Component> reportLines = VillageManager.formatRichReport(report);
+        for (Component line : reportLines) {
+            source.sendSuccess(() -> line, false);
+        }
         return 1;
     }
 
@@ -2162,6 +2257,12 @@ public class BotCommands {
         src.sendSuccess(() -> Component.literal("/bot status [name]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - View bot health, hunger, inventory, farm/ranch zones").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot debug [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - In-depth diagnostics: pathfinder target, navigation state, stuck counters, bell, AI mode").withStyle(ChatFormatting.GRAY)), false);
+        src.sendSuccess(() -> Component.literal("/bot village status [name]")
+                .withStyle(ChatFormatting.YELLOW)
+                .append(Component.literal(" - Comprehensive village scan: town bell, bed count & capacity, villager food/hunger, breeding readiness").withStyle(ChatFormatting.GRAY)), false);
         src.sendSuccess(() -> Component.literal("/bot gui [name]")
                 .withStyle(ChatFormatting.YELLOW)
                 .append(Component.literal(" - Open interactive Speedometer Dashboard & Inventory").withStyle(ChatFormatting.GRAY)), false);

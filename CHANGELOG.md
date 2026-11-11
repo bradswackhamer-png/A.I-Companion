@@ -4,6 +4,46 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.36] - 2026-11-11
+
+### Added
+- **Deep Bot Debugger & Real-Time Diagnostics (`/bot debug [name]`):**
+  - Added a dedicated diagnostic command for companion bots that dumps full real-time state:
+    - **AI Engine**: Online Gemini model status vs Offline Tactical mode, shared Hive-Mind IQ score, and total learned Q-states.
+    - **Physical Vitals**: HP (current/max float), hunger (level/20 and saturation), position, facing orientation, and water entry permissions.
+    - **Navigation & Pathfinding**: Active path target block, current move target coordinates & Euclidean distance, stuck counters (`stuckTicks`, `insanityStuckTicks`, vanilla stuck count, unreachable ticks), and active path nodes.
+    - **Village & Housing**: Assigned personal bed, assigned workstation block & coordinates, compound home house, and nearest town bell coordinates & distance.
+    - **Breeding & Food Inventory**: Complete counts for bread, wheat, carrots, potatoes, and beetroots, with immediate `Ready to Breed: true/false` evaluation.
+- **Village Status Diagnostics (`/bot village status [name]` & `/bot villager status`):**
+  - Introduced a comprehensive village scanner command (and natural chat query) that scans a 48-block radius:
+    - **Town Bell**: Detects nearest town bell / meeting point POI, printing coordinates and distance (or reporting when no bell is present).
+    - **Bed Roster & Colony Capacity**: Scans all beds in the radius, reports total beds, claimed beds, vacant beds, and calculates the exact bed requirement needed for village breeding expansion (`villagers + 1`).
+    - **Villager Breakdown**: Lists all companion villager bots and nearby vanilla villagers with their profession, workstation, assigned bed, hunger level, food supply, and individual breeding readiness.
+    - **Breeding Verdict**: Outputs clear diagnostics on whether the village is ready to produce offspring or what is blocking growth (`READY TO BREED`, `INSUFFICIENT BEDS`, `NO VACANT BEDS`, or `NEED FOOD`).
+- **Autonomous Villager Food Sharing (`AiBotPlayer`):**
+  - Implemented authentic villager food sharing: during afternoon village socialization near the town bell (ticks 9000–11500), villager companions with surplus crops (e.g. $\ge 6$ bread/wheat, $\ge 24$ carrots/potatoes/beetroots) automatically share food (3 bread/wheat or 12 carrots/potatoes/beetroots) with companion friends who lack breeding food or are hungry.
+  - Accompanied by arm swing animations, happy villager particle effects, and cheerful villager sounds.
+- **Natural Voice Chat Triggers for Village Status:**
+  - Added natural chat queries to companions: asking `"village status"`, `"check village"`, `"how is the village"`, `"village stats"`, `"bed count"`, `"how many beds"`, or `"is bell in range"` prompts the companion to deliver an immediate spoken status report in chat.
+
+---
+
+## [1.2.35] - 2026-11-10
+
+### Fixed
+- **Farmer & Chest Infinite Deposit Loop Fix (`AiBotPlayer`):**
+  - Resolved an infinite loop where farmer companions holding surplus seeds (e.g. 59 wheat seeds) would freeze at chests indefinitely with status `"Storing harvested crops in chest"` (or Gemini reporting `"transfering crops"`).
+  - Previously, `getFarmerDepositableCropCount()` mistakenly counted excess seeds above `maxSeedsToKeepOnHand` (32) as depositable harvest crops. If nearby chests had already reached `maxSeedsInChest` (default: 64), `depositFarmerCropsIntoChest` deposited 0 seeds. Because the bot still held 59 seeds, `getFarmerDepositableCropCount()` remained >= 16, causing the bot to target the same chest every single tick and never advance to composting or crop farming.
+  - Removed seeds from `getFarmerDepositableCropCount()`, ensuring seeds are treated as planting supplies and composting material rather than produce. Farmer companions still stock chests with surplus seeds up to `maxSeedsInChest` when depositing crops.
+  - When inventory crops cannot be deposited into a chest (or when a chest deposits 0 items), the chest is placed on a temporary 30-second cooldown (`blacklistUnreachableTarget(chestPos, 600)`), seamlessly routing the bot to alternative chests or falling through to composting, planting, harvesting, and farm patrol.
+- **Container Blacklist Filtering & Double Chest Linkage (`AiBotPlayer`):**
+  - Updated `findAllNearbyContainers` to strictly skip blacklisted containers (`isTargetBlacklisted(pos)`), ensuring the nearest available container search correctly advances past full or unreachable chests instead of returning candidate 0 repeatedly.
+  - Enhanced `blacklistUnreachableTarget` for `ChestBlock`: automatically identifies double chest connections via `ChestBlock.getConnectedDirection` and blacklists both chest halves simultaneously.
+- **Lumberjack Full-Chest Deadlock Prevention (`AiBotPlayer`):**
+  - Added full-chest cooldown handling to `tickPassiveLumberjack`: if a chest cannot accept logs or wood drops, the chest is placed on a 30-second cooldown and alternative chests within 32 blocks are targeted instead of freezing in front of the full chest.
+
+---
+
 ## [1.2.34] - 2026-11-09
 
 ### Fixed

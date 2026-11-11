@@ -56,7 +56,35 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🚪 Smooth Per-Tick House Exit, Crop Arrival & Anti-Spam Door Control *(New in v1.2.34)*
+### 🔍 Deep Bot Debugger, Village Diagnostics & Villager Food Sharing *(New in v1.2.36)*
+* **Deep Bot Debugger (`/bot debug [name]`)**:
+  * Added a comprehensive diagnostics tool that dumps real-time AI and physics state in chat: AI engine mode (Cloud Gemini vs Offline Tactical), Hive-Mind IQ, exact health & hunger/saturation, active task & action queue, pathfinder target & active path nodes, stuck counters (`stuckTicks`, `insanityStuckTicks`, unreachable ticks), environmental state, assigned bed/workstation, town bell distance, and breeding food readiness.
+* **Aggregated Village Status Report (`/bot village status [name]` / `/bot villager status`)**:
+  * Run anywhere or target a specific companion to scan a 48-block radius:
+    * **Town Bell**: Detects the nearest meeting bell, reporting its exact coordinates and distance.
+    * **Bed Roster & Colony Capacity**: Tallies total beds, claimed beds, vacant beds, and calculates the exact bed requirement for new offspring (`villagers + 1`).
+    * **Villager Roster**: Lists all companion villager bots and vanilla villagers with their profession, workstation, bed, hunger level, and carried food items.
+    * **Breeding Verdict**: Clearly displays if the village is ready to breed or identifies the bottleneck (`READY TO BREED`, `INSUFFICIENT BEDS`, `NO VACANT BEDS`, or `NEED FOOD`).
+* **Autonomous Villager Food Sharing**:
+  * Villagers socializing near the town bell in the afternoon automatically share surplus food (bread, wheat, carrots, potatoes, beetroots) with companion friends who lack food or are hungry, complete with swing animations and happy villager particles.
+* **Natural Voice Queries**:
+  * Ask companions `"village status"`, `"check village"`, `"village stats"`, `"bed count"`, or `"bell in range"` in chat for an immediate voice summary of village health.
+
+---
+
+### 🌾 Farmer Chest Deposit Loop & Container Blacklist Fix *(v1.2.35)*
+* **Zero Frozen Farmers at Chests**:
+  * Resolved an issue where farmer companions holding surplus seeds (e.g., 59 wheat seeds) became permanently stuck standing at storage chests with status "Storing harvested crops in chest" / "transferring crops".
+  * Refined `getFarmerDepositableCropCount()` so seeds are properly treated as planting supplies and composting inputs rather than harvested food produce. Seeds no longer trigger premature chest deposit loops when chests are already stocked to `maxSeedsInChest`.
+  * Surplus seeds are now reliably routed to nearby vanilla Composters (`autoCompostExcessSeeds`) to produce bone meal for rapid crop fertilization.
+* **Smart Container Blacklisting & Multi-Chest Fallback**:
+  * When a container is full or cannot accept a companion's items, it is placed on a 30-second cooldown (`blacklistUnreachableTarget`), seamlessly advancing to alternative nearby containers.
+  * Added connected double-chest blacklisting so both halves of a double chest are recognized as occupied simultaneously.
+  * Applied full-chest cooldown protection to Lumberjack companions storing logs and saplings.
+
+---
+
+### 🚪 Smooth Per-Tick House Exit, Crop Arrival & Anti-Spam Door Control *(v1.2.34)*
 * **Zero Indoor Pacing & Exact Crop Arrival**:
   * Fixed the root cause of companions pacing back and forth inside houses or overshooting crops by 2–3 blocks in farm fields. Passive farming and village wandering routines now drive `GroundPathNavigation` on every server tick toward their active target (`currentPassiveFarmTarget` / `currentWanderTarget`) while keeping area scans throttled, ensuring crisp corner turns through doorways and immediate stops upon reaching a crop or workstation.
   * Farmer companions waking up indoors when all crops are still growing now automatically head outside to patrol their farm plot rather than remaining inside their bedroom.
@@ -671,7 +699,9 @@ You can speak to your companions directly in public chat:
 | `/bot blueprint build <bot> <name>` | Order a builder companion to construct the blueprint |
 | `/bot remove <name>` | Despawn a companion |
 | `/bot list` | List all active companions and their current tasks |
-| `/bot status <name>` | View HP, hunger, farm/ranch zones, and inventory |
+| `/bot status [name]` | View HP, hunger, farm/ranch zones, and inventory |
+| `/bot debug [name]` | In-depth diagnostics: pathfinder target, navigation state, stuck counters, bell, AI mode |
+| `/bot village status [name]` | Comprehensive village scan: town bell, bed count & capacity, villager food/hunger, breeding readiness |
 | `/bot stop [name\|all]` | Stop tasks immediately into Absolute Standby Mode (nearest bot if omitted) |
 | `/bot follow [name]` | Order nearest or named companion to follow closely in Absolute Mode |
 | `/bot hold [name]` | Tether nearest or named companion at current spot with a 4m perimeter |

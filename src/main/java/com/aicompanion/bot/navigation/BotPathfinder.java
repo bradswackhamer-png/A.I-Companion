@@ -284,6 +284,26 @@ public final class BotPathfinder {
             this.bot = bot;
         }
 
+        public @Nullable BlockPos getLastTargetBlock() {
+            return this.lastTargetBlock;
+        }
+
+        public int getUnreachableTicks() {
+            return this.unreachableTicks;
+        }
+
+        public int getConsecutiveVanillaStuckCount() {
+            return this.consecutiveVanillaStuckCount;
+        }
+
+        public @Nullable Path getActivePath() {
+            return this.proxyMob != null ? this.proxyMob.getNavigation().getPath() : null;
+        }
+
+        public boolean isNavigating() {
+            return this.proxyMob != null && !this.proxyMob.getNavigation().isDone();
+        }
+
         private @Nullable BotProxyMob ensureProxy() {
             if (!(this.bot.level() instanceof ServerLevel serverLevel)) {
                 return null;

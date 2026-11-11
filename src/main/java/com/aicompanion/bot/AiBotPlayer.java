@@ -238,6 +238,18 @@ public class AiBotPlayer extends ServerPlayer {
     public void blacklistUnreachableTarget(BlockPos pos, int durationTicks) {
         if (pos != null) {
             this.unreachableTargetBlacklist.put(pos.asLong(), this.tickCount + durationTicks);
+            if (this.level() != null) {
+                BlockState state = this.level().getBlockState(pos);
+                if (state.getBlock() instanceof net.minecraft.world.level.block.ChestBlock) {
+                    net.minecraft.world.level.block.state.properties.ChestType type = state.hasProperty(net.minecraft.world.level.block.ChestBlock.TYPE)
+                            ? state.getValue(net.minecraft.world.level.block.ChestBlock.TYPE) : null;
+                    if (type != null && type != net.minecraft.world.level.block.state.properties.ChestType.SINGLE) {
+                        net.minecraft.core.Direction dir = net.minecraft.world.level.block.ChestBlock.getConnectedDirection(state);
+                        BlockPos otherHalf = pos.relative(dir);
+                        this.unreachableTargetBlacklist.put(otherHalf.asLong(), this.tickCount + durationTicks);
+                    }
+                }
+            }
         }
     }
 
@@ -637,6 +649,12 @@ public class AiBotPlayer extends ServerPlayer {
 
     public synchronized boolean isAllowWaterEntry() { return this.allowWaterEntry; }
     public synchronized void setAllowWaterEntry(boolean allow) { this.allowWaterEntry = allow; }
+
+    public com.aicompanion.bot.navigation.BotPathfinder.Navigator getVanillaNavigator() { return this.vanillaNavigator; }
+    public synchronized @Nullable Vec3 getLastMoveTarget() { return this.lastMoveTarget; }
+    public synchronized int getStuckTicks() { return this.stuckTicks; }
+    public synchronized int getInsanityStuckTicks() { return this.insanityStuckTicks; }
+    public synchronized String getActivePassiveActivity() { return this.activePassiveActivity; }
 
     public boolean isWaterAllowed() {
         if (this.allowWaterEntry) return true;
@@ -3815,7 +3833,6 @@ public class AiBotPlayer extends ServerPlayer {
         int depositable = 0;
         int carrotCount = 0;
         int potatoCount = 0;
-        int seedCount = 0;
 
         for (int i = 0; i < this.getInventory().getContainerSize(); i++) {
             ItemStack s = this.getInventory().getItem(i);
@@ -3826,13 +3843,10 @@ public class AiBotPlayer extends ServerPlayer {
                 carrotCount += s.getCount();
             } else if (s.is(Items.POTATO)) {
                 potatoCount += s.getCount();
-            } else if (s.is(Items.WHEAT_SEEDS) || s.is(Items.BEETROOT_SEEDS) || s.is(Items.MELON_SEEDS) || s.is(Items.PUMPKIN_SEEDS)) {
-                seedCount += s.getCount();
             }
         }
         depositable += Math.max(0, carrotCount - 16);
         depositable += Math.max(0, potatoCount - 16);
-        depositable += Math.max(0, seedCount - this.maxSeedsToKeepOnHand);
         return depositable;
     }
 
@@ -3934,15 +3948,25 @@ public class AiBotPlayer extends ServerPlayer {
                 } else {
                     this.currentPassiveFarmTarget = null;
                     stopMovement();
-                    depositFarmerCropsIntoChest(chestPos);
-                    if (getFarmerDepositableCropCount() >= 16) {
+                    int stored = depositFarmerCropsIntoChest(chestPos);
+                    int remaining = getFarmerDepositableCropCount();
+                    if (remaining >= 16) {
+                        // Chest is full or unable to accept remaining crops; blacklist it on cooldown and seek alternative
+                        blacklistUnreachableTarget(chestPos, 600);
                         BlockPos nextChest = findNearestAvailableContainerBlock(24);
                         if (nextChest != null && !nextChest.equals(chestPos) && !isTargetBlacklisted(nextChest)) {
                             this.currentPassiveFarmTarget = nextChest;
+                            this.activePassiveActivity = "Storing harvested crops in chest";
                             moveTowards(Vec3.atCenterOf(nextChest), false);
+                            return;
+                        } else {
+                            // All nearby chests are full or unavailable; don't freeze at chest, continue farm routine
+                            this.activePassiveActivity = "Watching over farm";
                         }
+                    } else {
+                        this.activePassiveActivity = "Watching over farm";
+                        return;
                     }
-                    return;
                 }
             } else if (this.tickCount % 200 == 0) {
                 sayRoutineInChat("My bags are full of crops and all nearby chests are full! Please place an empty chest.");
@@ -4020,10 +4044,14 @@ public class AiBotPlayer extends ServerPlayer {
                         int taken = takeItemsFromContainer(c, "seed", 32);
                         if (taken == 0) taken = takeItemsFromContainer(c, "carrot", 16);
                         if (taken == 0) taken = takeItemsFromContainer(c, "potato", 16);
+                        if (taken == 0) {
+                            blacklistUnreachableTarget(chestPos, 600);
+                        } else {
+                            return;
+                        }
                     }
                 }
             }
-            return;
         }
 
         if (this.farmAllowTill && tryTillDirtInFarmBox()) {
@@ -5512,6 +5540,9 @@ public class AiBotPlayer extends ServerPlayer {
             for (int dy = -4; dy <= 4; dy++) {
                 for (int dz = -radius; dz <= radius; dz++) {
                     BlockPos pos = origin.offset(dx, dy, dz);
+                    if (isTargetBlacklisted(pos)) {
+                        continue;
+                    }
                     Container c = getContainerAt(pos);
                     if (c != null) {
                         if (this.level().getBlockState(pos).getBlock() instanceof net.minecraft.world.level.block.ChestBlock) {
@@ -7057,7 +7088,7 @@ public class AiBotPlayer extends ServerPlayer {
         int logCount = countMatching(s -> isTreeLogItem(s));
         if ((logCount >= 64 || this.getInventory().getFreeSlot() == -1) && this.lumberStoreLogs) {
             BlockPos chestPos = findNearestAvailableContainerBlock(32);
-            if (chestPos != null) {
+            if (chestPos != null && !isTargetBlacklisted(chestPos)) {
                 double distSq = this.distanceToSqr(Vec3.atCenterOf(chestPos));
                 if (distSq > 9.0) {
                     moveTowards(Vec3.atCenterOf(chestPos), true);
@@ -7069,7 +7100,17 @@ public class AiBotPlayer extends ServerPlayer {
                 if (stored > 0) {
                     sayRoutineInChat("Stored " + stored + "x logs & wood supplies into chest!");
                 }
-                return;
+                int remLogs = countMatching(s -> isTreeLogItem(s));
+                if (remLogs >= 64 || this.getInventory().getFreeSlot() == -1) {
+                    blacklistUnreachableTarget(chestPos, 600);
+                    BlockPos nextChest = findNearestAvailableContainerBlock(32);
+                    if (nextChest != null && !nextChest.equals(chestPos) && !isTargetBlacklisted(nextChest)) {
+                        moveTowards(Vec3.atCenterOf(nextChest), true);
+                        return;
+                    }
+                } else {
+                    return;
+                }
             }
         }
 
@@ -8330,6 +8371,7 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         if (!this.isBaby && this.tickCount % 40 == 0) {
+            checkAndExecuteFoodSharing(nearestOtherBot);
             checkAndExecuteBreeding(nearestOtherBot);
         }
     }
@@ -8536,6 +8578,64 @@ public class AiBotPlayer extends ServerPlayer {
         }
         return poi.findAll(holder -> holder.is(PoiTypes.HOME), pos -> !claimedBeds.contains(getBedHeadPos(sl, pos)) && !isBedClaimedByOther(pos), center, 50, PoiManager.Occupancy.ANY)
                 .findFirst().orElse(null);
+    }
+
+    public synchronized boolean checkAndExecuteFoodSharing(@Nullable AiBotPlayer partner) {
+        if (!(this.level() instanceof ServerLevel sl)) return false;
+        if (partner == null || partner == this || this.isBaby || partner.isBaby()) return false;
+        if (this.distanceToSqr(partner) > (16.0 * 16.0)) return false;
+
+        // Partner needs food if they have less than breeding minimum
+        boolean partnerNeedsFood = partner.countMatching(s -> s.is(Items.WHEAT)) < 3
+                && partner.countMatching(s -> s.is(Items.BREAD)) < 3
+                && partner.countMatching(s -> s.is(Items.CARROT)) < 12
+                && partner.countMatching(s -> s.is(Items.POTATO)) < 12
+                && partner.countMatching(s -> s.is(Items.BEETROOT)) < 12;
+
+        if (!partnerNeedsFood && partner.getFoodData().getFoodLevel() >= 18) {
+            return false;
+        }
+
+        // Check if this bot has surplus food to share (keeps enough for its own breeding)
+        ItemStack shareStack = ItemStack.EMPTY;
+        if (this.countMatching(s -> s.is(Items.BREAD)) >= 6) {
+            if (this.consumeMatching(s -> s.is(Items.BREAD), 3)) {
+                shareStack = new ItemStack(Items.BREAD, 3);
+            }
+        } else if (this.countMatching(s -> s.is(Items.WHEAT)) >= 6) {
+            if (this.consumeMatching(s -> s.is(Items.WHEAT), 3)) {
+                shareStack = new ItemStack(Items.WHEAT, 3);
+            }
+        } else if (this.countMatching(s -> s.is(Items.CARROT)) >= 24) {
+            if (this.consumeMatching(s -> s.is(Items.CARROT), 12)) {
+                shareStack = new ItemStack(Items.CARROT, 12);
+            }
+        } else if (this.countMatching(s -> s.is(Items.POTATO)) >= 24) {
+            if (this.consumeMatching(s -> s.is(Items.POTATO), 12)) {
+                shareStack = new ItemStack(Items.POTATO, 12);
+            }
+        } else if (this.countMatching(s -> s.is(Items.BEETROOT)) >= 24) {
+            if (this.consumeMatching(s -> s.is(Items.BEETROOT), 12)) {
+                shareStack = new ItemStack(Items.BEETROOT, 12);
+            }
+        }
+
+        if (shareStack.isEmpty()) {
+            return false;
+        }
+
+        // Give food to partner
+        partner.getInventory().add(shareStack);
+        this.broadcastSwing();
+        this.level().playSound(null, this.getX(), this.getY(), this.getZ(),
+                SoundEvents.VILLAGER_YES, SoundSource.NEUTRAL, 1.0f, 1.0f);
+        sl.sendParticles(ParticleTypes.HAPPY_VILLAGER,
+                partner.getX(), partner.getY() + 1.2, partner.getZ(),
+                6, 0.3, 0.3, 0.3, 0.05);
+
+        sayRoutineInChat("Shared " + shareStack.getCount() + "x " + shareStack.getHoverName().getString()
+                + " with " + partner.getPlainTextName() + " to help the colony grow!");
+        return true;
     }
 
     public synchronized boolean checkAndExecuteBreeding(@Nullable AiBotPlayer partner) {
@@ -8997,6 +9097,18 @@ public class AiBotPlayer extends ServerPlayer {
     public synchronized boolean handleVillagerChatCommand(String text, @Nullable ServerPlayer speaker) {
         if (text == null || text.isBlank()) return false;
         String lower = text.toLowerCase(Locale.ROOT).trim();
+
+        if (lower.contains("village status") || lower.contains("check village") || lower.contains("village stats")
+                || lower.contains("how is the village") || lower.contains("village report") || lower.contains("bed count")
+                || lower.contains("how many beds") || lower.contains("bell in range") || lower.contains("is bell in range")
+                || lower.equals("villagers") || lower.equals("village")) {
+            if (this.level() instanceof ServerLevel sl) {
+                com.aicompanion.bot.village.VillageManager.VillageStatusReport report =
+                        com.aicompanion.bot.village.VillageManager.generateReport(sl, this.blockPosition(), 48);
+                sayInChat(report.formatChatSummary(this.getPlainTextName()));
+                return true;
+            }
+        }
 
         if (lower.contains("find work table") || lower.contains("search for work table") || lower.contains("find a work table")
                 || lower.contains("find workstation") || lower.contains("search for workstation") || lower.contains("find a job")
