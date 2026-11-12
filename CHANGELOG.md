@@ -4,6 +4,24 @@ All notable changes to the **Gemini AI Companion Bots** mod are documented in th
 
 ---
 
+## [1.2.37] - 2026-11-11
+
+### Fixed
+- **Server Tick CPU Bottleneck Fix (Spark Profiler 44.38% Lag Elimination)**:
+  - Fixed a critical performance issue shown in Spark profiler traces where `AiBotPlayer.findNearestBedBlockNear` consumed up to 44.38% of the entire dedicated server tick budget.
+  - Replaced the brute-force 416,025-block `getBlockState` scanning loop ($129 \times 25 \times 129$ blocks) with Minecraft's native `PoiManager` chunk-indexed Point-of-Interest search (`PoiTypes.HOME`), dropping bed query times from hundreds of milliseconds to microseconds (<0.01ms).
+  - Throttled unassigned bed discovery in `tickNightShelterAndSleep` to execute once per second (every 20 ticks) per bot instead of iterating every tick.
+  - Clamped fallback local searches to a tight 8-block boundary and streamlined `findNearestShelterBlock` to single-pass bounded volume iteration.
+- **Companion Bed Sleeping Refusal & Premature House Wandering Fix**:
+  - Resolved an issue where companion bots entered houses at night but refused to use beds, standing idle inside the building with status `"Sheltering inside house"`.
+  - **Stale `BedBlock.OCCUPIED` Flag Auto-Recovery**: If a bed's blockstate previously retained `OCCUPIED = true` without any living entity, companion bot, or online player actually sleeping in its bounding box, `isBedOccupiedByOther` now automatically clears the stale flag on both head and foot parts and marks the bed available for use.
+  - **Bed Part Distance & Foot-Arrival Reach**: Calculated interaction distance against both `headPos` and `footPos`, expanding sleep reach to 2.7 blocks (`minDistSq <= 7.5`), allowing companions who stop at the foot or adjacent sides of the bed to immediately initiate sleep.
+  - **Bed Self-Occlusion Raycast Fix**: Updated `hasUnobstructedReachToBed` and `hasUnobstructedReachToTarget` to allow direct line-of-sight through bed parts, doors, and pass-through thresholds while preventing sleeping through external exterior walls.
+  - **Bed Ownership & Home Assignment Retention**: Prevented `tickNightShelterAndSleep` and `isBedClaimedByOther` from wiping `assignedBedPos = null` when a bed is occupied for the night or targeted by an unassigned bot. Companion homeowners now permanently retain their assigned beds unless the bed block is physically broken.
+  - **Sleep Ejection Protection**: Added an active sleeping check to `stepOffBedIfStandingOnIt()` (`if (this.isSleeping()) return;`), preventing bots from being ejected and abruptly woken up immediately after getting into bed.
+
+---
+
 ## [1.2.36] - 2026-11-11
 
 ### Added

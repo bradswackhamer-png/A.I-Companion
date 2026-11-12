@@ -4939,12 +4939,31 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     private boolean hasUnobstructedReachToTarget(BlockPos targetPos) {
-        if (Math.abs(this.getY() - targetPos.getY()) > 1.5) return false;
+        if (Math.abs(this.getY() - targetPos.getY()) > 2.0) return false;
         Vec3 from = this.getEyePosition();
         Vec3 to = Vec3.atCenterOf(targetPos).add(0, 0.25, 0);
         BlockHitResult hit = this.level().clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this));
         if (hit.getType() == HitResult.Type.MISS) return true;
-        return hit.getBlockPos().equals(targetPos) || hit.getBlockPos().distManhattan(targetPos) <= 1 && this.level().getBlockState(hit.getBlockPos()).getBlock() instanceof BedBlock;
+        BlockPos hp = hit.getBlockPos();
+        if (hp.equals(targetPos)) return true;
+        BlockState hitState = this.level().getBlockState(hp);
+        if (hitState.getBlock() instanceof BedBlock || hitState.getBlock() instanceof DoorBlock) return true;
+        return hp.distManhattan(targetPos) <= 1 && hitState.getCollisionShape(this.level(), hp).isEmpty();
+    }
+
+    private boolean hasUnobstructedReachToBed(BlockPos headPos, BlockPos footPos) {
+        if (Math.abs(this.getY() - headPos.getY()) > 2.0) return false;
+        Vec3 from = this.getEyePosition();
+        for (BlockPos target : List.of(headPos, footPos)) {
+            Vec3 to = Vec3.atCenterOf(target).add(0, 0.25, 0);
+            BlockHitResult hit = this.level().clip(new ClipContext(from, to, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, this));
+            if (hit.getType() == HitResult.Type.MISS) return true;
+            BlockPos hp = hit.getBlockPos();
+            if (hp.equals(headPos) || hp.equals(footPos)) return true;
+            BlockState hitState = this.level().getBlockState(hp);
+            if (hitState.getBlock() instanceof BedBlock || hitState.getBlock() instanceof DoorBlock) return true;
+        }
+        return false;
     }
 
     private void moveTowards(Vec3 target, boolean sprint) {
@@ -7613,7 +7632,16 @@ public class AiBotPlayer extends ServerPlayer {
 
         // 4. BlockState OCCUPIED property
         if (headState.getValue(BedBlock.OCCUPIED)) {
-            return true;
+            // Checks 1, 2, and 3 confirmed NO entity is actually sleeping here.
+            // Clear the stale OCCUPIED flag so this bed can be used.
+            if (this.level() instanceof ServerLevel sl) {
+                sl.setBlockAndUpdate(headPos, headState.setValue(BedBlock.OCCUPIED, false));
+                BlockState footState = sl.getBlockState(footPos);
+                if (footState.getBlock() instanceof BedBlock && footState.getValue(BedBlock.OCCUPIED)) {
+                    sl.setBlockAndUpdate(footPos, footState.setValue(BedBlock.OCCUPIED, false));
+                }
+            }
+            return false;
         }
 
         return false;
@@ -7662,6 +7690,10 @@ public class AiBotPlayer extends ServerPlayer {
                 // Check active travel target to bed during night shelter
                 BlockPos otherTarget = other.getCurrentShelterBedTarget();
                 if (otherTarget != null && isSameBed(this.level(), otherTarget, headPos)) {
+                    // An assigned owner always retains their bed over unassigned wanderers
+                    if (this.assignedBedPos != null && isSameBed(this.level(), this.assignedBedPos, headPos)) {
+                        continue;
+                    }
                     if (this.currentShelterBedTarget == null || !isSameBed(this.level(), this.currentShelterBedTarget, headPos)) {
                         return true;
                     }
@@ -7702,11 +7734,15 @@ public class AiBotPlayer extends ServerPlayer {
         if (targetBed != null) {
             targetBed = getBedHeadPos(this.level(), targetBed);
             BlockState st = this.level().getBlockState(targetBed);
-            // Verify block is still a bed, target is not blacklisted, and bed is not claimed/occupied by another
-            if (!(st.getBlock() instanceof BedBlock) || isBedClaimedByOther(targetBed)) {
+            // Verify block is still physically a bed
+            if (!(st.getBlock() instanceof BedBlock)) {
                 if (!this.isBedManuallyAssigned) {
                     this.assignedBedPos = null;
                 }
+                this.currentShelterBedTarget = null;
+                targetBed = null;
+            } else if (isBedOccupiedByOther(targetBed)) {
+                // Another entity is physically in our bed tonight; look for alternate shelter tonight without deleting our home
                 this.currentShelterBedTarget = null;
                 targetBed = null;
             } else if (isTargetBlacklisted(targetBed)) {
@@ -7716,43 +7752,47 @@ public class AiBotPlayer extends ServerPlayer {
         }
 
         if (targetBed == null) {
-            targetBed = findNearestBedBlock(64);
-            if (targetBed != null) {
-                targetBed = getBedHeadPos(this.level(), targetBed);
-                if (this.assignedBedPos == null && !this.isBedManuallyAssigned) {
-                    this.assignedBedPos = targetBed;
+            // Fast POI query throttled to once per second if unassigned (eliminates tick lag)
+            if (this.tickCount % 20 == 0 || this.assignedBedPos == null) {
+                targetBed = findNearestBedBlock(48);
+                if (targetBed != null) {
+                    targetBed = getBedHeadPos(this.level(), targetBed);
+                    if (this.assignedBedPos == null && !this.isBedManuallyAssigned) {
+                        this.assignedBedPos = targetBed;
+                    }
                 }
             }
         }
 
         if (targetBed != null) {
             this.currentShelterBedTarget = targetBed;
-            double distSq = this.distanceToSqr(Vec3.atCenterOf(targetBed));
-            boolean canReachBedDirectly = distSq <= 4.0 && hasUnobstructedReachToTarget(targetBed);
+            BlockPos headPos = getBedHeadPos(this.level(), targetBed);
+            BlockPos footPos = getBedFootPos(this.level(), headPos);
+            double distHeadSq = this.distanceToSqr(Vec3.atCenterOf(headPos));
+            double distFootSq = this.distanceToSqr(Vec3.atCenterOf(footPos));
+            double minDistSq = Math.min(distHeadSq, distFootSq);
+            boolean verticalOk = Math.abs(this.getY() - headPos.getY()) <= 2.0;
+
+            // In Minecraft, player can interact with and sleep in a bed within ~2.7 blocks (minDistSq <= 7.5)
+            boolean canReachBedDirectly = minDistSq <= 7.5 && verticalOk && hasUnobstructedReachToBed(headPos, footPos);
             if (!canReachBedDirectly) {
-                this.activePassiveActivity = "Walking indoors to bed at (" + targetBed.getX() + ", " + targetBed.getY() + ", " + targetBed.getZ() + ")";
-                moveTowards(Vec3.atCenterOf(targetBed), false);
+                this.activePassiveActivity = "Walking indoors to bed at (" + headPos.getX() + ", " + headPos.getY() + ", " + headPos.getZ() + ")";
+                BlockPos walkTarget = distFootSq < distHeadSq ? footPos : headPos;
+                moveTowards(Vec3.atCenterOf(walkTarget), false);
                 return true;
             } else {
                 stopMovement();
-                this.activePassiveActivity = "At bed (" + targetBed.getX() + ", " + targetBed.getY() + ", " + targetBed.getZ() + ")";
-                lookAtPos(Vec3.atCenterOf(targetBed));
-                if (this.tickCount % 20 == 0) {
-                    try {
-                        if (!isBedOccupiedByOther(targetBed)) {
-                            boolean ok = this.startSleeping(targetBed);
-                            if (ok) {
-                                this.currentShelterBedTarget = null;
-                                return true;
-                            }
-                        } else {
-                            if (!this.isBedManuallyAssigned) {
-                                this.assignedBedPos = null;
-                            }
+                this.activePassiveActivity = "At bed (" + headPos.getX() + ", " + headPos.getY() + ", " + headPos.getZ() + ")";
+                lookAtPos(Vec3.atCenterOf(headPos));
+                try {
+                    if (!isBedOccupiedByOther(headPos)) {
+                        boolean ok = this.startSleeping(headPos);
+                        if (ok) {
                             this.currentShelterBedTarget = null;
+                            return true;
                         }
-                    } catch (Exception ignored) {}
-                }
+                    }
+                } catch (Exception ignored) {}
                 return true;
             }
         }
@@ -7806,18 +7846,52 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public @Nullable BlockPos findNearestBedBlock(int radius) {
-        return findNearestBedBlockNear(this.blockPosition(), Math.max(64, radius), true);
+        return findNearestBedBlockNear(this.blockPosition(), radius, true);
     }
 
     public @Nullable BlockPos findNearestBedBlockNear(BlockPos pos, int radius) {
-        return findNearestBedBlockNear(pos, Math.max(64, radius), true);
+        return findNearestBedBlockNear(pos, radius, true);
     }
 
     public @Nullable BlockPos findNearestBedBlockNear(BlockPos pos, int radius, boolean mustBeUnclaimed) {
+        if (pos == null || this.level() == null) return null;
+        int r = Math.max(4, Math.min(radius, 48));
+
+        // 1. Fast POI query: query Minecraft's chunk-indexed POI database (instant, microsecond lookup)
+        if (this.level() instanceof ServerLevel sl) {
+            PoiManager poi = sl.getPoiManager();
+            List<BlockPos> poiBeds = poi.findAll(
+                    holder -> holder.is(PoiTypes.HOME),
+                    p -> !isTargetBlacklisted(p) && (!mustBeUnclaimed || !isBedClaimedByOther(p)),
+                    pos,
+                    r,
+                    PoiManager.Occupancy.ANY
+            ).toList();
+
+            if (!poiBeds.isEmpty()) {
+                BlockPos best = null;
+                double bestDistSq = Double.MAX_VALUE;
+                Vec3 center = Vec3.atCenterOf(pos);
+                for (BlockPos p : poiBeds) {
+                    BlockPos head = getBedHeadPos(sl, p);
+                    if (mustBeUnclaimed && isBedClaimedByOther(head)) continue;
+                    double d = center.distanceToSqr(Vec3.atCenterOf(head));
+                    if (d < bestDistSq) {
+                        bestDistSq = d;
+                        best = head;
+                    }
+                }
+                if (best != null) {
+                    return best;
+                }
+            }
+        }
+
+        // 2. Fallback: tight local scan (at most 8 blocks, ~3,100 blocks instead of 416,025)
+        int fallbackR = Math.min(r, 8);
         BlockPos best = null;
         double bestDistSq = Double.MAX_VALUE;
-        int r = Math.max(64, radius);
-        for (BlockPos p : BlockPos.betweenClosed(pos.offset(-r, -12, -r), pos.offset(r, 12, r))) {
+        for (BlockPos p : BlockPos.betweenClosed(pos.offset(-fallbackR, -4, -fallbackR), pos.offset(fallbackR, 6, fallbackR))) {
             if (isTargetBlacklisted(p)) continue;
             BlockState st = this.level().getBlockState(p);
             if (st.getBlock() instanceof BedBlock && st.getValue(BedBlock.PART) == BedPart.HEAD) {
@@ -7834,33 +7908,31 @@ public class AiBotPlayer extends ServerPlayer {
 
     public @Nullable BlockPos findNearestShelterBlock(int radius) {
         BlockPos center = this.blockPosition();
-        int maxR = Math.max(24, radius);
+        int maxR = Math.min(Math.max(12, radius), 24);
         BlockPos fallback = null;
-        for (int r = 1; r <= maxR; r += 2) {
-            for (BlockPos p : BlockPos.betweenClosed(center.offset(-r, -4, -r), center.offset(r, 6, r))) {
-                if (isTargetBlacklisted(p)) continue;
-                if (this.level().getBlockState(p).isAir() && this.level().getBlockState(p.above()).isAir()) {
-                    if (this.level().canSeeSky(p)) continue;
-                    BlockPos stand = p.below();
-                    if (this.level().getBlockState(stand).isSolid() && this.level().getFluidState(stand).isEmpty() && this.level().getFluidState(p).isEmpty()) {
-                        BlockState roofState = this.level().getBlockState(p.above(2));
-                        if (roofState.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock) continue;
-                        if (fallback == null) {
-                            fallback = p.immutable();
+        for (BlockPos p : BlockPos.betweenClosed(center.offset(-maxR, -4, -maxR), center.offset(maxR, 6, maxR))) {
+            if (isTargetBlacklisted(p)) continue;
+            if (this.level().getBlockState(p).isAir() && this.level().getBlockState(p.above()).isAir()) {
+                if (this.level().canSeeSky(p)) continue;
+                BlockPos stand = p.below();
+                if (this.level().getBlockState(stand).isSolid() && this.level().getFluidState(stand).isEmpty() && this.level().getFluidState(p).isEmpty()) {
+                    BlockState roofState = this.level().getBlockState(p.above(2));
+                    if (roofState.getBlock() instanceof net.minecraft.world.level.block.LeavesBlock) continue;
+                    if (fallback == null) {
+                        fallback = p.immutable();
+                    }
+                    // Prefer an interior room tile that is not adjacent to a doorway or outdoor sky overhang
+                    boolean nearDoorOrSky = false;
+                    for (Direction dir : Direction.Plane.HORIZONTAL) {
+                        BlockPos n = p.relative(dir);
+                        BlockState ns = this.level().getBlockState(n);
+                        if (ns.getBlock() instanceof DoorBlock || ns.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock || this.level().canSeeSky(n)) {
+                            nearDoorOrSky = true;
+                            break;
                         }
-                        // Prefer an interior room tile that is not adjacent to a doorway or outdoor sky overhang
-                        boolean nearDoorOrSky = false;
-                        for (Direction dir : Direction.Plane.HORIZONTAL) {
-                            BlockPos n = p.relative(dir);
-                            BlockState ns = this.level().getBlockState(n);
-                            if (ns.getBlock() instanceof DoorBlock || ns.getBlock() instanceof net.minecraft.world.level.block.FenceGateBlock || this.level().canSeeSky(n)) {
-                                nearDoorOrSky = true;
-                                break;
-                            }
-                        }
-                        if (!nearDoorOrSky) {
-                            return p.immutable();
-                        }
+                    }
+                    if (!nearDoorOrSky) {
+                        return p.immutable();
                     }
                 }
             }
@@ -8408,21 +8480,7 @@ public class AiBotPlayer extends ServerPlayer {
                 && this.distanceToSqr(Vec3.atCenterOf(this.assignedBedPos)) <= radius * radius) {
             return this.assignedBedPos;
         }
-        BlockPos center = this.blockPosition();
-        BlockPos best = null;
-        double bestDistSq = Double.MAX_VALUE;
-        for (BlockPos p : BlockPos.betweenClosed(center.offset(-radius, -3, -radius), center.offset(radius, 3, radius))) {
-            BlockState st = this.level().getBlockState(p);
-            if (st.getBlock() instanceof BedBlock && st.getValue(BedBlock.PART) == BedPart.HEAD) {
-                if (isBedClaimedByOther(p)) continue;
-                double d = center.distSqr(p);
-                if (d < bestDistSq) {
-                    bestDistSq = d;
-                    best = p.immutable();
-                }
-            }
-        }
-        return best;
+        return findNearestBedBlock(radius);
     }
 
     private void tickVillagerReturnHome() {
@@ -8433,9 +8491,11 @@ public class AiBotPlayer extends ServerPlayer {
         this.activePassiveActivity = "Heading home for the evening";
         BlockPos homeTarget = this.assignedBedPos != null ? this.assignedBedPos : this.assignedHousePos;
         if (homeTarget == null) {
-            homeTarget = findNearestBedBlock(48);
-            if (homeTarget != null && !this.isBedManuallyAssigned) {
-                this.assignedBedPos = homeTarget;
+            if (this.tickCount % 20 == 0) {
+                homeTarget = findNearestBedBlock(48);
+                if (homeTarget != null && !this.isBedManuallyAssigned) {
+                    this.assignedBedPos = homeTarget;
+                }
             }
         }
         if (homeTarget != null) {
@@ -8451,6 +8511,7 @@ public class AiBotPlayer extends ServerPlayer {
     }
 
     public void stepOffBedIfStandingOnIt() {
+        if (this.isSleeping()) return;
         if (this.level() instanceof ServerLevel sl) {
             BlockPos cur = this.blockPosition();
             BlockState curState = sl.getBlockState(cur);

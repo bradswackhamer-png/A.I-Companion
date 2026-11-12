@@ -56,7 +56,21 @@ The mod comes pre-configured with the default baked-in model:
 
 ---
 
-### 🔍 Deep Bot Debugger, Village Diagnostics & Villager Food Sharing *(New in v1.2.36)*
+### ⚡ 44% Server Tick Lag Optimization & Bed Sleeping Fix *(New in v1.2.37)*
+* **Spark Profiler 44.38% Tick Lag Eliminated**:
+  * Resolved the server lag spike where `AiBotPlayer.findNearestBedBlockNear` consumed 44.38% of server tick CPU.
+  * Replaced brute-force 416,025-block `getBlockState` loops with Minecraft's chunk-indexed `PoiManager` (`PoiTypes.HOME`), dropping search time to microseconds (<0.01ms).
+  * Throttled unassigned bed discovery to run once per second (every 20 ticks) per bot instead of iterating every tick.
+* **Flawless Bed Sleeping & Zero Stale Bed Locks**:
+  * **No More Refusing Beds**: Fixed companions walking inside a house at night but refusing to use a bed.
+  * **Auto-Clear Stale Occupancy**: Beds with stale `BedBlock.OCCUPIED` states are automatically detected and restored if no entity is sleeping in them.
+  * **Foot & Side Reach**: Reach now checks both head and foot parts within 2.7 blocks (`minDistSq <= 7.5`), so bots stopping near the foot of the bed immediately start sleeping.
+  * **Permanent Bed Ownership**: Bots no longer delete their home bed assignments when another bot walks nearby or a bed is occupied for the night.
+  * **Sleep Ejection Guard**: `stepOffBedIfStandingOnIt` safely preserves actively sleeping companions without waking them.
+
+---
+
+### 🔍 Deep Bot Debugger, Village Diagnostics & Villager Food Sharing *(v1.2.36)*
 * **Deep Bot Debugger (`/bot debug [name]`)**:
   * Added a comprehensive diagnostics tool that dumps real-time AI and physics state in chat: AI engine mode (Cloud Gemini vs Offline Tactical), Hive-Mind IQ, exact health & hunger/saturation, active task & action queue, pathfinder target & active path nodes, stuck counters (`stuckTicks`, `insanityStuckTicks`, unreachable ticks), environmental state, assigned bed/workstation, town bell distance, and breeding food readiness.
 * **Aggregated Village Status Report (`/bot village status [name]` / `/bot villager status`)**:
